@@ -1,0 +1,38 @@
+# Production overlay: adds TLS termination via Caddy and stops publishing
+# internal service ports on the host. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env up -d
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  seaweedfs:
+    ports: !reset []
+
+  keycloak:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: installtec_caddy
+    environment:
+      - APP_DOMAIN=${APP_DOMAIN}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
+      - keycloak
+    restart: unless-stopped
+    networks: [installtec]
+
+volumes:
+  caddy_data:
+  caddy_config:

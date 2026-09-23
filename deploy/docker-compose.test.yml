@@ -1,0 +1,44 @@
+# Ephemeral stack for backend integration tests (`make test-integration`).
+# No Keycloak: tests mint their own JWTs against a fake JWKS in-process.
+# No real vLLM: uses the same mock service as dev.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: installtec_core_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+      APP_DB_USER: installtec_app
+      APP_DB_PASSWORD: test
+      MIGRATOR_DB_USER: installtec_migrator
+      MIGRATOR_DB_PASSWORD: test
+    volumes:
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: "server -dir=/data -s3"
+    ports:
+      - "8334:8333"
+      - "9334:9333"
+    tmpfs:
+      - /data
+
+  mock-vllm:
+    build: ../ai-service/mock-vllm
+    ports:
+      - "8090:8000"

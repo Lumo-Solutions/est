@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/title_block.schema.json",
+  "title": "DrawingTitleBlock",
+  "description": "Structured fields extracted from a construction drawing sheet's title block, produced by the vision-language extraction step. All fields except 'confidence' are nullable because title blocks are frequently incomplete, hand-annotated, or partially illegible.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "drawing_number": {
+      "type": ["string", "null"],
+      "description": "The drawing/sheet number exactly as printed, e.g. 'C-101' or 'MEP-DWG-0042-REV-B'. Null if not confidently legible."
+    },
+    "sheet_title": {
+      "type": ["string", "null"],
+      "description": "The descriptive title of the sheet, e.g. 'ROAD LAYOUT PLAN - SECTOR 4'. Null if not confidently legible."
+    },
+    "revision": {
+      "type": ["string", "null"],
+      "description": "The revision code or letter/number shown in the title block, e.g. 'B', 'P02', '3'. Null if not shown."
+    },
+    "issue_date": {
+      "type": ["string", "null"],
+      "description": "The issue/print date as printed on the drawing, kept as free text (drawings rarely use strict ISO-8601 formatting, e.g. '12/03/2025' or 'MAR 2025'). Null if not shown."
+    },
+    "discipline": {
+      "type": ["string", "null"],
+      "description": "The engineering discipline this sheet belongs to. One of: civil, structural, mep, architectural, landscape, other. Null if it cannot be determined.",
+      "enum": ["civil", "structural", "mep", "architectural", "landscape", "other", null]
+    },
+    "scale_text": {
+      "type": ["string", "null"],
+      "description": "The scale as printed in the title block or near it, verbatim, e.g. '1:100', '1/4\"=1\\'-0\"', 'NTS', 'AS SHOWN'. Null if no scale text is visible."
+    },
+    "project_name": {
+      "type": ["string", "null"],
+      "description": "The overall project name shown in the title block, e.g. 'AL BARSHA SOUTH INFRASTRUCTURE PACKAGE 2'. Null if not shown."
+    },
+    "client_name": {
+      "type": ["string", "null"],
+      "description": "The client/employer name shown in the title block. Null if not shown."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The model's own confidence in the overall extraction quality across all fields, from 0 (no reliable fields extracted) to 1 (all fields extracted with high certainty)."
+    }
+  },
+  "required": ["confidence"]
+}

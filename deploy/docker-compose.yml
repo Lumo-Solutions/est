@@ -1,0 +1,280 @@
+version: '3.8'
+
+# Base service definitions reproduce MASTER_SRS.MD §6 verbatim (image names,
+# env var names, volumes, ports). Additions beyond the SRS template are
+# marked inline and documented in docs/deploy-deltas.md.
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-dev}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/installtec_core
+  DB_PASSWORD: ${DB_PASSWORD}
+  APP_DB_USER: ${APP_DB_USER:-installtec_app}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+  APP_DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-installtec_app}:${APP_DB_PASSWORD}@postgres:5432/installtec_core
+  MIGRATOR_DB_USER: ${MIGRATOR_DB_USER:-installtec_migrator}
+  MIGRATOR_DB_PASSWORD: ${MIGRATOR_DB_PASSWORD}
+  MIGRATOR_DATABASE_URL: postgresql+asyncpg://${MIGRATOR_DB_USER:-installtec_migrator}:${MIGRATOR_DB_PASSWORD}@postgres:5432/installtec_core
+  DEMO_TENANT_ID: ${DEMO_TENANT_ID:-8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  S3_ENDPOINT: http://seaweedfs:8333
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET_DRAWINGS: ${S3_BUCKET_DRAWINGS:-installtec-drawings}
+  S3_FORCE_PATH_STYLE: "true"
+  VLLM_API_BASE: http://vllm:8000/v1
+  VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+  VLLM_API_KEY: ${VLLM_API_KEY:-not-needed}
+  VLLM_TIMEOUT_S: ${VLLM_TIMEOUT_S:-120}
+  EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-onnx}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+  EMBEDDING_DIM: ${EMBEDDING_DIM:-384}
+  ONNX_MODEL_DIR: ${ONNX_MODEL_DIR:-/models}
+  KEYCLOAK_BASE_URL: http://keycloak:8080
+  KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+  KEYCLOAK_REALM: ${KEYCLOAK_REALM:-installtec}
+  KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-installtec-backend}
+  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+  KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-installtec-backend}
+  SESSION_SECRET: ${SESSION_SECRET}
+  AUDIT_CHECKPOINT_HMAC_KEY: ${AUDIT_CHECKPOINT_HMAC_KEY}
+  AUDIT_ALL_READS: ${AUDIT_ALL_READS:-false}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: installtec_postgres
+    environment:
+      POSTGRES_DB: installtec_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      # --- addition: consumed by postgres/initdb/10-roles.sh to provision the
+      # non-owner application role that RLS depends on (see docs/security-rls.md) ---
+      APP_DB_USER: ${APP_DB_USER:-installtec_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      MIGRATOR_DB_USER: ${MIGRATOR_DB_USER:-installtec_migrator}
+      MIGRATOR_DB_PASSWORD: ${MIGRATOR_DB_PASSWORD:-${DB_PASSWORD}}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # --- addition: run extension/role/keycloak-db bootstrap SQL on first init ---
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    # --- addition: healthcheck so dependents can wait for readiness ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [installtec]
+
+  redis:
+    image: redis:7-alpine
+    container_name: installtec_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [installtec]
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: installtec_seaweedfs
+    # --- addition: -s3.config enables SigV4 auth instead of fully anonymous S3 ---
+    command: "server -dir=/data -s3 -s3.config=/etc/seaweedfs/s3.json"
+    volumes:
+      - swdata:/data
+      - ./seaweedfs/s3-identities.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "8333:8333"
+      - "9333:9333"
+    restart: unless-stopped
+    networks: [installtec]
+
+  # --- addition: real vLLM + GPU, SRS §6 verbatim. Disabled by default (profile "gpu").
+  # Enable with `docker compose --profile gpu up vllm-gpu` once a GPU host is provisioned,
+  # and point VLLM_API_BASE at http://vllm-gpu:8000/v1 (see docs/deploy-deltas.md). ---
+  vllm-gpu:
+    image: vllm/vllm-openai:latest
+    container_name: installtec_vllm_gpu
+    environment:
+      - MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - hfcache:/root/.cache/huggingface
+    shm_size: "8gb"
+    ports:
+      - "8010:8000"
+    restart: unless-stopped
+    profiles: ["gpu"]
+    networks: [installtec]
+
+  # --- addition: mock vLLM (OpenAI-compatible /v1/chat/completions) used as the
+  # default "vllm" service until a GPU instance is available. Same service name
+  # and port as the SRS template so backend config never needs to change. ---
+  vllm:
+    build: ../ai-service/mock-vllm
+    container_name: installtec_vllm
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks: [installtec]
+
+  backend:
+    build: ../backend
+    container_name: installtec_backend
+    environment:
+      # --- SRS §6 verbatim ---
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@postgres:5432/installtec_core
+      - REDIS_URL=redis://redis:6379/0
+      - VLLM_API_BASE=http://vllm:8000/v1
+      - S3_ENDPOINT=http://seaweedfs:8333
+      # --- additions: Keycloak, RLS app role, Celery, embeddings, sessions, audit ---
+      - APP_ENV=${APP_ENV:-dev}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_DB_USER=${APP_DB_USER:-installtec_app}
+      - APP_DB_PASSWORD=${APP_DB_PASSWORD}
+      - APP_DATABASE_URL=postgresql+asyncpg://${APP_DB_USER:-installtec_app}:${APP_DB_PASSWORD}@postgres:5432/installtec_core
+      - MIGRATOR_DB_USER=${MIGRATOR_DB_USER:-installtec_migrator}
+      - MIGRATOR_DB_PASSWORD=${MIGRATOR_DB_PASSWORD}
+      - MIGRATOR_DATABASE_URL=postgresql+asyncpg://${MIGRATOR_DB_USER:-installtec_migrator}:${MIGRATOR_DB_PASSWORD}@postgres:5432/installtec_core
+      - DEMO_TENANT_ID=${DEMO_TENANT_ID:-8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00}
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET_DRAWINGS=${S3_BUCKET_DRAWINGS:-installtec-drawings}
+      - S3_FORCE_PATH_STYLE=true
+      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - VLLM_API_KEY=${VLLM_API_KEY:-not-needed}
+      - VLLM_TIMEOUT_S=${VLLM_TIMEOUT_S:-120}
+      - EMBEDDING_BACKEND=${EMBEDDING_BACKEND:-onnx}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-384}
+      - ONNX_MODEL_DIR=${ONNX_MODEL_DIR:-/models}
+      - KEYCLOAK_BASE_URL=http://keycloak:8080
+      - KEYCLOAK_PUBLIC_URL=${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-installtec}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-installtec-backend}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-installtec-backend}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN:-localhost}
+      - SESSION_TTL_S=${SESSION_TTL_S:-28800}
+      - AUDIT_CHECKPOINT_HMAC_KEY=${AUDIT_CHECKPOINT_HMAC_KEY}
+      - AUDIT_ALL_READS=${AUDIT_ALL_READS:-false}
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vllm:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    restart: unless-stopped
+    networks: [installtec]
+
+  # --- addition: Celery workers/beat for the Module B ingestion pipeline ---
+  celery-worker:
+    build: ../backend
+    container_name: installtec_celery_worker
+    command: celery -A app.workers.celery_app worker -Q ingest,embed -c 4 -l info
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+
+  celery-worker-vlm:
+    build: ../backend
+    container_name: installtec_celery_worker_vlm
+    command: celery -A app.workers.celery_app worker -Q vlm -c 2 -l info
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vllm:
+        condition: service_started
+    restart: unless-stopped
+    networks: [installtec]
+
+  celery-beat:
+    build: ../backend
+    container_name: installtec_celery_beat
+    command: celery -A app.workers.celery_app beat -l info
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+
+  # --- addition: Keycloak identity provider (realm imported from deploy/keycloak) ---
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: installtec_keycloak
+    command: start-dev --import-realm
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=${DB_PASSWORD}
+      - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      - KC_HTTP_ENABLED=true
+      - KC_HOSTNAME=${KEYCLOAK_HOSTNAME:-localhost}
+      - KC_HOSTNAME_STRICT=false
+      - KC_PROXY_HEADERS=xforwarded
+    volumes:
+      - ./keycloak/realm-installtec.json:/opt/keycloak/data/import/realm-installtec.json:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+
+  frontend:
+    build: ../frontend
+    container_name: installtec_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks: [installtec]
+
+volumes:
+  pgdata:
+  swdata:
+  hfcache:
+
+networks:
+  installtec:
+    driver: bridge

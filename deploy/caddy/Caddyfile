@@ -1,0 +1,35 @@
+{
+	# Production reverse proxy: TLS 1.3 termination + security headers.
+	# Set {$APP_DOMAIN} via env before running docker-compose.prod.yml.
+	email admin@{$APP_DOMAIN}
+}
+
+{$APP_DOMAIN} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	tls {
+		protocols tls1.3
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	@auth path /realms/* /resources/* /admin/*
+	handle @auth {
+		reverse_proxy keycloak:8080
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}

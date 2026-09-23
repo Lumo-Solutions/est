@@ -1,0 +1,27 @@
+# Dev overlay: hot-reload backend, mount source. Applied automatically by
+# `make up` (docker compose picks up docker-compose.override.yml by default;
+# this one is named explicitly so `make up` passes it with -f).
+services:
+  backend:
+    volumes:
+      - ../backend/app:/app/app:ro
+      - ../backend/alembic.ini:/app/alembic.ini:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8001:8000"
+
+  celery-worker:
+    volumes:
+      - ../backend/app:/app/app:ro
+
+  celery-worker-vlm:
+    volumes:
+      - ../backend/app:/app/app:ro
+
+  celery-beat:
+    volumes:
+      - ../backend/app:/app/app:ro
+
+# Frontend dev server (Vite) is normally run on the host with `npm run dev`
+# for the fastest feedback loop; the `frontend` service here still builds the
+# production nginx image so `make up` gives a working end-to-end stack.

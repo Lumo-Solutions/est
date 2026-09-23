@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/scale_hint.schema.json",
+  "title": "ScaleHint",
+  "description": "Structured disambiguation of a raw drawing scale string into a numeric ratio, produced as a fallback when the backend's deterministic regex scale parser cannot confidently resolve the scale_text extracted from a title block.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "scale_ratio": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "description": "The drawing scale expressed as a single dimensionless ratio of real-world units per drawing unit, e.g. a '1:100' scale is 100, and a '1/4\"=1'-0\"' scale is 48. Null if the raw text gives no derivable ratio (e.g. 'AS SHOWN' or illegible text)."
+    },
+    "unit_system": {
+      "type": ["string", "null"],
+      "enum": ["metric", "imperial", null],
+      "description": "Which unit convention the original scale text was expressed in. Null if it cannot be determined or is not applicable (e.g. 'NTS')."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence in the derived scale_ratio and unit_system, from 0 (pure guess) to 1 (unambiguous)."
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "A brief one or two sentence explanation of how scale_ratio was derived from the raw text, or why it could not be derived."
+    }
+  },
+  "required": ["confidence", "reasoning"]
+}
