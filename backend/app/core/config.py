@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from urllib.parse import urlparse
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    app_env: str = Field(default="dev", alias="APP_ENV")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    trusted_proxy_hops: int = Field(default=1, alias="TRUSTED_PROXY_HOPS")
+
+    # --- database ---
+    # APP_DATABASE_URL: the app/workers connect as the non-owner RLS-bound role.
+    # MIGRATOR_DATABASE_URL: alembic connects as the schema-owning role.
+    app_database_url: str = Field(alias="APP_DATABASE_URL")
+    migrator_database_url: str = Field(alias="MIGRATOR_DATABASE_URL")
+
+    # --- redis / celery ---
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    celery_broker_url: str = Field(default="redis://localhost:6379/1", alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND"
+    )
+
+    # --- object storage ---
+    s3_endpoint: str = Field(alias="S3_ENDPOINT")
+    s3_access_key: str = Field(default="", alias="S3_ACCESS_KEY")
+    s3_secret_key: str = Field(default="", alias="S3_SECRET_KEY")
+    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
+    s3_bucket_drawings: str = Field(default="installtec-drawings", alias="S3_BUCKET_DRAWINGS")
+    s3_force_path_style: bool = Field(default=True, alias="S3_FORCE_PATH_STYLE")
+
+    # --- ai ---
+    vllm_api_base: str = Field(alias="VLLM_API_BASE")
+    vllm_model: str = Field(default="Qwen/Qwen2.5-VL-7B-Instruct", alias="VLLM_MODEL")
+    vllm_api_key: str = Field(default="not-needed", alias="VLLM_API_KEY")
+    vllm_timeout_s: float = Field(default=120, alias="VLLM_TIMEOUT_S")
+    embedding_backend: str = Field(default="onnx", alias="EMBEDDING_BACKEND")
+    embedding_model: str = Field(default="BAAI/bge-small-en-v1.5", alias="EMBEDDING_MODEL")
+    embedding_dim: int = Field(default=384, alias="EMBEDDING_DIM")
+    onnx_model_dir: str = Field(default="/models", alias="ONNX_MODEL_DIR")
+
+    # --- identity ---
+    keycloak_base_url: str = Field(default="http://keycloak:8080", alias="KEYCLOAK_BASE_URL")
+    keycloak_public_url: str = Field(
+        default="http://localhost:8080", alias="KEYCLOAK_PUBLIC_URL"
+    )
+    keycloak_realm: str = Field(default="installtec", alias="KEYCLOAK_REALM")
+    keycloak_client_id: str = Field(default="installtec-backend", alias="KEYCLOAK_CLIENT_ID")
+    keycloak_client_secret: str = Field(default="", alias="KEYCLOAK_CLIENT_SECRET")
+    keycloak_audience: str = Field(default="installtec-backend", alias="KEYCLOAK_AUDIENCE")
+    jwks_cache_ttl_s: int = Field(default=600, alias="JWKS_CACHE_TTL_S")
+    jwt_leeway_s: int = Field(default=30, alias="LEEWAY_S")
+    required_acr_for_approval: str = Field(default="silver", alias="REQUIRED_ACR_FOR_APPROVAL")
+
+    # --- session / cookies ---
+    session_secret: str = Field(default="", alias="SESSION_SECRET")
+    cookie_secure: bool = Field(default=True, alias="COOKIE_SECURE")
+    cookie_domain: str = Field(default="localhost", alias="COOKIE_DOMAIN")
+    session_ttl_s: int = Field(default=28800, alias="SESSION_TTL_S")
+    csrf_header: str = Field(default="X-CSRF-Token", alias="CSRF_HEADER")
+
+    # --- audit ---
+    audit_all_reads: bool = Field(default=False, alias="AUDIT_ALL_READS")
+    audit_checkpoint_hmac_key: str = Field(default="", alias="AUDIT_CHECKPOINT_HMAC_KEY")
+
+    # --- tenancy ---
+    demo_tenant_id: str = Field(
+        default="8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00", alias="DEMO_TENANT_ID"
+    )
+
+    # --- takeoff ---
+    takeoff_persist_geometry: bool = Field(default=False, alias="TAKEOFF_PERSIST_GEOMETRY")
+    max_upload_size_bytes: int = Field(default=50 * 1024 * 1024, alias="MAX_UPLOAD_SIZE_BYTES")
+
+    @field_validator("vllm_api_base")
+    @classmethod
+    def _assert_vllm_is_private(cls, v: str) -> str:
+        """Zero-external-cloud-dependency guardrail (SRS §1.1): refuse to boot
+        against a public internet host for the AI inference base URL."""
+        host = urlparse(v).hostname or ""
+        public_giveaways = ("openai.com", "anthropic.com", "googleapis.com", "azure.com")
+        if any(host.endswith(suffix) for suffix in public_giveaways):
+            raise ValueError(
+                f"VLLM_API_BASE host '{host}' looks like a commercial external AI API; "
+                "this platform must only call a self-hosted vLLM instance."
+            )
+        return v
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[call-arg]

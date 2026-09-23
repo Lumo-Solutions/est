@@ -15,6 +15,7 @@ actually runnable; each is marked inline in the compose file with a
 | `keycloak` | New service, `quay.io/keycloak/keycloak:26.0`, `start-dev --import-realm`. | SRS §5.1 requires Keycloak + TOTP MFA; absent from the §6 template entirely. `start-dev` is used for this slice's convenience (auto HTTP, auto-import); switch to `start --optimized` with a real hostname/TLS cert before production (see below). |
 | `celery-worker`, `celery-worker-vlm`, `celery-beat` | New services running the Module B ingestion pipeline. | SRS §3 specifies Celery workers for the RAG/AI engine; §6 never wires them up. Split into an `ingest,embed` queue (CPU work) and a `vlm` queue (throttled to 2 concurrency to back-pressure the vision-language model). |
 | `backend` | Adds Keycloak, app/migrator DB, Celery, embedding, session, and audit env vars beyond the four SRS ones (all additive — the original four are untouched). | Required for auth, RLS, async ingestion, and the hash-chained audit trail to function. |
+| `backend`/`celery-*` build context | Widened from `context: ../backend` to `context: .. / dockerfile: backend/Dockerfile` (repo root). | `app/takeoff/prompts.py` reads `ai-service/prompts` and `ai-service/schemas` from the container root at runtime; scoping the build context to `backend/` alone meant those files could never be `COPY`'d in at all, and title-block/scale extraction would crash the first time it ran in a real container. See `docs/takeoff-pipeline.md`. |
 | Networks | Single `installtec` bridge network added to every service. | SRS §6 relies on Compose's implicit default network; naming it explicitly makes the prod overlay's port-hardening unambiguous. |
 
 ## Role separation (RLS correctness)
@@ -59,14 +60,47 @@ Settings → Authentication) and re-export, or as a follow-up realm patch.
 
 `tenant_id = 8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00`, Keycloak group
 `/tenants/demo`. Referenced by `DEMO_TENANT_ID` in `.env.example`, the realm
-export's group attribute, and `backend/app/seeds/demo_tenant.yaml`.
+export's group attribute, and `backend/app/cli.py::seed()` (reference data —
+trade taxonomy roots, UAE authorities, the default approval policy — is
+defined inline in Python there rather than in a separate YAML file; see that
+module's docstring for why).
 
-## Local validation performed
+## Local validation actually performed
 
-`docker compose -f deploy/docker-compose.yml config` and the `.test`/`.prod`
-overlays were validated for YAML/schema correctness (`docker compose ...
-config --quiet`) in this environment. **A live `docker compose up` was not
-run** — Docker Desktop's daemon was not running in this session. Run `make up`
-and `make bootstrap-keycloak` to do a full smoke test before relying on this
-stack; watch in particular for the realm import succeeding
-(`docker compose logs keycloak | grep -i realm`) and `pg_isready` passing.
+Unlike the note this section used to carry, Docker Desktop *was* brought up
+and used extensively during development, not just for `config --quiet`
+validation:
+
+- `docker compose -f deploy/docker-compose.yml config` and the
+  `.test`/`.prod` overlays parse correctly.
+- The real `backend` image was built from the repo-root context (see the
+  build-context delta above) and `alembic upgrade head` was run against a
+  live `pgvector/pgvector:pg16` container — all 9 migrations apply cleanly.
+- RLS tenant isolation, the audit hash chain (trigger + Python-side
+  re-verification), the bi-temporal cost-library exclusion constraint, the
+  prequalification exclusion constraint, and the trade-taxonomy ltree
+  path/cycle trigger were all exercised with raw SQL as the `installtec_app`
+  role directly against a live container.
+- A real Keycloak 26 container imported `realm-installtec.json` (roles,
+  groups, and clients confirmed via the Admin REST API), issued a token, and
+  that token was validated end-to-end through the real FastAPI app,
+  producing a real `vendor` row through real RLS. See
+  `docs/keycloak-setup.md` for what this did and didn't cover (the
+  interactive browser login form specifically hits a Keycloak/Quarkus
+  cookie quirk over plain HTTP, documented there, that's independent of
+  everything else it validated).
+- The full backend test suite (117 tests: unit, integration against
+  `testcontainers`-managed Postgres/Redis, and API tests against the real
+  ASGI app) passes — `make test` from the repo root, or
+  `pytest backend/tests` with a Docker socket available.
+
+This pass caught and fixed several real bugs that a config-only check would
+have missed entirely — most notably: every `TenantEntity`-based model wasn't
+actually a mapped SQLAlchemy class at all (see `db/base.py`), `app_is_system()`
+only bypassed the RLS **read** policy and not writes (see
+`docs/security-rls.md`), and the audit-trail's `INSERT ... RETURNING`
+interacting with its own RLS `SELECT` policy to break every `estimator`-
+initiated action (see `docs/audit-chain.md`). Run `make up` +
+`make bootstrap-keycloak` yourself before relying on this stack in a new
+environment; the above was validated with ad hoc `docker run`/`docker
+compose` invocations during development, not via a from-scratch `make up`.

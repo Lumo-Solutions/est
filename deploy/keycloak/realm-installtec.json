@@ -146,7 +146,7 @@
         "https://*/api/v1/auth/callback"
       ],
       "webOrigins": ["+"],
-      "defaultClientScopes": ["installtec-claims", "profile", "email", "roles"],
+      "defaultClientScopes": ["installtec-claims"],
       "attributes": {
         "post.logout.redirect.uris": "+"
       }
@@ -163,7 +163,7 @@
       "implicitFlowEnabled": false,
       "redirectUris": ["http://localhost:3000/*"],
       "webOrigins": ["http://localhost:3000"],
-      "defaultClientScopes": ["installtec-claims", "profile", "email", "roles"],
+      "defaultClientScopes": ["installtec-claims"],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }

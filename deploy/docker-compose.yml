@@ -133,7 +133,9 @@ services:
     networks: [installtec]
 
   backend:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     container_name: installtec_backend
     environment:
       # --- SRS §6 verbatim ---
@@ -194,7 +196,9 @@ services:
 
   # --- addition: Celery workers/beat for the Module B ingestion pipeline ---
   celery-worker:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker
     command: celery -A app.workers.celery_app worker -Q ingest,embed -c 4 -l info
     environment: *backend-env
@@ -207,7 +211,9 @@ services:
     networks: [installtec]
 
   celery-worker-vlm:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker_vlm
     command: celery -A app.workers.celery_app worker -Q vlm -c 2 -l info
     environment: *backend-env
@@ -222,7 +228,9 @@ services:
     networks: [installtec]
 
   celery-beat:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     container_name: installtec_celery_beat
     command: celery -A app.workers.celery_app beat -l info
     environment: *backend-env
