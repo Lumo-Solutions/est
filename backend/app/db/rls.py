@@ -30,8 +30,3 @@ async def set_rls_context(session: AsyncSession, ctx: RequestContext) -> None:
             "is_system": "on" if ctx.is_system else "off",
         },
     )
-    import os
-    if os.environ.get("RLS_DEBUG"):
-        from sqlalchemy import text as _t
-        r = await session.execute(_t("SELECT current_setting('app.tenant_id', true), current_setting('app.roles', true), current_setting('app.is_system', true)"))
-        print("RLS_DEBUG set_rls_context ->", r.first(), flush=True)
