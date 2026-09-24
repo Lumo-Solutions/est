@@ -17,6 +17,34 @@ actually runnable; each is marked inline in the compose file with a
 | `backend` | Adds Keycloak, app/migrator DB, Celery, embedding, session, and audit env vars beyond the four SRS ones (all additive — the original four are untouched). | Required for auth, RLS, async ingestion, and the hash-chained audit trail to function. |
 | `backend`/`celery-*` build context | Widened from `context: ../backend` to `context: .. / dockerfile: backend/Dockerfile` (repo root). | `app/takeoff/prompts.py` reads `ai-service/prompts` and `ai-service/schemas` from the container root at runtime; scoping the build context to `backend/` alone meant those files could never be `COPY`'d in at all, and title-block/scale extraction would crash the first time it ran in a real container. See `docs/takeoff-pipeline.md`. |
 | Networks | Single `installtec` bridge network added to every service. | SRS §6 relies on Compose's implicit default network; naming it explicitly makes the prod overlay's port-hardening unambiguous. |
+| `backend`, `celery-worker` | New `onnxmodels` named volume mounted at `/models` (`$ONNX_MODEL_DIR`). | The embedding backend (`EMBEDDING_BACKEND=onnx`, the default) had `ONNX_MODEL_DIR=/models` set but no volume behind it at all, so `OnnxEmbedder` could never find a model regardless of how it was provisioned. Not mounted into `celery-worker-vlm` or `celery-beat`, which never call `get_embedder()`. |
+
+### Populating the ONNX embedding model volume
+
+`OnnxEmbedder` (`backend/app/integrations/embeddings.py`) looks for the
+model at `$ONNX_MODEL_DIR/<embedding_model with "/" replaced by "_">`, e.g.
+`/models/BAAI_bge-small-en-v1.5` for the default `EMBEDDING_MODEL`. Populate
+it with `ai-service/embeddings/download_model.py` **on a separate machine
+with network access** (it needs `optimum[onnxruntime]` + `huggingface_hub`,
+which are intentionally not part of the backend image):
+
+```bash
+pip install "optimum[onnxruntime]" huggingface_hub
+python ai-service/embeddings/download_model.py --target-dir ./BAAI_bge-small-en-v1.5
+```
+
+Then copy that directory's contents into the `onnxmodels` volume (or, for
+an air-gapped target, into wherever that volume's underlying storage lives)
+so the result is `<volume>/BAAI_bge-small-en-v1.5/{model.onnx,tokenizer.json,...}`.
+`download_model.py`'s own default `--target-dir` (when omitted) now matches
+this layout — it previously computed just the HuggingFace repo basename
+(`bge-small-en-v1.5`, no `BAAI_` prefix), which never matched what the app
+looked for; see `ai-service/README.md` for the full air-gapped procedure.
+If the model is missing, `OnnxEmbedder.embed()` raises a `FileNotFoundError`
+naming the exact expected path rather than crashing the worker opaquely;
+`app/workers/tasks/takeoff.py::_embed_drawing_body` catches it, records the
+message on the extraction job row, and re-raises so Celery still marks the
+task failed.
 
 ## Role separation (RLS correctness)
 

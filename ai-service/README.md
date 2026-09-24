@@ -61,12 +61,17 @@ runtime once this is done (see SRS §1.1 / §5.3).
 1. On a machine with internet access:
    ```bash
    pip install "optimum[onnxruntime]" huggingface_hub
-   python ai-service/embeddings/download_model.py --target-dir ./bge-small-en-v1.5
+   python ai-service/embeddings/download_model.py --target-dir ./BAAI_bge-small-en-v1.5
    ```
-2. Copy `./bge-small-en-v1.5` onto the target host and mount it at the path
-   given by `$ONNX_MODEL_DIR` (the `onnxmodels` named volume in
-   `deploy/docker-compose.yml`, mounted into the `backend` and Celery
-   containers).
+   The directory name must be `<EMBEDDING_MODEL with "/" replaced by "_">`
+   (`BAAI_bge-small-en-v1.5` for the default model) — that's what
+   `OnnxEmbedder` looks for under `$ONNX_MODEL_DIR`. Omitting `--target-dir`
+   now does this automatically.
+2. Copy `./BAAI_bge-small-en-v1.5` onto the target host and mount it at the
+   path given by `$ONNX_MODEL_DIR` (the `onnxmodels` named volume in
+   `deploy/docker-compose.yml`, mounted into the `backend` and
+   `celery-worker` containers — the ones that actually run embedding code;
+   `celery-worker-vlm` and `celery-beat` don't need it).
 
 ## GPU sizing
 

@@ -135,6 +135,14 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_backend
+    # --- addition: ONNX_MODEL_DIR=/models had no volume behind it, so the
+    # embedding backend could never find a model no matter how it was
+    # provisioned. Populate it with ai-service/embeddings/download_model.py
+    # -- see that script's docstring and docs/deploy-deltas.md for the
+    # exact command (it needs its own extra deps and network access, so it
+    # does not run from this image).
+    volumes:
+      - onnxmodels:/models
     environment:
       # --- SRS §6 verbatim ---
       - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@postgres:5432/installtec_core
@@ -199,6 +207,11 @@ services:
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker
     command: celery -A app.workers.celery_app worker -Q ingest,embed -c 4 -l info
+    # --- addition: the `embed` queue runs OnnxEmbedder (embeddings.py),
+    # which needs the same /models volume as backend -- see the comment on
+    # the backend service above.
+    volumes:
+      - onnxmodels:/models
     environment: *backend-env
     depends_on:
       postgres:
@@ -313,6 +326,7 @@ volumes:
   pgdata:
   swdata:
   hfcache:
+  onnxmodels:
 
 networks:
   installtec:

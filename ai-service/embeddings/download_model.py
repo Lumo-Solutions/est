@@ -9,7 +9,7 @@ offline environment and mount it at the path given by $ONNX_MODEL_DIR.
 
 Usage:
     python download_model.py
-    python download_model.py --target-dir /models/bge-small-en-v1.5
+    python download_model.py --target-dir /models/BAAI_bge-small-en-v1.5
     python download_model.py --model BAAI/bge-small-en-v1.5
 
 Requires (install once, only on the machine running this script):
@@ -53,7 +53,12 @@ def resolve_target_dir(args: argparse.Namespace) -> Path:
     if args.target_dir:
         return Path(args.target_dir)
     base = os.environ.get("ONNX_MODEL_DIR", "/models")
-    return Path(base) / args.model.rsplit("/", 1)[-1]
+    # Must match OnnxEmbedder._model_dir in backend/app/integrations/embeddings.py
+    # (settings.embedding_model.replace("/", "_")) -- this previously used just
+    # the HF repo basename (e.g. "bge-small-en-v1.5"), which the app never
+    # looked in (it looks in "BAAI_bge-small-en-v1.5"), so a default-options
+    # export silently produced a model the backend could never find.
+    return Path(base) / args.model.replace("/", "_")
 
 
 def already_exported(target_dir: Path) -> bool:
@@ -94,7 +99,7 @@ def main() -> int:
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer.save_pretrained(target_dir)
 
-    print(f"[download_model] Done. {target_dir} is ready to mount as ONNX_MODEL_DIR/{args.model.rsplit('/', 1)[-1]}.")
+    print(f"[download_model] Done. {target_dir} is ready to mount as ONNX_MODEL_DIR/{args.model.replace('/', '_')}.")
     print(
         "[download_model] For air-gapped deployment: copy this directory (or the Docker "
         "named volume it lives in) to the offline environment; no network access is needed "
