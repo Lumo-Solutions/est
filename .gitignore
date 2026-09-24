@@ -23,6 +23,10 @@ frontend/.vite/
 deploy/.env
 deploy/keycloak/*.local.json
 
+# Generated from deploy/seaweedfs/s3-identities.json.template by `make up`
+# (envsubst against deploy/.env) -- never hand-edit or commit this file.
+deploy/seaweedfs/s3-identities.json
+
 # Models / data
 *.onnx
 /models/

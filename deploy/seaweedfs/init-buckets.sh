@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Idempotently creates the drawings bucket against the SeaweedFS S3 endpoint.
-# Run after `docker compose up -d seaweedfs` (or as part of `make up`).
+# Run via `make init-buckets` after `make up`.
 #
-# NOTE: deploy/seaweedfs/s3-identities.json ships with a placeholder secret
-# key ("S3_SECRET_KEY_PLACEHOLDER"). Before first run, edit that file so its
-# secretKey matches S3_SECRET_KEY in deploy/.env (SeaweedFS reads the file
-# directly and does not expand env vars itself).
+# deploy/seaweedfs/s3-identities.json is generated from its .template by
+# `make render-s3-identities` (also run automatically by `make up`) using
+# S3_ACCESS_KEY/S3_SECRET_KEY from deploy/.env -- never hand-edit that file.
 set -euo pipefail
 
 : "${S3_ENDPOINT:=http://localhost:8333}"

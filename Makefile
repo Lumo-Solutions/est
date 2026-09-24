@@ -1,9 +1,20 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets render-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 COMPOSE_TEST=docker compose -f deploy/docker-compose.test.yml --env-file deploy/.env
 
-up:
+# Renders deploy/seaweedfs/s3-identities.json from its .template (envsubst
+# against deploy/.env) so S3_SECRET_KEY never needs manually copying into a
+# second file -- the rendered file is gitignored; only the template is
+# tracked. Re-run any time S3_SECRET_KEY changes in deploy/.env.
+render-s3-identities:
+	@test -f deploy/.env || { echo "deploy/.env not found -- run: cp deploy/.env.example deploy/.env" >&2; exit 1; }
+	set -a; . deploy/.env; set +a; \
+	envsubst '$$S3_ACCESS_KEY $$S3_SECRET_KEY' \
+	  < deploy/seaweedfs/s3-identities.json.template \
+	  > deploy/seaweedfs/s3-identities.json
+
+up: render-s3-identities
 	$(COMPOSE) up -d --build
 
 down:
