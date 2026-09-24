@@ -207,6 +207,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks: [installtec]
+    # --- addition: override the backend image's HEALTHCHECK (curl :8000/healthz),
+    # which workers never satisfy since they run no webserver -- ping this
+    # worker's own node by hostname so inspect doesn't hang waiting for
+    # every node in the cluster to answer.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
 
   celery-worker-vlm:
     build:
@@ -224,13 +234,25 @@ services:
         condition: service_started
     restart: unless-stopped
     networks: [installtec]
+    # --- addition: see celery-worker above ---
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
 
   celery-beat:
     build:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_beat
-    command: celery -A app.workers.celery_app beat -l info
+    # --- addition: --schedule points at /tmp, not the default ./celerybeat-schedule
+    # (relative to WORKDIR /app), because /app is owned by root (only COPY'd
+    # as root in Dockerfile, never chowned) while the container runs as the
+    # unprivileged `app` user -- beat crash-looped with "Permission denied:
+    # 'celerybeat-schedule'" until this was found while verifying this item.
+    command: celery -A app.workers.celery_app beat -l info --schedule=/tmp/celerybeat-schedule
     environment: *backend-env
     depends_on:
       postgres:
@@ -239,6 +261,15 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks: [installtec]
+    # --- addition: override the backend image's HEALTHCHECK. beat has no
+    # `inspect`-style command (that's a worker RPC) and no HTTP endpoint;
+    # the only real liveness signal is its own log/schedule output, which a
+    # HEALTHCHECK can't cheaply inspect. Disabled rather than left pointing
+    # at a check it can never pass -- `docker ps` will just show no health
+    # column for this service; watch `docker logs` for "Scheduler: Sending
+    # due task" to confirm it's alive.
+    healthcheck:
+      disable: true
 
   # --- addition: Keycloak identity provider (realm imported from deploy/keycloak) ---
   keycloak:
