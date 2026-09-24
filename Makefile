@@ -22,8 +22,7 @@ seed:
 	$(COMPOSE) exec backend python -m app.cli seed --tenant demo
 
 bootstrap-keycloak:
-	bash deploy/keycloak/bootstrap.sh
-
+	set -a; . deploy/.env; set +a; bash deploy/keycloak/bootstrap.sh
 init-buckets:
 	set -a; . deploy/.env; set +a; bash deploy/seaweedfs/init-buckets.sh
 

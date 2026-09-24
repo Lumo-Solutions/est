@@ -7,6 +7,10 @@
 # finished importing deploy/keycloak/realm-installtec.json.
 set -euo pipefail
 
+# Git Bash on Windows rewrites absolute paths like /opt/... into C:/Program Files/Git/opt/...,
+# which breaks `docker exec` paths. Harmless on Linux/macOS.
+export MSYS_NO_PATHCONV=1
+
 : "${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set (see deploy/.env)}"
 : "${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}"
 : "${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set}"
@@ -23,6 +27,30 @@ run config credentials --server http://localhost:8080 --realm master \
 echo "Setting installtec-backend client secret..."
 CLIENT_UUID=$(run get clients -r "$REALM" -q clientId=installtec-backend --fields id --format csv --noquotes | tail -n1)
 run update "clients/${CLIENT_UUID}" -r "$REALM" -s "secret=${KEYCLOAK_CLIENT_SECRET}"
+
+# Keycloak 25+ emits `sub` and `acr` from its built-in 'basic'/'acr' client
+# scopes, which are NOT created when the realm import defines its own
+# clientScopes (ours does). Without `sub` every bearer token is rejected, so
+# make sure the installtec-claims scope carries both mappers. Idempotent.
+echo "Ensuring sub/acr mappers on installtec-claims scope..."
+SCOPE_ID=$(run get client-scopes -r "$REALM" --fields id,name --format csv --noquotes \
+    | tr -d '\r' | grep 'installtec-claims' | tr ',' '\n' | grep -E '^[0-9a-f-]{36}$' | head -n1)
+[ -n "$SCOPE_ID" ] || { echo "installtec-claims client scope not found" >&2; exit 1; }
+ensure_mapper() {
+    local name="$1" type="$2"; shift 2
+    if run get "client-scopes/${SCOPE_ID}/protocol-mappers/models" -r "$REALM" --fields name --format csv --noquotes \
+        | tr -d '\r' | grep -qx "$name"; then
+        echo "  mapper '$name' already present"
+    else
+        run create "client-scopes/${SCOPE_ID}/protocol-mappers/models" -r "$REALM" \
+            -s name="$name" -s protocol=openid-connect -s protocolMapper="$type" "$@"
+        echo "  added mapper '$name'"
+    fi
+}
+ensure_mapper sub oidc-sub-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."introspection.token.claim"=true'
+ensure_mapper acr oidc-acr-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true' -s 'config."introspection.token.claim"=true'
 
 seed_user() {
     local username="$1" role="$2" password="$3"

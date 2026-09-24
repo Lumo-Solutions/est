@@ -51,11 +51,26 @@
   ],
   "roles": {
     "realm": [
-      { "name": "estimator", "description": "Prepares takeoffs and cost estimates" },
-      { "name": "lead_estimator", "description": "Reviews estimates; first-tier approver" },
-      { "name": "procurement_head", "description": "Owns vendor/RFQ workflows; second-tier approver" },
-      { "name": "bd_director", "description": "Business development; third-tier approver" },
-      { "name": "managing_director", "description": "Final approver; full organisational visibility" }
+      {
+        "name": "estimator",
+        "description": "Prepares takeoffs and cost estimates"
+      },
+      {
+        "name": "lead_estimator",
+        "description": "Reviews estimates; first-tier approver"
+      },
+      {
+        "name": "procurement_head",
+        "description": "Owns vendor/RFQ workflows; second-tier approver"
+      },
+      {
+        "name": "bd_director",
+        "description": "Business development; third-tier approver"
+      },
+      {
+        "name": "managing_director",
+        "description": "Final approver; full organisational visibility"
+      }
     ]
   },
   "groups": [
@@ -68,7 +83,9 @@
           "name": "demo",
           "path": "/tenants/demo",
           "attributes": {
-            "tenant_id": ["8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00"]
+            "tenant_id": [
+              "8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00"
+            ]
           },
           "realmRoles": []
         }
@@ -78,7 +95,7 @@
   "clientScopes": [
     {
       "name": "installtec-claims",
-      "description": "tenant_id, audience, and realm-role claims used by installtec-backend",
+      "description": "sub, acr, tenant_id, audience, and realm-role claims used by installtec-backend (the realm defines its own scopes, so Keycloak's built-in 'basic'/'acr' scopes are not created on import)",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -124,6 +141,27 @@
             "access.token.claim": "true",
             "userinfo.token.claim": "true"
           }
+        },
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
         }
       ]
     }
@@ -145,8 +183,12 @@
         "http://localhost:8001/api/v1/auth/callback",
         "https://*/api/v1/auth/callback"
       ],
-      "webOrigins": ["+"],
-      "defaultClientScopes": ["installtec-claims"],
+      "webOrigins": [
+        "+"
+      ],
+      "defaultClientScopes": [
+        "installtec-claims"
+      ],
       "attributes": {
         "post.logout.redirect.uris": "+"
       }
@@ -161,9 +203,15 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["http://localhost:3000"],
-      "defaultClientScopes": ["installtec-claims"],
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "defaultClientScopes": [
+        "installtec-claims"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }

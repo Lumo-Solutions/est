@@ -38,3 +38,6 @@ Thumbs.db
 # Build artifacts
 *.log
 build/
+
+# Dev bearer token written by deploy/keycloak/dev-token.sh
+.dev-token

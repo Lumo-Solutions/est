@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Base service definitions reproduce MASTER_SRS.MD §6 verbatim (image names,
 # env var names, volumes, ports). Additions beyond the SRS template are
 # marked inline and documented in docs/deploy-deltas.md.
@@ -62,7 +60,7 @@ services:
       # --- addition: run extension/role/keycloak-db bootstrap SQL on first init ---
       - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5432:5432"
+      - "5433:5432"  # host 5433 (5432 is often taken by a local Postgres)
     # --- addition: healthcheck so dependents can wait for readiness ---
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -269,6 +267,8 @@ services:
     networks: [installtec]
 
   frontend:
+    # Skipped by default until frontend/ exists; enable with `--profile frontend`.
+    profiles: ["frontend"]
     build: ../frontend
     container_name: installtec_frontend
     ports:
