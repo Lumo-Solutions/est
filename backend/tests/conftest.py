@@ -62,6 +62,40 @@ def _skip_if_no_docker() -> None:
         pytest.skip("SKIP_DOCKER_TESTS=1 -- integration tests requiring Docker are disabled")
 
 
+# The dev stack's own identity (deploy/docker-compose.yml) -- never valid
+# values for a testcontainers-provisioned database. Checked defensively
+# below even though testcontainers' own dynamic port assignment already
+# makes hitting these by accident astronomically unlikely: this is the
+# actual load-bearing guard against a *future* refactor accidentally
+# reading a fixed DSN/port from the environment (e.g. from
+# docker-compose.test.yml, or from a shell that sourced deploy/.env)
+# instead of the one testcontainers just created. See docs/takeoff-pipeline.md's
+# Compose-collision note for the incident that prompted this.
+_DEV_POSTGRES_PORT = 5433
+_DEV_DB_NAME = "installtec_core"
+_DEV_COMPOSE_HOSTNAMES = frozenset({"postgres", "redis", "installtec_postgres", "installtec_redis"})
+
+
+def _assert_not_dev_database(*, host: str, port: int, dbname: str) -> None:
+    if port == _DEV_POSTGRES_PORT or dbname == _DEV_DB_NAME or host in _DEV_COMPOSE_HOSTNAMES:
+        raise RuntimeError(
+            f"Refusing to run integration tests against what looks like the dev database "
+            f"(host={host!r} port={port} dbname={dbname!r}). Integration tests must run "
+            f"against a testcontainers-provisioned, ephemeral database only -- never "
+            f"deploy/docker-compose.yml's installtec_postgres (host port {_DEV_POSTGRES_PORT}, "
+            f"db {_DEV_DB_NAME!r})."
+        )
+
+
+def _assert_not_dev_redis(*, host: str) -> None:
+    if host in _DEV_COMPOSE_HOSTNAMES:
+        raise RuntimeError(
+            f"Refusing to run integration tests against what looks like the dev Redis "
+            f"(host={host!r}). Integration tests must use a testcontainers-provisioned "
+            f"Redis only."
+        )
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[str]:
     """Session-scoped pgvector/pgvector:pg16 container (same image as
@@ -72,6 +106,10 @@ def postgres_container() -> Iterator[str]:
     from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer("pgvector/pgvector:pg16", username="postgres", password="postgres", dbname="test") as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        _assert_not_dev_database(host=host, port=int(port), dbname="test")
+
         import psycopg2
 
         admin_url = pg.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
@@ -81,15 +119,9 @@ def postgres_container() -> Iterator[str]:
             cur.execute(_ROLE_SETUP_SQL)
         conn.close()
 
-        migrator_dsn = (
-            f"postgresql+asyncpg://installtec_migrator:test@{pg.get_container_host_ip()}:"
-            f"{pg.get_exposed_port(5432)}/test"
-        )
+        migrator_dsn = f"postgresql+asyncpg://installtec_migrator:test@{host}:{port}/test"
         os.environ["MIGRATOR_DATABASE_URL"] = migrator_dsn
-        os.environ["APP_DATABASE_URL"] = (
-            f"postgresql+asyncpg://installtec_app:test@{pg.get_container_host_ip()}:"
-            f"{pg.get_exposed_port(5432)}/test"
-        )
+        os.environ["APP_DATABASE_URL"] = f"postgresql+asyncpg://installtec_app:test@{host}:{port}/test"
         # The remaining required Settings fields aren't exercised by
         # integration tests (no real S3/vLLM calls happen here) but
         # Settings() itself requires them to construct at all.
@@ -115,7 +147,9 @@ def redis_container() -> Iterator[str]:
     from testcontainers.redis import RedisContainer
 
     with RedisContainer("redis:7-alpine") as rc:
-        yield f"redis://{rc.get_container_host_ip()}:{rc.get_exposed_port(6379)}/0"
+        host = rc.get_container_host_ip()
+        _assert_not_dev_redis(host=host)
+        yield f"redis://{host}:{rc.get_exposed_port(6379)}/0"
 
 
 @pytest_asyncio.fixture

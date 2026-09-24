@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.enums import AuditAction, DrawingStatus
 from app.core.errors import ConflictError, NotFoundError
-from app.integrations.s3 import presign_get_url, put_object_streaming
 from app.integrations.embeddings import get_embedder
-from app.models.takeoff import Drawing, DrawingSheet, ExtractionJob
+from app.integrations.s3 import presign_get_url, put_object_streaming
+from app.models.takeoff import Drawing, DrawingMeasurement, DrawingSheet, ExtractionJob
 from app.services import audit
+from app.services.projects import assert_can_see_project
 
 _ALLOWED_CONTENT_TYPES = {
     "application/pdf": "vector_pdf",  # refined to scanned_pdf per-page during indexing
@@ -23,6 +24,14 @@ _ALLOWED_CONTENT_TYPES = {
 async def upload_drawing(
     session: AsyncSession, ctx: RequestContext, project_id: UUID, filename: str, content_type: str | None, data: bytes
 ) -> Drawing:
+    # `drawings` is project_scoped (RLS), but there's no prior read here to
+    # let that policy silently filter an unauthorized caller out the way it
+    # would for e.g. trigger_ingest's SELECT-then-UPDATE -- an INSERT's
+    # WITH CHECK fails hard instead. Check first (before streaming to S3)
+    # so an estimator/lead_estimator without project membership gets a
+    # clean 403 immediately, not a 500 (or a wasted upload) partway through.
+    await assert_can_see_project(session, ctx, project_id)
+
     kind = _ALLOWED_CONTENT_TYPES.get(content_type or "", "unknown")
     if kind == "unknown" and filename.lower().endswith(".dxf"):
         kind = "dxf"
@@ -82,7 +91,9 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
         project_id=drawing.project_id, payload={"status": "queued"},
     )
 
-    task = index_sheets.delay(str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None)
+    task = index_sheets.delay(
+        str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles)
+    )
     return [task.id]
 
 
@@ -90,6 +101,17 @@ async def list_jobs(session: AsyncSession, drawing_id: UUID) -> list[ExtractionJ
     result = await session.execute(
         select(ExtractionJob).where(ExtractionJob.drawing_id == drawing_id).order_by(ExtractionJob.started_at)
     )
+    return list(result.scalars().all())
+
+
+async def list_measurements(
+    session: AsyncSession, drawing_id: UUID, sheet_id: UUID | None = None
+) -> list[DrawingMeasurement]:
+    stmt = select(DrawingMeasurement).where(DrawingMeasurement.drawing_id == drawing_id)
+    if sheet_id is not None:
+        stmt = stmt.where(DrawingMeasurement.sheet_id == sheet_id)
+    stmt = stmt.order_by(DrawingMeasurement.sheet_id, DrawingMeasurement.capability, DrawingMeasurement.kind)
+    result = await session.execute(stmt)
     return list(result.scalars().all())
 
 

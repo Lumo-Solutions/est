@@ -107,6 +107,34 @@ class DrawingEntity(TenantEntity):
     handle: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class DrawingMeasurement(TenantEntity):
+    """Persisted output of the geometry extractors (Phase 2:
+    app/takeoff/geometry/) -- one row per Measurement each extractor's
+    extract() call returns. Written by
+    app.workers.tasks.takeoff.extract_geometry_measurements, which runs
+    after index_sheets, gated behind TAKEOFF_PERSIST_GEOMETRY (no
+    persisted drawing_entities.geometry to extract from otherwise). Never
+    written to from request code -- read-only via
+    GET /drawings/{id}/measurements."""
+
+    __tablename__ = "drawing_measurements"
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sheet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawing_sheets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    capability: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # e.g. "alignment"
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)  # e.g. "alignment_length_m"
+    value: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
+    source_entity_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    extractor_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
 class SheetChunk(TenantEntity):
     """RAG store: sheet_id/drawing_id/project_id + embedding, HNSW-indexed
     (migration 0009). Feeds the Module B "later" BOQ reconciliation work,

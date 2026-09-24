@@ -148,6 +148,7 @@ class ExtractionJobType(StrEnum):
     EXTRACT_TITLE_BLOCK = "extract_title_block"
     DERIVE_SCALE = "derive_scale"
     EMBED_SHEET = "embed_sheet"
+    EXTRACT_GEOMETRY = "extract_geometry"
     FINALIZE = "finalize"
 
 

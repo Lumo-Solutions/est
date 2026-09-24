@@ -1,6 +1,20 @@
 # Ephemeral stack for backend integration tests (`make test-integration`).
 # No Keycloak: tests mint their own JWTs against a fake JWKS in-process.
 # No real vLLM: uses the same mock service as dev.
+#
+# Port policy (see docs/takeoff-pipeline.md's Compose-collision note): NONE
+# of these host ports are actually used by the test suite today --
+# tests/conftest.py's postgres_container/redis_container fixtures spin up
+# their OWN separate, dynamically-ported containers via `testcontainers`
+# (never these services), and every test that touches S3_ENDPOINT/
+# VLLM_API_BASE sets them to an intentionally-unreachable placeholder
+# (http://s3.invalid, http://vllm.invalid/v1) rather than a real endpoint.
+# Postgres/Redis host ports are dropped entirely below (there's no code
+# path that would ever use them, so a port that doesn't exist can't
+# collide with anything, ever). SeaweedFS/mock-vllm keep host ports, moved
+# to a dedicated 58xxx/59xxx block well away from both this project's dev
+# stack (8333/9333/8000, deploy/docker-compose.yml) and common local
+# defaults, in case a future test talks to them directly over HTTP.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -14,8 +28,6 @@ services:
       MIGRATOR_DB_PASSWORD: test
     volumes:
       - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s
@@ -26,19 +38,17 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6380:6379"
 
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     command: "server -dir=/data -s3"
     ports:
-      - "8334:8333"
-      - "9334:9333"
+      - "58333:8333"
+      - "59333:9333"
     tmpfs:
       - /data
 
   mock-vllm:
     build: ../ai-service/mock-vllm
     ports:
-      - "8090:8000"
+      - "58000:8000"

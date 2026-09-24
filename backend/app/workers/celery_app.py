@@ -27,6 +27,7 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.index_sheets": {"queue": "ingest"},
         "app.workers.tasks.takeoff.extract_sheet": {"queue": "vlm"},
         "app.workers.tasks.takeoff.embed_drawing": {"queue": "embed"},
+        "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "ingest"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
     },

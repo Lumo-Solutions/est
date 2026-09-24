@@ -40,6 +40,12 @@ x-backend-env: &backend-env
   SESSION_SECRET: ${SESSION_SECRET}
   AUDIT_CHECKPOINT_HMAC_KEY: ${AUDIT_CHECKPOINT_HMAC_KEY}
   AUDIT_ALL_READS: ${AUDIT_ALL_READS:-false}
+  # --- addition: gates DXF geometric-entity persistence in index_sheets
+  # (app/workers/tasks/takeoff.py) -- see docs/takeoff-pipeline.md. Was
+  # previously only a Settings() default with no compose wiring at all,
+  # so there was no way to turn it on via .env; found while verifying the
+  # Phase 2 geometry extractors end-to-end. ---
+  TAKEOFF_PERSIST_GEOMETRY: ${TAKEOFF_PERSIST_GEOMETRY:-false}
 
 services:
   postgres:
@@ -207,6 +213,7 @@ services:
       - SESSION_TTL_S=${SESSION_TTL_S:-28800}
       - AUDIT_CHECKPOINT_HMAC_KEY=${AUDIT_CHECKPOINT_HMAC_KEY}
       - AUDIT_ALL_READS=${AUDIT_ALL_READS:-false}
+      - TAKEOFF_PERSIST_GEOMETRY=${TAKEOFF_PERSIST_GEOMETRY:-false}
     ports:
       - "8001:8000"
     depends_on:

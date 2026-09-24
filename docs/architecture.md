@@ -83,13 +83,35 @@ asynchronously in a worker.
   indexing, vLLM-based title-block/scale extraction, ONNX embeddings +
   pgvector storage with a similarity-search probe endpoint.
 
+**Implemented (Phase 2/2b/3):** DXF geometric intelligence -- alignment
+measurement, corridor areas, trench prismoidal volumes, pipe network
+topology (`backend/app/takeoff/geometry/`) as real, unit-tested extractors,
+wired end-to-end: `index_sheets` persists geometric entities behind
+`TAKEOFF_PERSIST_GEOMETRY`, `extract_geometry_measurements` (ingest queue)
+runs the extractor registry against them and writes `drawing_measurements`,
+and a read-only `GET /drawings/{id}/measurements` exposes the result. BOQ
+reconciliation (`backend/app/boq/`, `drawing_measurements` ->
+`boq_line_items`): hierarchical BOQ line items (ltree, same pattern as
+trade taxonomy), each linkable to *several* measurements (summed --
+`boq_line_item_measurements`), unit-dimension-checked and converted (not
+just exact-string-matched), with a per-project/per-trade configurable
+tolerance (`boq_tolerances`) and a persisted three-class discrepancy flag
+(`match`/`variance`/`unmatched`) that self-heals on read if a linked
+measurement changes or disappears. Bulk import from an Excel/CSV tender
+BOQ (`app/boq/import_parser.py`) with a dry-run preview + all-or-nothing
+commit. See `docs/takeoff-pipeline.md` for the full takeoff pipeline and
+`docs/boq-reconciliation.md` for BOQ reconciliation's full design and what
+remains deferred.
+
 **Explicitly deferred, with extension points already in place:**
-- BOQ parsing, semantic cross-referencing, and three-class discrepancy
-  flagging (Module B "reconciliation").
-- DXF geometric intelligence: alignment measurement, corridor areas, trench
-  prismoidal volumes, pipe network topology, clustered typology recognition
-  (`backend/app/takeoff/geometry/` defines the extractor registry these will
-  plug into).
+- *Semantic* cross-referencing (pgvector RAG) to find which measurement(s)
+  a BOQ description refers to -- linking is always a manual, explicit
+  action. A trade filter on the unlinked-measurements endpoint (no trade
+  classification exists on `drawing_measurements`). PDF tender BOQs (only
+  `.xlsx`/`.csv` import today). See `docs/boq-reconciliation.md`.
+- Clustered typology recognition (`TypologyClusterExtractor` in
+  `backend/app/takeoff/geometry/stubs.py`) -- the largest of the deferred
+  items, needs its own design pass.
 - Visual traceability UI and non-destructive estimator overrides.
 - Modules C (Procurement & Bid Leveling), D (Executive Cockpit & Pricing),
   and E (Post-Award Contract Management) — Module A's schema already leaves

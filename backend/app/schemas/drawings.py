@@ -59,6 +59,20 @@ class ExtractionJobOut(ORMModel):
     error: str | None
 
 
+class DrawingMeasurementOut(ORMModel):
+    id: UUID
+    drawing_id: UUID
+    sheet_id: UUID
+    capability: str
+    kind: str
+    value: float
+    unit: str
+    confidence: float
+    source_entity_ids: list[str]
+    extractor_metadata: dict | None
+    created_at: datetime
+
+
 class SheetSearchQuery(BaseModel):
     query: str
     top_k: int = 10

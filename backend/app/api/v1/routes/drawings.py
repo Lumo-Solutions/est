@@ -12,6 +12,7 @@ from app.core.context import RequestContext
 from app.core.enums import Role
 from app.core.errors import ValidationAppError
 from app.schemas.drawings import (
+    DrawingMeasurementOut,
     DrawingOut,
     DrawingSheetOut,
     ExtractionJobOut,
@@ -93,6 +94,17 @@ async def set_manual_scale_endpoint(
         session, ctx, drawing_id, sheet_index, data.p1, data.p2, data.known_length_m
     )
     return DrawingSheetOut.model_validate(sheet)
+
+
+@router.get("/drawings/{drawing_id}/measurements", response_model=list[DrawingMeasurementOut])
+async def list_measurements_endpoint(
+    drawing_id: UUID,
+    sheet_id: UUID | None = None,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[DrawingMeasurementOut]:
+    measurements = await takeoff_service.list_measurements(session, drawing_id, sheet_id)
+    return [DrawingMeasurementOut.model_validate(m) for m in measurements]
 
 
 @router.get("/drawings/{drawing_id}/download")

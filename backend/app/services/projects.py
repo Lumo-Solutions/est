@@ -6,11 +6,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
-from app.core.enums import AuditAction
-from app.core.errors import NotFoundError
+from app.core.enums import AuditAction, Role
+from app.core.errors import ForbiddenError, NotFoundError
 from app.models.tenancy import Project, ProjectMember
 from app.schemas.projects import ProjectCreate
 from app.services import audit
+
+# Mirrors app_can_see_project()'s role list (app/db/ddl.py) exactly --
+# these three roles see every project regardless of project_members.
+_PROJECT_VISIBLE_WITHOUT_MEMBERSHIP_ROLES = frozenset(
+    {Role.MANAGING_DIRECTOR.value, Role.BD_DIRECTOR.value, Role.PROCUREMENT_HEAD.value}
+)
 
 
 async def create_project(session: AsyncSession, ctx: RequestContext, data: ProjectCreate) -> Project:
@@ -45,6 +51,33 @@ async def get_project(session: AsyncSession, project_id: UUID) -> Project:
 
 async def list_projects(session: AsyncSession) -> list[Project]:
     return list((await session.execute(select(Project).order_by(Project.created_at.desc()))).scalars().all())
+
+
+async def assert_can_see_project(session: AsyncSession, ctx: RequestContext, project_id: UUID) -> None:
+    """Application-side mirror of app_can_see_project() (app/db/ddl.py),
+    for the narrow case of a *first* project-scoped write with no prior
+    RLS-filtered read to naturally gate it first (e.g. uploading a new
+    drawing -- unlike updating one already fetched via a project_scoped
+    SELECT, whose own RLS policy already filtered out anything the caller
+    can't see, an INSERT's WITH CHECK is the first thing that can fail,
+    and it fails hard rather than silently returning nothing).
+
+    Call this before any such write so an unauthorized caller gets a clean
+    403 immediately -- before any side effect (e.g. streaming a file to
+    S3) rather than letting Postgres's ProgrammingError('row-level
+    security') surface as an unhandled 500 partway through.
+    """
+    if ctx.is_system or (ctx.roles & _PROJECT_VISIBLE_WITHOUT_MEMBERSHIP_ROLES):
+        return
+    if ctx.user_id is not None:
+        result = await session.execute(
+            select(ProjectMember.project_id).where(
+                ProjectMember.project_id == project_id, ProjectMember.user_id == ctx.user_id
+            )
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+    raise ForbiddenError(f"Not a member of project {project_id}")
 
 
 async def add_member(session: AsyncSession, ctx: RequestContext, project_id: UUID, user_id: UUID, role: str | None) -> None:
