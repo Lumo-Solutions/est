@@ -71,6 +71,17 @@ def _skip_if_no_docker() -> None:
 # docker-compose.test.yml, or from a shell that sourced deploy/.env)
 # instead of the one testcontainers just created. See docs/takeoff-pipeline.md's
 # Compose-collision note for the incident that prompted this.
+#
+# NOTE for `make test-integration`'s containerized runner: it sets
+# TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal (see the Makefile),
+# so `host` here will legitimately be "host.docker.internal", not
+# "localhost" -- that's expected and is *not* the dev stack (its hostname
+# is "postgres"/"redis" on the compose network, never that), so it isn't,
+# and shouldn't be, in `_DEV_COMPOSE_HOSTNAMES` below. The port is still
+# testcontainers' own random published one and dbname is still "test"
+# either way, so this guard needed no logic change for that override --
+# only this comment, so the next reader doesn't wonder why an unfamiliar
+# hostname sails through.
 _DEV_POSTGRES_PORT = 5433
 _DEV_DB_NAME = "installtec_core"
 _DEV_COMPOSE_HOSTNAMES = frozenset({"postgres", "redis", "installtec_postgres", "installtec_redis"})

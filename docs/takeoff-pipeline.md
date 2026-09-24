@@ -300,6 +300,25 @@ session, which refuses to mount the Docker socket into a container as a
 containment-escape risk) -- run `make test-integration` to confirm the
 last mile.
 
+**The last mile**: running it for real surfaced exactly the DooD gotcha
+flagged above as unverifiable -- every one of the 50 integration tests
+errored during fixture setup with `ConnectionRefusedError`. Ryuk
+(testcontainers' own reaper container) started fine, since it's reached
+via the Docker socket directly; Postgres/Redis weren't, because
+testcontainers' default "connect to `localhost`" assumption is only true
+when the *caller* is the Docker host itself -- here the caller is the
+pytest container, so "localhost" resolved to the pytest container, not the
+machine actually holding Postgres/Redis's published ports. Fixed with
+`TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal` (tells testcontainers
+which hostname to connect to instead) plus
+`--add-host=host.docker.internal:host-gateway` (makes that hostname
+resolve on native Linux Docker too -- it's a Docker Desktop-only builtin
+otherwise). `tests/conftest.py`'s dev-database fail-fast guard needed no
+logic change for this -- `host.docker.internal` was never in its dev-host
+list, the port is still testcontainers' own random one, and the db name
+is still `"test"` -- just a comment explaining why that unfamiliar
+hostname is expected to sail through.
+
 **Two more real bugs found verifying Phase 3 (BOQ reconciliation) against
 the live stack, both pre-existing, unrelated to BOQ reconciliation
 specifically:**

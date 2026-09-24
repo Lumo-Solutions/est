@@ -59,7 +59,7 @@ async def _seed_measurement(session, project_id: str, value: float, unit: str, s
                 "size_bytes, sha256, status) VALUES (:t, :p, 'x.dxf', 'dxf', 'b', 'k', 1, :sha, 'uploaded') "
                 "RETURNING id"
             ),
-            {"t": str(TENANT), "p": project_id, "sha": ("5" * 68 + sha_suffix)[-68:]},
+            {"t": str(TENANT), "p": project_id, "sha": ("5" * 64 + sha_suffix)[-64:]},
         )
     ).scalar_one()
     sheet_id = (

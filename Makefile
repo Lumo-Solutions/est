@@ -100,11 +100,27 @@ test-unit:
 # MSYS_NO_PATHCONV=1 stops Git Bash from mangling the -v bind-mount paths
 # (see docs/deploy-deltas.md's Windows/Git Bash section for the same issue
 # elsewhere in this repo).
+#
+# TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal + --add-host: since
+# pytest itself runs inside a container (Docker-outside-of-Docker, see
+# above), testcontainers' default "the host to connect to is localhost"
+# assumption is wrong here -- "localhost" from inside the pytest
+# container is the pytest container, not the machine actually holding the
+# sibling Postgres/Redis containers' published ports, so every connection
+# attempt got ConnectionRefusedError even though Ryuk (testcontainers'
+# reaper) started fine (it uses the Docker socket directly, not a
+# published port, so it wasn't affected the same way). The override tells
+# testcontainers which hostname to use instead; --add-host makes that
+# hostname resolve to the real Docker host even on native Linux Docker
+# (host.docker.internal is a Docker Desktop-only builtin otherwise --
+# `host-gateway` is the magic value dockerd resolves it to since 20.10).
 test-integration:
 	$(COMPOSE_TEST) up -d
 	export MSYS_NO_PATHCONV=1; \
 	docker run --rm \
 	  --network $(TEST_PROJECT_NAME)_default \
+	  --add-host=host.docker.internal:host-gateway \
+	  -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal \
 	  -v "$(CURDIR)/backend:/workspace" \
 	  -v "$(CURDIR)/ai-service:/ai-service" \
 	  -v /var/run/docker.sock:/var/run/docker.sock \

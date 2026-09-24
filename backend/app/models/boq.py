@@ -5,7 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import TenantEntity
 from app.db.types import Ltree
@@ -45,11 +45,58 @@ class BoqLineItem(TenantEntity):
     )
 
     # Linked measurements live in BoqLineItemMeasurement (many-to-one,
-    # migration 0013 -- replaced a single linked_measurement_id FK here,
-    # since one BOQ line can aggregate several measurements, e.g. a pipe
-    # run's length summed across several sheets). variance/variance_pct
-    # below are computed from the *sum* of all currently-linked
-    # measurements (each converted into `uom`), never a single one.
+    # migration 0013 -- one BOQ line can aggregate several measurements,
+    # e.g. a pipe run's length summed across several sheets). Reconciliation
+    # *state* (variance/discrepancy_class/...) lives in
+    # BoqLineItemReconciliation (migration 0014), a separate table with its
+    # own, looser (estimator+) write policy -- boq_line_items' own
+    # WRITE_ROLES is lead_estimator+ (structural edits), and reconciling is
+    # normal, frequent estimating work that must not require that role. See
+    # migration 0014's docstring for the RLS bug this split fixes. The
+    # properties below make that split invisible to callers (BoqLineItemOut
+    # still reads item.variance etc. via plain attribute access).
+    reconciliation: Mapped["BoqLineItemReconciliation | None"] = relationship(
+        "BoqLineItemReconciliation", uselist=False, lazy="joined",
+    )
+
+    @property
+    def variance(self) -> float | None:
+        return self.reconciliation.variance if self.reconciliation else None
+
+    @property
+    def variance_pct(self) -> float | None:
+        return self.reconciliation.variance_pct if self.reconciliation else None
+
+    @property
+    def discrepancy_class(self) -> str | None:
+        return self.reconciliation.discrepancy_class if self.reconciliation else None
+
+    @property
+    def reconciliation_note(self) -> str | None:
+        return self.reconciliation.reconciliation_note if self.reconciliation else None
+
+    @property
+    def reconciled_at(self) -> datetime | None:
+        return self.reconciliation.reconciled_at if self.reconciliation else None
+
+
+class BoqLineItemReconciliation(TenantEntity):
+    """One row per boq_line_items row that has ever been reconciled
+    (created lazily on first link/reconcile -- see app/services/boq.py::
+    _apply_reconciliation) -- 1:1, but kept as its own table rather than
+    columns on boq_line_items specifically so its RLS write policy can be
+    estimator+ (operational) while boq_line_items' own stays lead_estimator+
+    (structural). See migration 0014's docstring for the bug this fixes."""
+
+    __tablename__ = "boq_line_item_reconciliation"
+    __table_args__ = (UniqueConstraint("boq_line_item_id", name="uq_boq_line_item_reconciliation_item"),)
+
+    boq_line_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("boq_line_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     variance: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
     variance_pct: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
     discrepancy_class: Mapped[str | None] = mapped_column(String(16), nullable=True)

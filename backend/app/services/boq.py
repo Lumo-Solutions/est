@@ -18,7 +18,7 @@ from app.boq.reconciliation import (
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import NotFoundError, ValidationAppError
-from app.models.boq import BoqLineItem, BoqLineItemMeasurement, BoqTolerance
+from app.models.boq import BoqLineItem, BoqLineItemMeasurement, BoqLineItemReconciliation, BoqTolerance
 from app.models.takeoff import DrawingMeasurement
 from app.schemas.boq import BoqLineItemCreate
 from app.services import audit
@@ -112,13 +112,21 @@ async def _linked_measurements(session: AsyncSession, item_id: UUID) -> list[Dra
     return list(result.scalars().all())
 
 
-async def _apply_reconciliation(session: AsyncSession, item: BoqLineItem) -> None:
+async def _apply_reconciliation(session: AsyncSession, ctx: RequestContext, item: BoqLineItem) -> None:
     """Recomputes and persists variance/discrepancy_class from item's
     *current* set of linked measurements (BoqLineItemMeasurement, summed
     via aggregate_measurement_values) and boq_quantity/uom -- shared by
     add_measurement_link()/remove_measurement_link() (the set changed),
     reconcile_item() (explicit re-run), and _refresh_if_stale() (lazy,
-    on-read recompute)."""
+    on-read recompute).
+
+    Writes to BoqLineItemReconciliation (migration 0014), *not* attributes
+    on `item` directly -- boq_line_items' own RLS write policy is
+    lead_estimator+ (structural edits), but this runs for a plain
+    estimator too (linking a measurement is explicitly estimator+, see
+    _RECONCILE_ROLES); writing straight to boq_line_items used to raise
+    SQLAlchemy's StaleDataError for that role (RLS silently filtered the
+    UPDATE to 0 matched rows). See migration 0014's docstring."""
     measurements = await _linked_measurements(session, item.id)
 
     if not measurements:
@@ -147,11 +155,17 @@ async def _apply_reconciliation(session: AsyncSession, item: BoqLineItem) -> Non
             measurement_unit=measurement_unit,
             config=ReconciliationConfig(tolerance_pct=tolerance_pct),
         )
-    item.variance = result.variance
-    item.variance_pct = result.variance_pct
-    item.discrepancy_class = result.discrepancy_class
-    item.reconciliation_note = result.note
-    item.reconciled_at = datetime.now(UTC)
+
+    row = item.reconciliation
+    if row is None:
+        row = BoqLineItemReconciliation(tenant_id=ctx.tenant_id, boq_line_item_id=item.id, project_id=item.project_id)
+        session.add(row)
+        item.reconciliation = row
+    row.variance = result.variance
+    row.variance_pct = result.variance_pct
+    row.discrepancy_class = result.discrepancy_class
+    row.reconciliation_note = result.note
+    row.reconciled_at = datetime.now(UTC)
 
 
 async def _refresh_if_stale(session: AsyncSession, ctx: RequestContext, item: BoqLineItem) -> BoqLineItem:
@@ -186,7 +200,7 @@ async def _refresh_if_stale(session: AsyncSession, ctx: RequestContext, item: Bo
         return item
 
     previous_class = item.discrepancy_class
-    await _apply_reconciliation(session, item)
+    await _apply_reconciliation(session, ctx, item)
     await session.flush()
 
     if item.discrepancy_class != previous_class:
@@ -271,7 +285,7 @@ async def add_measurement_link(
         # one link behind on every add.
         await session.flush()
 
-    await _apply_reconciliation(session, item)
+    await _apply_reconciliation(session, ctx, item)
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="boq_line_item", entity_id=item.id,
@@ -298,7 +312,7 @@ async def remove_measurement_link(
     await session.delete(link)
     await session.flush()
 
-    await _apply_reconciliation(session, item)
+    await _apply_reconciliation(session, ctx, item)
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="boq_line_item", entity_id=item.id,
@@ -315,7 +329,7 @@ async def list_measurement_links(session: AsyncSession, item_id: UUID) -> list[D
 
 async def reconcile_item(session: AsyncSession, ctx: RequestContext, item_id: UUID) -> BoqLineItem:
     item = await _get_line_item_raw(session, item_id)
-    await _apply_reconciliation(session, item)
+    await _apply_reconciliation(session, ctx, item)
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="boq_line_item", entity_id=item.id,

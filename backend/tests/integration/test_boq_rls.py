@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import text
 
 from app.core.context import RequestContext
-from app.core.errors import ValidationAppError
+from app.core.errors import NotFoundError, ValidationAppError
 from app.db.rls import set_rls_context
 from app.schemas.boq import BoqLineItemCreate
 from app.services import boq as boq_service
@@ -170,8 +170,23 @@ async def test_cannot_link_measurement_from_a_different_project(rls_session):
         )
     ).scalar_one()
 
-    await set_rls_context(rls_session, lead_ctx)
+    # bd_director bypasses project_members entirely (app_can_see_project()
+    # exempts it), so its SELECT of the project-B measurement is NOT
+    # RLS-filtered -- this is the actor that actually exercises
+    # app.services.boq's own project-match check, proving it's a real
+    # app-level guard and not just an artifact of RLS visibility.
+    bd_ctx = _ctx(frozenset({"bd_director"}), user_id=user_id)
+    await set_rls_context(rls_session, bd_ctx)
     with pytest.raises(ValidationAppError):
+        await boq_service.add_measurement_link(rls_session, bd_ctx, item.id, measurement_id)
+
+    # lead_estimator, by contrast, is not a member of project B, so the
+    # RLS-scoped SELECT for the measurement returns zero rows before the
+    # app-level check is ever reached -- a clean 404, not a 422. Both
+    # actors are blocked, but via different layers; this asserts each
+    # layer independently instead of conflating them.
+    await set_rls_context(rls_session, lead_ctx)
+    with pytest.raises(NotFoundError):
         await boq_service.add_measurement_link(rls_session, lead_ctx, item.id, measurement_id)
 
 

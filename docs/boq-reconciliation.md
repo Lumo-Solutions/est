@@ -94,6 +94,17 @@ intentionally stays at `discrepancy_class=None` until an estimator
 actually reconciles it -- a different, meaningful state from "reconciled,
 then went stale" that this never silently collapses into `unmatched`.
 
+That persisted state (`variance`/`variance_pct`/`discrepancy_class`/
+`reconciliation_note`/`reconciled_at`) lives in its own table,
+`boq_line_item_reconciliation` (migration `0014`, one row per
+`boq_line_items` row that has ever been reconciled, created lazily on
+first link), not as columns on `boq_line_items` itself -- see "Real bugs
+found" below for why. `BoqLineItem.variance` and friends are plain Python
+properties reading through `BoqLineItem.reconciliation`
+(`lazy="joined"`), so every existing caller (`BoqLineItemOut`, `list`/`get`
+routes, `_refresh_if_stale()`) keeps reading `item.variance` unchanged;
+the split is invisible outside `app/services/boq.py`.
+
 Recomputing on every read of a previously-reconciled item is a real
 per-request cost (a tolerance lookup + a join query per item) -- fine for
 a single `GET`, and for realistically-sized project BOQs in `list`, but a
@@ -109,12 +120,21 @@ RLS write policies for the structural set:
   import): `lead_estimator`, `procurement_head`, `managing_director` --
   same precedent as trade taxonomy (`trade_nodes`' own write roles), on
   the reasoning that editing the master tender BOQ tree (or importing one
-  wholesale) is more senior than day-to-day reconciliation.
+  wholesale) is more senior than day-to-day reconciliation. This is
+  `boq_line_items`' own RLS `UPDATE`/`DELETE` policy (migration `0011`,
+  unchanged by `0014`).
 - **Reconciliation** (add/remove a measurement link, re-reconcile): the
   same role set as everywhere else in Module B (`estimator` and up) --
   `app/api/v1/routes/boq.py::_RECONCILE_ROLES`, matching `drawings.py`'s
-  `_UPLOAD_ROLES`. This is a normal, frequent estimating task.
-- **Delete**: same as structural edits.
+  `_UPLOAD_ROLES`. This is a normal, frequent estimating task, and it's
+  exactly why persisted reconciliation state has its own table
+  (`boq_line_item_reconciliation`, migration `0014`) with its own,
+  looser `estimator`+ RLS write policy -- see "Real bugs found" below.
+- **Delete**: same as structural edits. `boq_line_item_reconciliation`
+  rows are only ever removed via `ON DELETE CASCADE` from their parent
+  `boq_line_items` row, so its own `DELETE` policy matches the parent's
+  (deleting a reconciled item can't fail with an RLS-via-foreign-key
+  error for whoever is already allowed to delete the parent).
 
 Every mutating operation (create/link/unlink/reconcile/delete/set
 tolerance/import commit, including the *automatic* re-reconciliation
@@ -134,7 +154,17 @@ exist for exactly this, all verified against the live stack:
   from a different project raises, rather than silently succeeding.
 - `app/services/boq.py::add_measurement_link()` explicitly checks
   `measurement.project_id == item.project_id` before linking, raising
-  `ValidationAppError` otherwise.
+  `ValidationAppError` otherwise. `tests/integration/test_boq_rls.py::
+  test_cannot_link_measurement_from_a_different_project` proves this with
+  two different actors on purpose: a `bd_director` (exempt from
+  `project_members`, so its `SELECT` of the cross-project measurement
+  isn't RLS-filtered) actually reaches and trips this check
+  (`ValidationAppError`), while a `lead_estimator` who isn't a member of
+  the other project never gets that far -- its `SELECT` returns zero rows
+  first, so it sees `NotFoundError` (a 404) instead. Both actors end up
+  blocked, but conflating the two into one assertion would only prove RLS
+  visibility, not that the application-level check does anything for a
+  role that can see across projects.
 
 ## 3b(a): many-to-one measurement links
 
@@ -216,3 +246,29 @@ about what would be created:
   the second showed the variance for *one* measurement, not both. Fixed
   with an explicit `await session.flush()` right after adding the link row,
   before `_apply_reconciliation()` reads it back.
+- **Reconciliation writes were RLS-filtered out from under a plain
+  `estimator`.** `_apply_reconciliation()` originally wrote
+  `variance`/`variance_pct`/`discrepancy_class`/... as an `UPDATE` on
+  `boq_line_items` itself. That table's RLS `UPDATE` policy (migration
+  `0011`) requires `lead_estimator`+ in its `USING` clause -- so for a
+  plain `estimator` (correctly allowed to *link* a measurement, per
+  `_RECONCILE_ROLES` above) the row-level security silently filtered the
+  `UPDATE` to zero matched rows, and SQLAlchemy's ORM-level "expected
+  exactly one row updated" check raised `StaleDataError`. Linking worked
+  for `lead_estimator`+ and broke for the exact role tier the feature was
+  built for. Caught by `tests/integration/test_boq_rls.py::
+  test_estimator_can_link_and_reconcile_but_not_create_structure` once
+  `make test-integration` could run end-to-end against a real Postgres --
+  not caught by any earlier live-stack check, because every prior manual
+  verification of linking/reconciling used a `lead_estimator` actor
+  (`estimator`-tier accounts were only ever used to check unrelated
+  read/delete permission boundaries). Fixed by moving the persisted
+  reconciliation columns off `boq_line_items` onto their own table,
+  `boq_line_item_reconciliation` (migration `0014`), with its own RLS
+  `UPDATE`/`INSERT` policy at `estimator`+ -- `boq_line_items`' own
+  structural-edit policy is untouched. The alternative of computing
+  variance/discrepancy on read instead of persisting it (which would also
+  side-step this specific bug, and remove the staleness problem outright)
+  was rejected: it gives up the one thing persisting was for in the first
+  place -- cheap filter/sort on `discrepancy_class` for the SRS's own
+  "4,200+ line" AG Grid.

@@ -49,7 +49,7 @@ async def _seed_project_and_drawing(session, sha256_suffix: str) -> tuple[str, s
             {"t": str(TENANT), "code": f"TRIGGER-TEST-{sha256_suffix}"},
         )
     ).scalar_one()
-    sha256 = ("2" * 68 + sha256_suffix)[-68:]  # unique, fixed-length, valid-looking hex-ish string
+    sha256 = ("2" * 64 + sha256_suffix)[-64:]  # unique, fixed-length (64 chars, matching the drawings.sha256 column)
     drawing_id = (
         await session.execute(
             text(
