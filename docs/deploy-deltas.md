@@ -19,6 +19,61 @@ actually runnable; each is marked inline in the compose file with a
 | Networks | Single `installtec` bridge network added to every service. | SRS §6 relies on Compose's implicit default network; naming it explicitly makes the prod overlay's port-hardening unambiguous. |
 | `backend`, `celery-worker` | New `onnxmodels` named volume mounted at `/models` (`$ONNX_MODEL_DIR`). | The embedding backend (`EMBEDDING_BACKEND=onnx`, the default) had `ONNX_MODEL_DIR=/models` set but no volume behind it at all, so `OnnxEmbedder` could never find a model regardless of how it was provisioned. Not mounted into `celery-worker-vlm` or `celery-beat`, which never call `get_embedder()`. |
 | `init-buckets` | New one-shot service, `amazon/aws-cli` image, profile `tools` (never started by `make up`). Run via `make init-buckets`. | `deploy/seaweedfs/init-buckets.sh` (unchanged) used `$S3_ENDPOINT`, which is `http://seaweedfs:8333` inside the stack -- a hostname the host machine can't resolve at all -- and also needs the `aws` CLI, which most dev machines don't have installed. Running it inside a container already on the `installtec` network fixes both: no host `aws` CLI needed, and `seaweedfs:8333` resolves correctly. |
+| `postgres` port | Published as `5433:5432`, not `5432:5432`. | SRS §6 has Postgres on the host's default 5432, which commonly collides with a locally-installed Postgres or another project's stack. `DATABASE_URL`/`APP_DATABASE_URL`/`MIGRATOR_DATABASE_URL` inside the compose network are unaffected (they use the container port, 5432, via the `postgres` hostname) -- this only changes how you reach it from the host, e.g. `psql -h localhost -p 5433`. |
+| `frontend` | Gated behind `profiles: ["frontend"]`; not started by `make up`/`docker compose up` until `frontend/` exists (Phase 5). Enable explicitly with `docker compose --profile frontend up -d`. | The SRS §6 template's `frontend` service (`build: ../frontend`) fails outright today -- there is no `frontend/` directory yet -- which would otherwise break every `make up`. |
+
+### Local development on Windows (Git Bash)
+
+- **Run `make` targets from Git Bash, not PowerShell or cmd.exe.** The
+  Makefile and every script under `deploy/` are POSIX shell (`set -a; . ...`,
+  `bash foo.sh`); PowerShell doesn't have `.` source, `set -a`, or the same
+  quoting rules and will fail or silently do the wrong thing.
+- **Scripts that `docker exec`/`docker run` with an absolute container path**
+  (`/opt/keycloak/bin/kcadm.sh`, `/var/run/docker.sock`, etc.) must set
+  `export MSYS_NO_PATHCONV=1` first. Git Bash's MSYS layer rewrites
+  leading-`/` arguments into Windows paths (e.g. `/opt/...` →
+  `C:/Program Files/Git/opt/...`) before they ever reach `docker`, which
+  breaks the call on the container side. `deploy/keycloak/bootstrap.sh` and
+  `deploy/keycloak/dev-token.sh` already export it themselves; if you invoke
+  `docker exec`/`docker run` with an absolute path directly at the Git Bash
+  prompt (not through one of those scripts), export it in your shell first,
+  e.g. `export MSYS_NO_PATHCONV=1 && docker exec ... /opt/keycloak/bin/kcadm.sh ...`.
+- This is a Windows/Git Bash-only concern; it's a no-op on Linux/macOS.
+
+### Getting a bearer token for local API testing (dev-token.sh)
+
+**Dev only -- never run against a shared or production Keycloak.**
+`deploy/keycloak/dev-token.sh` (via `make dev-token`) temporarily enables
+the password grant on `installtec-backend`, clears a seeded demo user's
+required actions (TOTP enrolment, temp password) and gives it a permanent
+password, then requests and prints a real access token to `.dev-token`
+(gitignored). This exists because the interactive Authorization Code login
+form doesn't work over plain HTTP locally (see the "Cookie not found"
+section of `docs/keycloak-setup.md`) -- it's the fastest way to get a valid
+token to `curl` the API with:
+
+```bash
+make dev-token   # defaults to estimator1 / Estimator1Pass!
+curl -s -H "Authorization: Bearer $(cat .dev-token)" http://localhost:8001/api/v1/auth/me
+```
+
+Pass a different seeded username/password directly (`bash
+deploy/keycloak/dev-token.sh procurement_head1 ...`) to test other roles;
+see `bootstrap.sh` for the full list of seeded demo users.
+
+### Keycloak `sub`/`acr` claim bug (tokens rejected with no `sub`)
+
+A realm import that defines its own `clientScopes` (ours does, via
+`installtec-claims`) does **not** get Keycloak's built-in `basic`/`acr`
+client scopes for free -- those are what normally emit the `sub` and `acr`
+claims. Without them, every access token Keycloak issued was missing `sub`
+entirely, and `TokenValidator.validate()` (`backend/app/security/jwt.py`,
+`options={"require": [..., "sub"]}`) hard-rejected every single token. Fixed
+two ways so both a fresh import and an existing realm pick it up:
+`realm-installtec.json` now defines `sub`/`acr` protocol mappers directly on
+`installtec-claims`, and `bootstrap.sh` idempotently adds them via `kcadm.sh`
+if they're missing (covers a realm that was imported before this fix). See
+`docs/keycloak-setup.md` for the token-validation side of this.
 
 ### Populating the ONNX embedding model volume
 

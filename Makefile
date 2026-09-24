@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak init-buckets test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 COMPOSE_TEST=docker compose -f deploy/docker-compose.test.yml --env-file deploy/.env
@@ -23,6 +23,13 @@ seed:
 
 bootstrap-keycloak:
 	set -a; . deploy/.env; set +a; bash deploy/keycloak/bootstrap.sh
+
+# DEV ONLY -- prints a bearer token for a seeded demo user (default
+# estimator1) into .dev-token, e.g. `make dev-token`, or
+# `bash deploy/keycloak/dev-token.sh <user> <pass>` directly for a
+# different seeded user/role. See that script's header comment.
+dev-token:
+	set -a; . deploy/.env; set +a; bash deploy/keycloak/dev-token.sh
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve
