@@ -137,7 +137,9 @@ async def resolve_principal_with_refresh(
     expiry. Raises TokenValidationError if the session cannot be revived."""
     if data.access_expires_at - time.time() < REFRESH_SKEW_S:
         if data.refresh_expires_at < time.time():
-            raise TokenValidationError("Refresh token expired; re-login required")
+            raise TokenValidationError(
+                "Refresh token expired; re-login required", reason="refresh_token_expired"
+            )
         token_response = await oidc.refresh(data.refresh_token)
         new_data = await tokens_to_session_data(token_response)
         new_data.csrf_token = data.csrf_token

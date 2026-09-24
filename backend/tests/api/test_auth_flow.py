@@ -9,6 +9,7 @@ via the authed_client override.
 from __future__ import annotations
 
 import pytest
+import structlog.testing
 
 pytestmark = pytest.mark.asyncio
 
@@ -44,6 +45,31 @@ async def test_auth_login_is_public_and_redirects(client):
 async def test_malformed_bearer_token_returns_401(client):
     resp = await client.get("/api/v1/vendors", headers={"Authorization": "Bearer not-a-real-jwt"})
     assert resp.status_code == 401
+
+
+async def test_malformed_bearer_token_logs_rejection_without_token_value(client):
+    """Regression test for the silently-swallowed TokenValidationError in
+    AuthContextMiddleware._resolve_context, which previously hid a
+    missing-`sub`-claim bug entirely. The rejection reason must be logged,
+    but never the raw token or any claim values."""
+    bad_token = "not-a-real-jwt"
+    with structlog.testing.capture_logs() as captured:
+        resp = await client.get(
+            "/api/v1/vendors", headers={"Authorization": f"Bearer {bad_token}"}
+        )
+
+    assert resp.status_code == 401
+
+    rejection_events = [e for e in captured if e.get("event") == "auth.bearer_token_rejected"]
+    assert len(rejection_events) == 1
+    event = rejection_events[0]
+    assert event["log_level"] == "warning"
+    assert "reason" in event
+    assert "path" in event
+    assert event["path"] == "/api/v1/vendors"
+
+    serialized = repr(captured)
+    assert bad_token not in serialized
 
 
 async def test_openapi_schema_is_generated(client):

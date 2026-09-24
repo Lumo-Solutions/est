@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import structlog
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
@@ -11,6 +12,8 @@ from app.security.jwt import TokenValidationError, TokenValidator
 from app.security.oidc import OidcClient, resolve_principal_with_refresh
 from app.security.public_paths import PUBLIC_PREFIXES
 from app.security.sessions import SessionStore
+
+logger = structlog.get_logger(__name__)
 
 
 class AuthContextMiddleware(BaseHTTPMiddleware):
@@ -53,7 +56,13 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
             token = auth_header[7:]
             try:
                 principal = self._validator.validate(token)
-            except TokenValidationError:
+            except TokenValidationError as exc:
+                logger.warning(
+                    "auth.bearer_token_rejected",
+                    reason=exc.reason,
+                    request_id=request_id,
+                    path=request.url.path,
+                )
                 return None
             return RequestContext(
                 tenant_id=principal.tenant_id,
@@ -74,7 +83,13 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
             return None
         try:
             principal, _ = await resolve_principal_with_refresh(self._oidc, self._store, session_id, data)
-        except TokenValidationError:
+        except TokenValidationError as exc:
+            logger.warning(
+                "auth.session_rejected",
+                reason=exc.reason,
+                request_id=request_id,
+                path=request.url.path,
+            )
             await self._store.revoke(session_id)
             return None
         return RequestContext(

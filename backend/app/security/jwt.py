@@ -13,7 +13,16 @@ ALLOWED_ALGORITHMS = ["RS256"]  # hard-coded allowlist -- never read `alg` from 
 
 
 class TokenValidationError(Exception):
-    pass
+    """Raised whenever a bearer token fails validation.
+
+    `reason` is a short, fixed category safe to log (never a claim value or
+    the token itself); the exception message may embed claim values for
+    local debugging via `raise ... from exc` and must not be logged as-is.
+    """
+
+    def __init__(self, message: str, *, reason: str = "invalid_token") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +65,9 @@ class TokenValidator:
             # not just PyJWKClientError -- an earlier version only caught
             # the latter, so a bad Authorization header crashed with a
             # bare 500 instead of a clean 401.
-            raise TokenValidationError(f"Unable to resolve signing key: {exc}") from exc
+            raise TokenValidationError(
+                f"Unable to resolve signing key: {exc}", reason="signing_key_unresolved"
+            ) from exc
 
     def validate(self, token: str) -> Principal:
         signing_key = self._signing_key(token)
@@ -71,24 +82,29 @@ class TokenValidator:
                 options={"require": ["exp", "iat", "iss", "aud", "sub"]},
             )
         except jwt.ExpiredSignatureError as exc:
-            raise TokenValidationError("Token expired") from exc
+            raise TokenValidationError("Token expired", reason="token_expired") from exc
         except jwt.InvalidTokenError as exc:
-            raise TokenValidationError(f"Invalid token: {exc}") from exc
+            raise TokenValidationError(f"Invalid token: {exc}", reason="invalid_token") from exc
 
         azp = claims.get("azp")
         allowed_clients = {self._settings.keycloak_client_id, "installtec-frontend"}
         if azp is not None and azp not in allowed_clients:
-            raise TokenValidationError(f"Unexpected authorized party: {azp}")
+            raise TokenValidationError(
+                f"Unexpected authorized party: {azp}", reason="unexpected_azp"
+            )
 
         tenant_id_raw = claims.get("tenant_id")
         if not tenant_id_raw:
             raise TokenValidationError(
-                "Token has no tenant_id claim -- user is not provisioned into a tenant group"
+                "Token has no tenant_id claim -- user is not provisioned into a tenant group",
+                reason="missing_tenant_id",
             )
         try:
             tenant_id = UUID(str(tenant_id_raw))
         except ValueError as exc:
-            raise TokenValidationError(f"tenant_id claim is not a UUID: {tenant_id_raw}") from exc
+            raise TokenValidationError(
+                f"tenant_id claim is not a UUID: {tenant_id_raw}", reason="invalid_tenant_id"
+            ) from exc
 
         realm_access = claims.get("realm_access") or {}
         roles = map_realm_roles(realm_access.get("roles"))
