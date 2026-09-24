@@ -95,6 +95,27 @@ services:
     restart: unless-stopped
     networks: [installtec]
 
+  # --- addition: one-shot bucket creation, run via `make init-buckets` after
+  # `make up`. Runs deploy/seaweedfs/init-buckets.sh inside a container on the
+  # installtec network (so `seaweedfs:8333` resolves) instead of on the host,
+  # which needs the `aws` CLI installed and can't resolve that hostname at
+  # all -- see docs/deploy-deltas.md. Gated behind the "tools" profile so
+  # `make up`/`docker compose up` never starts it on its own. ---
+  init-buckets:
+    image: amazon/aws-cli:2.37.1
+    container_name: installtec_init_buckets
+    entrypoint: ["bash", "/init-buckets.sh"]
+    volumes:
+      - ./seaweedfs/init-buckets.sh:/init-buckets.sh:ro
+    environment:
+      - S3_ENDPOINT=http://seaweedfs:8333
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-installtec}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET_DRAWINGS=${S3_BUCKET_DRAWINGS:-installtec-drawings}
+      - S3_REGION=${S3_REGION:-us-east-1}
+    profiles: ["tools"]
+    networks: [installtec]
+
   # --- addition: real vLLM + GPU, SRS §6 verbatim. Disabled by default (profile "gpu").
   # Enable with `docker compose --profile gpu up vllm-gpu` once a GPU host is provisioned,
   # and point VLLM_API_BASE at http://vllm-gpu:8000/v1 (see docs/deploy-deltas.md). ---
