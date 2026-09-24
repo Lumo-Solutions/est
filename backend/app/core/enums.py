@@ -24,6 +24,7 @@ class AuditAction(StrEnum):
     MERGE = "merge"
     IMPORT = "import"
     DOWNLOAD = "download"
+    SEND = "send"
 
 
 class VendorStatus(StrEnum):
@@ -159,6 +160,24 @@ class ExtractionJobStatus(StrEnum):
     FAILED = "failed"
     RETRYING = "retrying"
     SKIPPED = "skipped"
+
+
+class ProcurementPackageStatus(StrEnum):
+    DRAFT = "draft"
+    SENT = "sent"
+    CLOSED = "closed"
+
+
+class RfqStatus(StrEnum):
+    DRAFT = "draft"
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+    # Not produced by Module C1 (outbound dispatch only) -- reserved so C2
+    # (inbound quotation ingestion, bid leveling) needs no further schema
+    # change to record a vendor reply or an unanswered/lapsed RFQ.
+    RESPONDED = "responded"
+    EXPIRED = "expired"
 
 
 WRITE_ROLES_MODULE_A = {

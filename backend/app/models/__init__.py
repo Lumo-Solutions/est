@@ -7,8 +7,10 @@ migrations/env.py both do)."""
 from app.models import (  # noqa: F401
     approvals,
     audit,
+    boq,
     costlib,
     prequal,
+    procurement,
     takeoff,
     taxonomy,
     tenancy,
@@ -18,8 +20,10 @@ from app.models import (  # noqa: F401
 __all__ = [
     "approvals",
     "audit",
+    "boq",
     "costlib",
     "prequal",
+    "procurement",
     "takeoff",
     "taxonomy",
     "tenancy",

@@ -1,0 +1,40 @@
+{# Content boundary (see docs/procurement-rfq.md and
+   tests/unit/test_procurement_content_boundary.py): this template's context
+   must never carry a rate/cost/budget field or any vendor's name other than
+   the one being addressed. Autoescape is on (app/procurement/rendering.py
+   uses select_autoescape) so item descriptions/package names can't inject
+   markup. A Jinja comment, not an HTML one, deliberately -- an HTML comment
+   would still be part of the rendered output the vendor receives. #}
+<html>
+  <body style="font-family: Arial, sans-serif; font-size: 14px; color: #1a1a1a;">
+    <p>Dear {{ vendor_name }},</p>
+    <p>
+      Please find below our Request for Quotation <strong>{{ rfq_ref }}</strong>
+      for package <strong>{{ package_name }}</strong>.
+      {% if due_at %}Kindly submit your priced offer by <strong>{{ due_at }}</strong>.{% endif %}
+    </p>
+    <p>A pricing sheet (.xlsx) is attached -- please complete the Rate and Remarks columns and return it as-is.</p>
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+      <thead>
+        <tr style="background-color: #e0e0e0;">
+          <th>Item No</th>
+          <th>Description</th>
+          <th>Unit</th>
+          <th>Quantity</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>{{ item.item_no }}</td>
+          <td>{{ item.description }}</td>
+          <td>{{ item.uom or "" }}</td>
+          <td>{{ item.quantity if item.quantity is not none else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p>Please reply to this email with your quotation, quoting reference {{ rfq_ref }}.</p>
+    <p>Regards,<br>{{ sender_name }}</p>
+  </body>
+</html>

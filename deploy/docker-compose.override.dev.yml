@@ -18,6 +18,10 @@ services:
     volumes:
       - ../backend/app:/app/app:ro
 
+  celery-worker-email:
+    volumes:
+      - ../backend/app:/app/app:ro
+
   celery-beat:
     volumes:
       - ../backend/app:/app/app:ro

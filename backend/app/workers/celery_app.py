@@ -11,7 +11,7 @@ celery_app = Celery(
     "installtec",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.tasks.takeoff", "app.workers.tasks.maintenance"],
+    include=["app.workers.tasks.takeoff", "app.workers.tasks.maintenance", "app.workers.tasks.procurement"],
 )
 
 celery_app.conf.update(
@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "ingest"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
+        "app.workers.tasks.procurement.*": {"queue": "email"},
     },
     beat_schedule={
         "scan-certificate-expiry": {

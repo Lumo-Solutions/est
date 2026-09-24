@@ -78,6 +78,27 @@ class Settings(BaseSettings):
     takeoff_persist_geometry: bool = Field(default=False, alias="TAKEOFF_PERSIST_GEOMETRY")
     max_upload_size_bytes: int = Field(default=50 * 1024 * 1024, alias="MAX_UPLOAD_SIZE_BYTES")
 
+    # --- procurement (Module C1: RFQ generation & dispatch) ---
+    s3_bucket_procurement: str = Field(default="installtec-procurement", alias="S3_BUCKET_PROCUREMENT")
+    smtp_host: str = Field(default="localhost", alias="SMTP_HOST")
+    smtp_port: int = Field(default=1025, alias="SMTP_PORT")
+    smtp_user: str = Field(default="", alias="SMTP_USER")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(default=False, alias="SMTP_USE_TLS")
+    smtp_from_address: str = Field(default="procurement@installtec.local", alias="SMTP_FROM_ADDRESS")
+    # Reply-To uses plus-addressing (`{local}+{rfq_token}@{domain}`) so a
+    # reply lands in one shared mailbox that C2's IMAP poller can match back
+    # to the originating Rfq row deterministically, without depending on
+    # In-Reply-To/References survivng every vendor's mail client/forward.
+    email_reply_to_local_part: str = Field(default="rfq", alias="EMAIL_REPLY_TO_LOCAL_PART")
+    email_reply_to_domain: str = Field(default="installtec.local", alias="EMAIL_REPLY_TO_DOMAIN")
+    # Safety net (not just a Mailpit default): whenever app_env != "production",
+    # every outbound RFQ email is sent to this single address instead of the
+    # vendor's real one, regardless of what SMTP_HOST points at -- see
+    # app/procurement/mailer.py::resolve_recipient. Required (fails closed)
+    # in every non-production environment; ignored in production.
+    email_redirect_all_to: str = Field(default="", alias="EMAIL_REDIRECT_ALL_TO")
+
     @field_validator("vllm_api_base")
     @classmethod
     def _assert_vllm_is_private(cls, v: str) -> str:
