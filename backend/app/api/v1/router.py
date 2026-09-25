@@ -12,6 +12,7 @@ from app.api.v1.routes import (
     prequal,
     procurement,
     projects,
+    quotation_ingestion,
     taxonomy,
     vendors,
 )
@@ -28,3 +29,4 @@ api_router.include_router(projects.router)
 api_router.include_router(drawings.router)
 api_router.include_router(boq.router)
 api_router.include_router(procurement.router)
+api_router.include_router(quotation_ingestion.router)
