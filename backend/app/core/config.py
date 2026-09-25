@@ -99,6 +99,35 @@ class Settings(BaseSettings):
     # in every non-production environment; ignored in production.
     email_redirect_all_to: str = Field(default="", alias="EMAIL_REDIRECT_ALL_TO")
 
+    # --- procurement (Module C2: inbound quotation ingestion) ---
+    # IMAP mailbox polled for vendor replies (see
+    # app/workers/tasks/quotation_ingestion.py::poll_inbound_mailbox). The
+    # tenant a message belongs to is identified from the plus-addressed
+    # recipient embedded in the message's own To: header
+    # (app/procurement/inbound_address.py), not from which literal mailbox
+    # it landed in -- this one shared mailbox receives replies for every
+    # tenant, mirroring a real provider (Gmail/Office365/Postfix with
+    # recipient_delimiter=+) that folds `local+ext@domain` into `local@domain`
+    # before final delivery.
+    imap_host: str = Field(default="localhost", alias="IMAP_HOST")
+    imap_port: int = Field(default=993, alias="IMAP_PORT")
+    imap_use_ssl: bool = Field(default=True, alias="IMAP_USE_SSL")
+    imap_user: str = Field(default="", alias="IMAP_USER")
+    imap_password: str = Field(default="", alias="IMAP_PASSWORD")
+    imap_mailbox: str = Field(default="INBOX", alias="IMAP_MAILBOX")
+    # Safety net symmetric to email_redirect_all_to/resolve_recipient, but for
+    # the inbound direction: whenever app_env != "production", IMAP_HOST must
+    # equal this value or the poller refuses to start (see
+    # app/workers/tasks/quotation_ingestion.py::_assert_dev_imap_host_is_safe).
+    # Better to refuse to poll than risk a dev/test worker draining a real
+    # mailbox. Default points at the GreenMail dev/test IMAP server (Mailpit
+    # has no IMAP server -- verified; see docs/procurement-quotation-ingestion.md).
+    imap_dev_allowed_host: str = Field(default="greenmail", alias="IMAP_DEV_ALLOWED_HOST")
+    quotation_max_attachment_size_bytes: int = Field(
+        default=15 * 1024 * 1024, alias="QUOTATION_MAX_ATTACHMENT_SIZE_BYTES"
+    )
+    quotation_max_pdf_pages: int = Field(default=60, alias="QUOTATION_MAX_PDF_PAGES")
+
     @field_validator("vllm_api_base")
     @classmethod
     def _assert_vllm_is_private(cls, v: str) -> str:
