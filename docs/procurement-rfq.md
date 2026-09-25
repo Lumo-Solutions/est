@@ -70,7 +70,10 @@ queue so an SMTP outage never backs up drawing ingestion). The task itself:
 4. On success: stores `subject`/`body_html`/`attachment_object_key`/
    `attachment_sha256`/`message_id`/`sent_at` on the `Rfq` row -- the durable
    record of exactly what the vendor received -- uploads the `.xlsx` to
-   `S3_BUCKET_PROCUREMENT`, and records an `AuditAction.SEND` event.
+   `S3_BUCKET_PROCUREMENT`, and records an `AuditAction.SEND` event. In the
+   dev stack, that bucket needs a SeaweedFS IAM grant, not just to exist --
+   see `docs/deploy-deltas.md`'s `seaweedfs` row and
+   `deploy/seaweedfs/check-identity-grants.sh`.
 5. On failure (SMTP error, misconfiguration, no contactable email): sets
    `status=failed` and `dispatch_error`, and records `AuditAction.SEND` with
    `result=failed`. `attachment_object_key`/`attachment_sha256` stay `NULL`

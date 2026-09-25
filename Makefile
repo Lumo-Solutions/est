@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets render-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -18,14 +18,38 @@ COMPOSE_TEST=docker compose -p $(TEST_PROJECT_NAME) -f deploy/docker-compose.tes
 
 # Renders deploy/seaweedfs/s3-identities.json from its .template (envsubst
 # against deploy/.env) so S3_SECRET_KEY never needs manually copying into a
-# second file -- the rendered file is gitignored; only the template is
-# tracked. Re-run any time S3_SECRET_KEY changes in deploy/.env.
+# second file, and every S3_BUCKET_* setting gets its IAM grant from the
+# same source of truth instead of a hard-coded bucket name in the template
+# -- see deploy/seaweedfs/s3-identities.json.template and
+# check-identity-grants.sh for the bug this fixed. The rendered file is
+# gitignored; only the template is tracked. Re-run any time S3_SECRET_KEY
+# or an S3_BUCKET_* value changes in deploy/.env.
+#
+# SeaweedFS only reads this file at container start -- editing it on disk
+# has no effect on an already-running seaweedfs until it restarts, which
+# `docker compose up -d` alone will NOT do for a bind-mounted file with no
+# other config change (silent AccessDenied trap otherwise). This target
+# restarts it itself whenever the container is already up.
 render-s3-identities:
 	@test -f deploy/.env || { echo "deploy/.env not found -- run: cp deploy/.env.example deploy/.env" >&2; exit 1; }
-	set -a; . deploy/.env; set +a; \
-	envsubst '$$S3_ACCESS_KEY $$S3_SECRET_KEY' \
+	set -a; \
+	. deploy/.env; \
+	: "$${S3_BUCKET_DRAWINGS:=installtec-drawings}"; \
+	: "$${S3_BUCKET_PROCUREMENT:=installtec-procurement}"; \
+	set +a; \
+	envsubst '$$S3_ACCESS_KEY $$S3_SECRET_KEY $$S3_BUCKET_DRAWINGS $$S3_BUCKET_PROCUREMENT' \
 	  < deploy/seaweedfs/s3-identities.json.template \
 	  > deploy/seaweedfs/s3-identities.json
+	bash deploy/seaweedfs/check-identity-grants.sh deploy/.env deploy/seaweedfs/s3-identities.json
+	@if [ -n "$$($(COMPOSE) ps -q seaweedfs 2>/dev/null)" ]; then \
+	  echo "s3-identities.json (re-)rendered -- restarting seaweedfs so it picks up the new grants"; \
+	  $(COMPOSE) restart seaweedfs; \
+	fi
+
+# Standalone version of the check embedded in render-s3-identities, for CI
+# or verifying an already-rendered file without re-rendering/restarting.
+check-s3-identities:
+	bash deploy/seaweedfs/check-identity-grants.sh deploy/.env deploy/seaweedfs/s3-identities.json
 
 up: render-s3-identities
 	$(COMPOSE) up -d --build

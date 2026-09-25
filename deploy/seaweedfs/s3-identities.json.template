@@ -9,11 +9,16 @@
         }
       ],
       "actions": [
-        "Read:installtec-drawings",
-        "Write:installtec-drawings",
-        "List:installtec-drawings",
-        "Tagging:installtec-drawings",
-        "Admin:installtec-drawings"
+        "Read:${S3_BUCKET_DRAWINGS}",
+        "Write:${S3_BUCKET_DRAWINGS}",
+        "List:${S3_BUCKET_DRAWINGS}",
+        "Tagging:${S3_BUCKET_DRAWINGS}",
+        "Admin:${S3_BUCKET_DRAWINGS}",
+        "Read:${S3_BUCKET_PROCUREMENT}",
+        "Write:${S3_BUCKET_PROCUREMENT}",
+        "List:${S3_BUCKET_PROCUREMENT}",
+        "Tagging:${S3_BUCKET_PROCUREMENT}",
+        "Admin:${S3_BUCKET_PROCUREMENT}"
       ]
     }
   ]
