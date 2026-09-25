@@ -101,7 +101,7 @@ prompt's own injection-warning assertion
 (`ai-service/tests/test_prompt_contract.py::test_quotation_extraction_warns_against_prompt_injection_from_document_content`),
 both passing in the test runs above.
 
-## Commit log
+## Commit log (as of the first round, above)
 
 ```
 a484803 docs: Module C2 inbound quotation ingestion
@@ -119,4 +119,133 @@ f7dd7df feat(procurement): Module C2 deterministic pricing-sheet parsing
 217bdfa feat(procurement): Module C1 - RFQ packages, vendor matching, and email dispatch
 319c6fd fix(boq): move reconciliation state off boq_line_items, fix test bugs
 35b5ead feat(takeoff): DXF geometry extraction, measurement persistence, and BOQ reconciliation
+```
+
+---
+
+# Round 2: versioning/submission-grouping fix
+
+Review feedback: versioning let an empty PDF extraction (scenario e, zero
+line items) become `is_current` over an already-accepted deterministic
+quote (scenario a). Fixed per the review's four points:
+
+1. A quotation with zero extracted line items (`NEEDS_REVIEW` -- the
+   pricing sheet's identity check failed -- or the new `EXTRACTION_EMPTY`
+   -- extraction found nothing) is flagged and **never** becomes
+   `is_current` automatically, even as the very first version.
+2. Attachments from the same inbound email now form **one submission** (one
+   `Quotation`), not one per attachment: `QuotationAttachment.quotation_id`
+   links every attachment on the email back to it, and `is_primary` marks
+   which one was actually extracted from (our pricing sheet if present,
+   else the first accepted attachment) -- everything else is a supporting
+   document, never separately extracted as a competing quote (migration
+   0017).
+3. A new version now only replaces an already-current version automatically
+   when the current one has **no accepted line item**. Otherwise it's
+   recorded but left non-current, and only a `procurement_head`+ reviewer's
+   explicit `POST /quotations/{id}/promote` (audited) makes it current --
+   `app/services/quotation_ingestion.py::promote_quotation_version`.
+4. Confirmed `get_bid_leveling_matrix` already filtered by `status=accepted`
+   line items only, with no `is_current` condition at all -- added a test
+   proving it: accept v1's price, receive an unaccepted v2, the matrix still
+   shows v1's price until v2 is separately accepted.
+
+## Two more bugs found while re-verifying (both fixed, both covered by tests
+or documented below)
+
+1. **Version-number collision when the first version is empty**:
+   `version_no` was computed as `existing_current.version_no + 1`, but an
+   empty first version never becomes `existing_current` (per fix #1 above),
+   so a second, real version also computed `version_no = 1` and collided on
+   `uq_quotations_rfq_vendor_version`. Fixed: `version_no` now comes from
+   `MAX(version_no)` across *all* versions for the (rfq, vendor), not just
+   the current one.
+2. **Real concurrency race, caught live by `make dev-simulate-quotes`, not
+   by any test**: scenarios (b) and (e) are both PDFs from the same vendor,
+   both routed to `extract_quotation` on the `vlm` queue's two-fork worker,
+   and ran genuinely in parallel. Both independently computed
+   `MAX(version_no)` before either had committed, both got `2`, and the
+   second to commit hit the same unique-constraint violation. Fixed with
+   `pg_advisory_xact_lock(hashtext('{rfq_id}:{vendor_id}'))` at the top of
+   `_create_quotation_version`, serializing concurrent version-creation for
+   the same (rfq, vendor) pair; the lock releases automatically at
+   transaction end. Not covered by an automated test (reproducing real
+   worker-process concurrency deterministically in a single test session
+   would need a second live connection/session, out of proportion to this
+   fix) -- verified by rerunning the simulation clean afterward with both
+   PDFs processed concurrently with no error.
+
+## Raw output, this round
+
+```
+make down / make up
+ (all 13 services healthy, including the rebuilt images)
+
+make migrate
+INFO  [alembic.runtime.migration] Running upgrade 0016 -> 0017, Module C2 fix: one quotation per inbound email, not per attachment
+
+make init-buckets
+Bucket 'installtec-drawings' already exists.
+Bucket 'installtec-procurement' already exists.
+
+make test-unit
+251 passed in 5.21s
+
+make test-integration
+87 passed, 3 warnings in 24.75s
+
+make dev-simulate-quotes
+sent a_pricing_sheet: From='quotes@c2sim-vendor.example' To='rfq+demo.OlauBkgltSsCzxf9OQxNFjtlSbk86bk0zF-Jtj3NnK4@installtec.local'
+sent b_pdf_quote: From='quotes@c2sim-vendor.example' To='rfq+demo.OlauBkgltSsCzxf9OQxNFjtlSbk86bk0zF-Jtj3NnK4@installtec.local'
+sent c_non_matching_sender: From='someone-else@unrelated-domain.example' To='rfq+demo.OlauBkgltSsCzxf9OQxNFjtlSbk86bk0zF-Jtj3NnK4@installtec.local'
+sent d_no_reply_token: From='quotes@c2sim-vendor.example' To='rfq@installtec.local'
+sent e_prompt_injection: From='quotes@c2sim-vendor.example' To='rfq+demo.OlauBkgltSsCzxf9OQxNFjtlSbk86bk0zF-Jtj3NnK4@installtec.local'
+sent f_sheet_plus_pdf_one_submission: From='quotes@c2sim-vendor.example' To='rfq+demo.OlauBkgltSsCzxf9OQxNFjtlSbk86bk0zF-Jtj3NnK4@installtec.local'
+enqueued poll_inbound_mailbox for RFQ RFQ-2026-0001 (tenant slug 'demo')
+```
+
+(The first `make dev-simulate-quotes` run after the submission-grouping fix,
+before the concurrency fix above, hit the version-number collision live --
+`extract_quotation`'s vLLM worker log showed the exact
+`uq_quotations_rfq_vendor_version` `IntegrityError` for (b)/(e). The output
+above is the clean rerun after both fixes.)
+
+## (a)-(f) results, this round
+
+Same verification method as round 1 (`make dev-token` as `procurement1`,
+checked against the API and the database).
+
+| Scenario | Expected | Actual |
+|---|---|---|
+| **(a)** pricing sheet | v1, deterministic, one line item | `version_no=1`, `extraction_method=deterministic_xlsx`, `status=proposed`, `currency=AED`, `vat_inclusive=true`. One line item `unit_price=45.50`, `quantity=250.0`, `confidence=1.000`. **`is_current=false`** after (f) arrives (see below) -- correctly superseded, since v1 was never accepted. |
+| **(b)** PDF quote | v2, empty extraction, never current | `version_no=2`, `extraction_method=vlm_pdf`, **`status=extraction_empty`**, `currency=null`, `vat_inclusive=null`, **`is_current=false`** (mock-vllm returns zero line items -- correctly flagged and never promoted automatically, per fix #1). |
+| **(c)** non-matching sender | unchanged from round 1 | Same as round 1: flagged, held, no Quotation. |
+| **(d)** no reply token | unchanged from round 1 | Same as round 1: quarantined, invisible to `procurement_head`. |
+| **(e)** prompt-injection PDF | v3, empty extraction, never current | `version_no=3`, `extraction_method=vlm_pdf`, **`status=extraction_empty`**, **`is_current=false`**. Zero line items, zero exclusion flags -- same mock-vllm caveat as round 1. |
+| **(f)** pricing sheet + PDF in one email | v4, **one submission**, sheet primary, PDF supporting | `version_no=4`, `extraction_method=deterministic_xlsx` (the pricing sheet was picked as primary despite being attached second), `status=proposed`, one line item (`unit_price=45.50`). `GET /quotations/{id}/attachments` returns **both** attachments linked to this one quotation: the `.xlsx` with `is_primary=true`, the `.pdf` cover letter with `is_primary=false` -- confirmed via the real API. **`is_current=true`** -- correctly auto-promoted, since the previous current (v1) had no accepted line item yet (fix #3's "safe" case).|
+
+Also exercised **`POST /quotations/{id}/promote`** live through the real
+API: promoted v1 (not current) to current, confirmed v4 flipped off,
+confirmed a second promote of the same (already-current) quotation returns
+409 Conflict (`ConflictError`), then promoted v4 back to restore the
+natural end state before writing this report.
+
+## Commit log, final (this round's commits included)
+
+```
+8a73742 feat(cli): simulate-quotes scenario (f) - sheet + PDF, one submission
+c3770b0 feat(procurement): explicit version promotion, supporting-doc listing
+4e2ec92 fix(procurement): safe auto-promotion rules, one-submission grouping
+93448d4 fix(procurement): schema for one submission per inbound email
+3edf502 docs: Module C2 end-to-end verification report
+23e69ad feat(procurement): record a second audit event in the target tenant
+a484803 docs: Module C2 inbound quotation ingestion
+8f22fec feat(cli): dev-simulate-quotes command for Module C2
+f847824 feat(deploy): GreenMail dev IMAP source for Module C2
+53ff294 feat(procurement): Module C2 review/accept workflow and bid leveling
+65668ee fix(workers): stop reusing pooled DB connections across event loops
+2eeea36 feat(procurement): Module C2 IMAP poller and ingestion orchestration
+8979241 feat(procurement): Module C2 sender/RFQ matching and tenant routing
+5f31826 feat(procurement): Module C2 vision-LLM extraction path
+f7dd7df feat(procurement): Module C2 deterministic pricing-sheet parsing
 ```
