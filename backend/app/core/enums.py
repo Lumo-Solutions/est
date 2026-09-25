@@ -9,6 +9,12 @@ class Role(StrEnum):
     PROCUREMENT_HEAD = "procurement_head"
     BD_DIRECTOR = "bd_director"
     MANAGING_DIRECTOR = "managing_director"
+    # Cross-tenant role, granted to platform operators only (not a tenant's
+    # own staff). Its sole purpose today is reviewing inbound_emails rows
+    # whose tenant could not be resolved at all (Module C2 change #1) -- it
+    # is deliberately NOT added to WRITE_ROLES_MODULE_A/ALL_ROLES-based
+    # per-tenant business checks, so it grants no tenant-scoped access.
+    PLATFORM_ADMIN = "platform_admin"
 
 
 class AuditAction(StrEnum):
@@ -178,6 +184,84 @@ class RfqStatus(StrEnum):
     # change to record a vendor reply or an unanswered/lapsed RFQ.
     RESPONDED = "responded"
     EXPIRED = "expired"
+
+
+class InboundEmailMatchStatus(StrEnum):
+    """Outcome of app/procurement/inbound_match.py's reply-token/tenant
+    lookup for one polled email. Independent of `needs_review` (auth/domain
+    flags) -- see InboundEmail.needs_review."""
+
+    MATCHED = "matched"
+    QUARANTINED_NO_TOKEN = "quarantined_no_token"
+    QUARANTINED_TOKEN_CLOSED = "quarantined_token_closed"
+    QUARANTINED_UNKNOWN_TENANT = "quarantined_unknown_tenant"
+
+
+class AttachmentSafetyStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED_TYPE = "rejected_type"
+    REJECTED_SIZE = "rejected_size"
+    REJECTED_PAGE_LIMIT = "rejected_page_limit"
+    REJECTED_MACRO = "rejected_macro"
+    REJECTED_ENCRYPTED = "rejected_encrypted"
+    REJECTED_ARCHIVE = "rejected_archive"
+    REJECTED_ZIP_BOMB = "rejected_zip_bomb"
+
+
+class QuotationExtractionMethod(StrEnum):
+    DETERMINISTIC_XLSX = "deterministic_xlsx"
+    VLM_PDF = "vlm_pdf"
+    VLM_IMAGE = "vlm_image"
+    VLM_XLSX_OTHER = "vlm_xlsx_other"
+    VLM_CSV = "vlm_csv"
+
+
+class QuotationStatus(StrEnum):
+    """Deliberately no ACCEPTED value -- acceptance is a per-line-item
+    decision (QuotationLineItemStatus), never a whole-quotation rollup. This
+    only ever moves to needs_review (the pricing sheet's row-id identity
+    check failed -- SRS change #1) or rejected (an explicit reviewer
+    action)."""
+
+    PROPOSED = "proposed"
+    NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
+
+
+class QuotationLineItemStatus(StrEnum):
+    PROPOSED = "proposed"
+    NEEDS_REVIEW = "needs_review"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class QuotationLineSource(StrEnum):
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+
+
+class LineItemMatchMethod(StrEnum):
+    ROW_ID = "row_id"  # deterministic pricing-sheet hidden column (SRS change #1)
+    FUZZY = "fuzzy"
+    MANUAL = "manual"
+
+
+class ExclusionFlagStatus(StrEnum):
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
+
+
+class AuthCheckResult(StrEnum):
+    """One SPF/DKIM/DMARC verdict parsed from an Authentication-Results
+    header (RFC 8601). UNKNOWN covers a missing/unparseable header -- treated
+    the same as a failure for review purposes, never as an implicit pass."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    NONE = "none"
+    UNKNOWN = "unknown"
 
 
 WRITE_ROLES_MODULE_A = {

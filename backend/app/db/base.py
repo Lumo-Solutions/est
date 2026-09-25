@@ -30,6 +30,16 @@ class TenantMixin:
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
 
+class NullableTenantMixin:
+    """For the rare table where tenant identity is genuinely unknown at
+    INSERT time (e.g. inbound_emails before its reply-token/tenant-slug
+    lookup resolves). Callers must write bespoke RLS policies (not
+    app/db/ddl.py::tenant_policies, which assumes tenant_id is NOT NULL) --
+    see migration 0016."""
+
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
@@ -50,5 +60,12 @@ class TenantEntity(Base, PKMixin, TenantMixin, TimestampMixin, ActorStampMixin):
     declared __abstract__ so SQLAlchemy doesn't try to map TenantEntity
     itself as a table -- subclasses (Vendor, TradeNode, ...) each set their
     own __tablename__."""
+
+    __abstract__ = True
+
+
+class NullableTenantEntity(Base, PKMixin, NullableTenantMixin, TimestampMixin, ActorStampMixin):
+    """Same shape as TenantEntity, but tenant_id may be NULL -- see
+    NullableTenantMixin."""
 
     __abstract__ = True

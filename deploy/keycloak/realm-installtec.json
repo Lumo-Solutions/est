@@ -70,6 +70,10 @@
       {
         "name": "managing_director",
         "description": "Final approver; full organisational visibility"
+      },
+      {
+        "name": "platform_admin",
+        "description": "Platform operator (not tenant staff); reviews inbound mail whose tenant could not be resolved (Module C2)"
       }
     ]
   },

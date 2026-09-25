@@ -1,0 +1,222 @@
+"""Module C2: inbound quotation ingestion, normalisation, and bid leveling.
+
+Two tables (InboundEmail, QuotationAttachment) use NullableTenantEntity, not
+TenantEntity: an email's tenant is identified from the plus-addressed
+recipient embedded in its own To: header (app/procurement/inbound_address.py)
+*after* it's already been received, so tenant_id starts NULL and is filled in
+during matching (app/procurement/inbound_match.py) -- see migration 0016 for
+the bespoke RLS this requires (app/db/ddl.py::tenant_policies assumes
+tenant_id is NOT NULL). Quotation/QuotationLineItem/QuotationExclusionFlag
+are only ever created once a tenant is known, so they're ordinary
+TenantEntity rows.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import ARRAY, BigInteger, Boolean, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.enums import (
+    AttachmentSafetyStatus,
+    InboundEmailMatchStatus,
+    QuotationLineItemStatus,
+    QuotationStatus,
+)
+from app.db.base import NullableTenantEntity, TenantEntity
+
+
+class InboundEmail(NullableTenantEntity):
+    """One polled IMAP message, raw and unmodified in S3 (raw_object_key/
+    raw_sha256) as evidence, independent of whatever parsing follows.
+    tenant_id/rfq_id are set by app/procurement/inbound_match.py; both stay
+    NULL when the recipient's tenant-slug segment matches no tenant at all
+    (match_status=quarantined_unknown_tenant) -- see docs on Role.PLATFORM_ADMIN."""
+
+    __tablename__ = "inbound_emails"
+    __table_args__ = (
+        UniqueConstraint("imap_uid_validity", "imap_uid", name="uq_inbound_emails_imap_uid"),
+    )
+
+    rfq_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    imap_uid_validity: Mapped[str] = mapped_column(String(32), nullable=False)
+    imap_uid: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    from_address: Mapped[str] = mapped_column(String(320), nullable=False)
+    from_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+
+    match_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=InboundEmailMatchStatus.QUARANTINED_UNKNOWN_TENANT.value
+    )
+    # Set even when match_status == matched (e.g. a free-mail sender whose
+    # exact contact address doesn't match, or a failed SPF/DKIM/DMARC check)
+    # -- SRS change #5. Auto-processing (deterministic/LLM parsing) only
+    # proceeds when match_status == matched AND needs_review is false.
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    review_reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+
+    spf_result: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
+    dkim_result: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
+    dmarc_result: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
+    auth_results_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    raw_object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    raw_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Human quarantine/flag review workflow (separate from match_status,
+    # which is system-assigned and never edited by a reviewer).
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class QuotationAttachment(NullableTenantEntity):
+    """Raw attachment bytes, unmodified in S3, plus the outcome of
+    app/procurement/attachment_safety.py -- run in a worker, never the web
+    process. tenant_id mirrors its InboundEmail's (may be NULL)."""
+
+    __tablename__ = "quotation_attachments"
+
+    inbound_email_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbound_emails.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type_declared: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    content_type_sniffed: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    raw_object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    raw_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    safety_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=AttachmentSafetyStatus.PENDING.value
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class Quotation(TenantEntity):
+    """One vendor submission for one RFQ, parsed from one attachment.
+    Versioned per (rfq_id, vendor_id): a new reply creates a new row with
+    version_no += 1 and is_current=true (the previous current row's
+    is_current is flipped to false in the same transaction) -- it never
+    mutates or supersedes an earlier version's own line items, so an
+    already-accepted QuotationLineItem is never overwritten (SRS change #3).
+    A partial unique index (migration 0016) enforces exactly one
+    is_current=true row per (rfq_id, vendor_id)."""
+
+    __tablename__ = "quotations"
+    __table_args__ = (
+        UniqueConstraint("rfq_id", "vendor_id", "version_no", name="uq_quotations_rfq_vendor_version"),
+    )
+
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    vendor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    package_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("procurement_packages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    inbound_email_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbound_emails.id", ondelete="SET NULL"), nullable=True
+    )
+    source_attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotation_attachments.id", ondelete="SET NULL"), nullable=True
+    )
+
+    extraction_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    version_no: Mapped[int] = mapped_column(nullable=False, server_default="1")
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+    # Both must be resolved (non-NULL) before any line item on this
+    # quotation may be accepted -- SRS change #4. NULL means the extractor
+    # (deterministic header cells or the LLM) could not determine it; a
+    # reviewer resolves it explicitly (see
+    # app/services/quotation_ingestion.py::resolve_currency_and_vat).
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    vat_inclusive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    submitted_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    is_late: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
+    # proposed | needs_review | rejected. Deliberately no "accepted" value --
+    # acceptance is a per-line-item decision (QuotationLineItemStatus); this
+    # column only ever moves to needs_review (whole sheet failed identity
+    # verification, e.g. reordered/duplicated rows -- SRS change #1) or
+    # rejected (an explicit bulk reviewer action).
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=QuotationStatus.PROPOSED.value)
+
+
+class QuotationLineItem(TenantEntity):
+    __tablename__ = "quotation_line_items"
+
+    quotation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # NULL until matched (LLM path only -- the deterministic path always
+    # resolves this from the pricing sheet's hidden row-id column, SRS
+    # change #1).
+    boq_line_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("boq_line_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    vendor_item_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vendor_description_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unit_price: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    quantity: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    extended_price_stated: Mapped[float | None] = mapped_column(Numeric(16, 4), nullable=True)
+    extended_price_computed: Mapped[float | None] = mapped_column(Numeric(16, 4), nullable=True)
+    arithmetic_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    quantity_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False, server_default="1.0")
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    match_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    remarks_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=QuotationLineItemStatus.PROPOSED.value
+    )
+    accepted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class QuotationExclusionFlag(TenantEntity):
+    """An NLP-detected exclusion/qualification buried in the vendor's
+    quotation text (e.g. "excludes dewatering"). Always a flag for a human
+    to review -- never an automatic adjustment to any total (SRS change to
+    C2's original bid-leveling requirement)."""
+
+    __tablename__ = "quotation_exclusion_flags"
+
+    quotation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    line_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotation_line_items.id", ondelete="SET NULL"), nullable=True
+    )
+    flag_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_quote_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False, server_default="0.5")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

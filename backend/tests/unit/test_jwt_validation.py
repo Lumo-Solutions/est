@@ -119,7 +119,7 @@ def test_unexpected_azp_rejected(validator, rsa_keypair):
 
 def test_unknown_realm_roles_are_dropped(validator, rsa_keypair):
     private_key, _ = rsa_keypair
-    token = _mint(private_key, claims_override={"realm_access": {"roles": ["platform_admin", "some_role"]}})
+    token = _mint(private_key, claims_override={"realm_access": {"roles": ["totally_made_up_role", "some_role"]}})
     principal = validator.validate(token)
     assert principal.roles == frozenset()
 
