@@ -4,12 +4,20 @@ Three tasks, three queues, deliberately separated:
   - poll_inbound_mailbox ("email" queue): IMAP I/O only. Stores every raw
     email/attachment to S3 unchanged and runs sender/RFQ matching -- never
     parses attachment content.
-  - process_attachment ("quotation" queue): untrusted-input safety checks
-    (app/procurement/attachment_safety.py) and the deterministic
-    pricing-sheet parse when applicable. Isolated from both the SMTP/IMAP
-    worker and the vLLM worker so a hostile attachment can't back up either.
+  - process_inbound_email ("quotation" queue): untrusted-input safety checks
+    (app/procurement/attachment_safety.py) for every attachment on one
+    email, then either the deterministic pricing-sheet parse or a handoff
+    to the LLM path. Isolated from both the SMTP/IMAP worker and the vLLM
+    worker so a hostile attachment can't back up either.
   - extract_quotation_task ("vlm" queue): the vision-LLM path, sharing the
     same worker/queue Module B's title-block extraction already uses.
+
+One inbound email is one submission, regardless of how many attachments it
+carries: exactly one Quotation is created per email (never per attachment).
+If the email includes our own pricing sheet, that's the primary extraction
+source; any other attachment (e.g. a signed cover PDF) links to that same
+Quotation as a supporting document, never as a separately-extracted
+competing quote (QuotationAttachment.quotation_id/is_primary).
 
 Nothing here ever runs in the FastAPI web process.
 """
@@ -25,7 +33,8 @@ from decimal import Decimal
 from email.utils import parseaddr, parsedate_to_datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -164,8 +173,9 @@ async def _ingest_one_email_body(session: AsyncSession, uid_validity: str, imap_
 
     auto_process = outcome.match_status == InboundEmailMatchStatus.MATCHED.value and not outcome.needs_review
     if auto_process:
-        for attachment_id in attachment_ids:
-            process_attachment_task.delay(str(attachment_id), str(outcome.tenant_id))
+        # One task for the whole email, not one per attachment -- an email
+        # with several attachments is one submission (see module docstring).
+        process_inbound_email_task.delay(str(inbound_email.id), str(outcome.tenant_id))
 
 
 async def _poll_and_ingest() -> None:
@@ -218,32 +228,85 @@ def poll_inbound_mailbox(self) -> None:
 
 
 # ---------------------------------------------------------------------------
-# process_attachment
+# process_inbound_email
 # ---------------------------------------------------------------------------
 
 
 async def _create_quotation_version(
-    session: AsyncSession, *, rfq: Rfq, inbound_email: InboundEmail, attachment: QuotationAttachment,
-    extraction_method: str, currency: str | None, vat_inclusive: bool | None, status: str,
+    session: AsyncSession, *, rfq: Rfq, inbound_email: InboundEmail, attachment: QuotationAttachment | None,
+    extraction_method: str, currency: str | None, vat_inclusive: bool | None, status: str, line_item_count: int,
 ) -> Quotation:
-    """SRS change #3: versions per (rfq, vendor); the previous current
-    version's own line items are never touched here."""
+    """SRS change #3: versions per (rfq, vendor); a new version never
+    mutates an earlier one's own line items. Whether it becomes is_current
+    automatically is deliberately conservative:
+
+    - A quotation with zero line items (status NEEDS_REVIEW -- the pricing
+      sheet's identity check failed -- or EXTRACTION_EMPTY -- extraction
+      found nothing) never becomes current automatically, ever, even as the
+      very first version for this (rfq, vendor). It's recorded for manual
+      follow-up; a reviewer promotes it explicitly
+      (app/services/quotation_ingestion.py::promote_quotation_version) if
+      it's ever meant to be the active one.
+    - Otherwise, a new version replaces the current one automatically only
+      if the existing current version has no *accepted* line item yet. If
+      it does, the new version is recorded but left non-current -- an
+      accepted quote is never silently superseded by a fresher, possibly
+      worse, reply; promotion requires the same explicit reviewer action.
+
+    Found and fixed after a live run let an empty vision-LLM extraction
+    (zero line items) become current over an already-accepted deterministic
+    quote -- see tests/integration/test_quotation_versioning.py.
+    """
+    # Serializes concurrent callers for the SAME (rfq, vendor): two
+    # attachments on two different emails from the same vendor can each be
+    # routed to extract_quotation_task and land on two different vLLM
+    # worker forks at once, each independently computing MAX(version_no)
+    # from a snapshot that doesn't yet see the other's still-uncommitted
+    # INSERT, and colliding on uq_quotations_rfq_vendor_version -- found
+    # running `make dev-simulate-quotes` with two PDF replies against the
+    # same vendor. pg_advisory_xact_lock blocks the second caller here until
+    # the first's transaction commits (or rolls back) and releases it
+    # automatically -- no separate unlock/cleanup needed.
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"{rfq.id}:{rfq.vendor_id}"})
+
     existing_current = (
         await session.execute(
             select(Quotation).where(Quotation.rfq_id == rfq.id, Quotation.vendor_id == rfq.vendor_id, Quotation.is_current.is_(True))
         )
     ).scalar_one_or_none()
-    version_no = 1
-    if existing_current is not None:
+    # version_no must come from the highest version ever created for this
+    # (rfq, vendor), not from existing_current: a prior version that never
+    # became current (an empty/failed extraction, per the rule above) still
+    # occupies its own version_no, and existing_current can be None even
+    # when earlier versions exist -- found via
+    # uq_quotations_rfq_vendor_version colliding in
+    # tests/integration/test_quotation_versioning.py.
+    max_version_no = (
+        await session.execute(select(func.max(Quotation.version_no)).where(Quotation.rfq_id == rfq.id, Quotation.vendor_id == rfq.vendor_id))
+    ).scalar_one()
+
+    is_empty = line_item_count == 0 or status in (QuotationStatus.NEEDS_REVIEW.value, QuotationStatus.EXTRACTION_EMPTY.value)
+    existing_has_accepted = False
+    if existing_current is not None and not is_empty:
+        existing_has_accepted = (
+            await session.execute(
+                select(QuotationLineItem.id)
+                .where(QuotationLineItem.quotation_id == existing_current.id, QuotationLineItem.status == QuotationLineItemStatus.ACCEPTED.value)
+                .limit(1)
+            )
+        ).scalar_one_or_none() is not None
+
+    make_current = not is_empty and not existing_has_accepted
+    version_no = (max_version_no or 0) + 1
+    if existing_current is not None and make_current:
         existing_current.is_current = False
-        version_no = existing_current.version_no + 1
         await session.flush()
 
     is_late = bool(rfq.due_at and inbound_email.received_at > rfq.due_at)
     quotation = Quotation(
         tenant_id=rfq.tenant_id, rfq_id=rfq.id, vendor_id=rfq.vendor_id, package_id=rfq.package_id, project_id=rfq.project_id,
-        inbound_email_id=inbound_email.id, source_attachment_id=attachment.id, extraction_method=extraction_method,
-        version_no=version_no, is_current=True, currency=currency, vat_inclusive=vat_inclusive,
+        inbound_email_id=inbound_email.id, source_attachment_id=attachment.id if attachment else None, extraction_method=extraction_method,
+        version_no=version_no, is_current=make_current, currency=currency, vat_inclusive=vat_inclusive,
         submitted_at=inbound_email.received_at, is_late=is_late, status=status,
     )
     session.add(quotation)
@@ -251,8 +314,21 @@ async def _create_quotation_version(
     return quotation
 
 
+async def _link_supporting_documents(session: AsyncSession, quotation: Quotation, attachment_ids: list[uuid.UUID]) -> None:
+    """Every attachment belonging to this quotation's inbound email links
+    back to it -- whether it was the primary extraction source or a
+    supporting document (e.g. a signed PDF alongside the priced xlsx) --
+    never extracted as a separate, competing quote."""
+    if not attachment_ids:
+        return
+    await session.execute(
+        sa_update(QuotationAttachment).where(QuotationAttachment.id.in_(attachment_ids)).values(quotation_id=quotation.id)
+    )
+
+
 async def _ingest_deterministic(
-    session: AsyncSession, *, rfq: Rfq, attachment: QuotationAttachment, inbound_email: InboundEmail, data: bytes, boq_items: list,
+    session: AsyncSession, *, rfq: Rfq, attachment: QuotationAttachment, inbound_email: InboundEmail, data: bytes,
+    boq_items: list, all_attachment_ids: list[uuid.UUID],
 ) -> None:
     expected_ids = {item.id for item in boq_items}
     parsed = parse_pricing_sheet(data, expected_rfq_id=rfq.id, expected_reply_token=rfq.reply_token, expected_boq_line_item_ids=expected_ids)
@@ -262,7 +338,9 @@ async def _ingest_deterministic(
         extraction_method=QuotationExtractionMethod.DETERMINISTIC_XLSX.value,
         currency=parsed.currency, vat_inclusive=parsed.vat_inclusive,
         status=QuotationStatus.PROPOSED.value if parsed.ok else QuotationStatus.NEEDS_REVIEW.value,
+        line_item_count=len(parsed.rows) if parsed.ok else 0,
     )
+    await _link_supporting_documents(session, quotation, all_attachment_ids)
     if not parsed.ok:
         return
 
@@ -284,51 +362,89 @@ async def _ingest_deterministic(
     await session.flush()
 
 
-async def _process_attachment_body(session: AsyncSession, attachment_id: str) -> None:
+def _pick_primary(accepted: list[tuple[QuotationAttachment, bytes, str | None]]) -> tuple[QuotationAttachment, bytes, str | None]:
+    """Our own pricing sheet if present, else the first accepted attachment
+    in the order the email listed them."""
+    for attachment, data, sniffed in accepted:
+        if sniffed == "xlsx" and looks_like_our_pricing_sheet(data):
+            return attachment, data, sniffed
+    return accepted[0]
+
+
+async def _process_inbound_email_body(session: AsyncSession, inbound_email_id: str) -> None:
+    """Safety-checks every attachment on this ONE email, then routes the
+    whole email as a single submission (see module docstring) -- never one
+    Quotation per attachment."""
     settings = get_settings()
-    attachment = (await session.execute(select(QuotationAttachment).where(QuotationAttachment.id == UUID(attachment_id)))).scalar_one()
-    inbound_email = (await session.execute(select(InboundEmail).where(InboundEmail.id == attachment.inbound_email_id))).scalar_one()
+    inbound_email = (await session.execute(select(InboundEmail).where(InboundEmail.id == UUID(inbound_email_id)))).scalar_one()
     if inbound_email.rfq_id is None:
         return  # never parse without a matched/attached RFQ, regardless of how this task was reached
 
-    data = await get_object_bytes(attachment.raw_object_key, bucket=settings.s3_bucket_procurement)
-    safety = check_attachment(filename=attachment.filename, data=data, settings=settings)
-    attachment.safety_status = safety.status
-    attachment.content_type_sniffed = safety.sniffed_content_type
-    attachment.rejection_reason = safety.reason
-    attachment.processed_at = datetime.now(timezone.utc)
+    attachments = (
+        await session.execute(select(QuotationAttachment).where(QuotationAttachment.inbound_email_id == inbound_email.id))
+    ).scalars().all()
+    if not attachments:
+        return  # a plain-text reply with nothing attached -- nothing to review yet
+
+    accepted: list[tuple[QuotationAttachment, bytes, str | None]] = []
+    for attachment in attachments:
+        data = await get_object_bytes(attachment.raw_object_key, bucket=settings.s3_bucket_procurement)
+        safety = check_attachment(filename=attachment.filename, data=data, settings=settings)
+        attachment.safety_status = safety.status
+        attachment.content_type_sniffed = safety.sniffed_content_type
+        attachment.rejection_reason = safety.reason
+        attachment.processed_at = datetime.now(timezone.utc)
+        if safety.status == AttachmentSafetyStatus.ACCEPTED.value:
+            accepted.append((attachment, data, safety.sniffed_content_type))
     await session.flush()
 
-    if safety.status != AttachmentSafetyStatus.ACCEPTED.value:
-        return
-
+    all_attachment_ids = [a.id for a in attachments]
     rfq = (await session.execute(select(Rfq).where(Rfq.id == inbound_email.rfq_id))).scalar_one()
-    boq_items = await list_package_boq_items(session, rfq.package_id)
-    sniffed = safety.sniffed_content_type
 
-    if sniffed == "xlsx" and looks_like_our_pricing_sheet(data):
-        await _ingest_deterministic(session, rfq=rfq, attachment=attachment, inbound_email=inbound_email, data=data, boq_items=boq_items)
+    if not accepted:
+        # Every attachment failed the safety check -- still record a shell
+        # submission (never is_current automatically, see
+        # _create_quotation_version) so it's visible for manual follow-up
+        # instead of silently vanishing.
+        quotation = await _create_quotation_version(
+            session, rfq=rfq, inbound_email=inbound_email, attachment=None, extraction_method=QuotationExtractionMethod.NONE.value,
+            currency=None, vat_inclusive=None, status=QuotationStatus.EXTRACTION_EMPTY.value, line_item_count=0,
+        )
+        await _link_supporting_documents(session, quotation, all_attachment_ids)
         return
 
-    if sniffed == "pdf":
+    boq_items = await list_package_boq_items(session, rfq.package_id)
+    primary_attachment, primary_data, primary_sniffed = _pick_primary(accepted)
+    primary_attachment.is_primary = True
+    await session.flush()
+    supporting_ids = [a.id for a in attachments if a.id != primary_attachment.id]
+
+    if primary_sniffed == "xlsx" and looks_like_our_pricing_sheet(primary_data):
+        await _ingest_deterministic(
+            session, rfq=rfq, attachment=primary_attachment, inbound_email=inbound_email, data=primary_data,
+            boq_items=boq_items, all_attachment_ids=all_attachment_ids,
+        )
+        return
+
+    if primary_sniffed == "pdf":
         extraction_method = QuotationExtractionMethod.VLM_PDF.value
-    elif sniffed in ("jpeg", "png"):
+    elif primary_sniffed in ("jpeg", "png"):
         extraction_method = QuotationExtractionMethod.VLM_IMAGE.value
-    elif sniffed == "xlsx":
+    elif primary_sniffed == "xlsx":
         extraction_method = QuotationExtractionMethod.VLM_XLSX_OTHER.value
     else:
         extraction_method = QuotationExtractionMethod.VLM_CSV.value
 
-    extract_quotation_task.delay(str(attachment.id), extraction_method, str(inbound_email.tenant_id))
+    extract_quotation_task.delay(str(primary_attachment.id), extraction_method, str(inbound_email.tenant_id))
 
 
 @celery_app.task(
-    bind=True, name="app.workers.tasks.quotation_ingestion.process_attachment", soft_time_limit=60,
+    bind=True, name="app.workers.tasks.quotation_ingestion.process_inbound_email", soft_time_limit=90,
     autoretry_for=(ConnectionError,), retry_backoff=True, max_retries=2,
 )
-def process_attachment_task(self, attachment_id: str, tenant_id: str) -> None:
+def process_inbound_email_task(self, inbound_email_id: str, tenant_id: str) -> None:
     ctx = build_worker_context(tenant_id)
-    run_async(lambda: with_worker_session(ctx, _process_attachment_body, attachment_id))()
+    run_async(lambda: with_worker_session(ctx, _process_inbound_email_body, inbound_email_id))()
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +474,17 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
     else:
         result = await extract_quotation(candidate_text=data.decode("utf-8", errors="replace"), image_bytes=None)
 
+    status = QuotationStatus.PROPOSED.value if result.line_items else QuotationStatus.EXTRACTION_EMPTY.value
     quotation = await _create_quotation_version(
         session, rfq=rfq, inbound_email=inbound_email, attachment=attachment, extraction_method=extraction_method,
-        currency=result.currency, vat_inclusive=result.vat_inclusive, status=QuotationStatus.PROPOSED.value,
+        currency=result.currency, vat_inclusive=result.vat_inclusive, status=status, line_item_count=len(result.line_items),
     )
+    other_attachment_ids = (
+        await session.execute(
+            select(QuotationAttachment.id).where(QuotationAttachment.inbound_email_id == inbound_email.id, QuotationAttachment.id != attachment.id)
+        )
+    ).scalars().all()
+    await _link_supporting_documents(session, quotation, [attachment.id, *other_attachment_ids])
 
     for item in result.line_items:
         match = match_line_item(vendor_item_text=item.vendor_item_text, vendor_description_text=item.vendor_description_text, candidates=candidates)
