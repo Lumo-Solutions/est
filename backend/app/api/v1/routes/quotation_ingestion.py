@@ -13,6 +13,7 @@ from app.schemas.quotation_ingestion import (
     BidLevelingRowOut,
     DismissInboundEmailRequest,
     InboundEmailOut,
+    QuotationAttachmentOut,
     QuotationExclusionFlagOut,
     QuotationLineItemOut,
     QuotationOut,
@@ -95,6 +96,24 @@ async def list_quotation_line_items_endpoint(
 ) -> list[QuotationLineItemOut]:
     rows = await quotation_service.list_quotation_line_items(session, quotation_id)
     return [QuotationLineItemOut.model_validate(r) for r in rows]
+
+
+@router.get("/quotations/{quotation_id}/attachments", response_model=list[QuotationAttachmentOut])
+async def list_quotation_attachments_endpoint(
+    quotation_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[QuotationAttachmentOut]:
+    rows = await quotation_service.list_quotation_attachments(session, quotation_id)
+    return [QuotationAttachmentOut.model_validate(r) for r in rows]
+
+
+@router.post("/quotations/{quotation_id}/promote", response_model=QuotationOut)
+async def promote_quotation_version_endpoint(
+    quotation_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_REVIEW_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> QuotationOut:
+    row = await quotation_service.promote_quotation_version(session, ctx, quotation_id)
+    return QuotationOut.model_validate(row)
 
 
 @router.post("/quotations/{quotation_id}/resolve-currency-vat", response_model=QuotationOut)

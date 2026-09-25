@@ -240,7 +240,12 @@ async def test_exception_during_elevated_write_still_restores_callers_context(rl
     assert still_unresolved.tenant_id is None
 
 
-async def test_attach_inbound_email_denied_for_estimator_allowed_for_procurement_head(rls_session):
+async def test_attach_inbound_email_denied_for_estimator_allowed_for_procurement_head(rls_session, monkeypatch):
+    from app.workers.tasks.quotation_ingestion import process_inbound_email_task
+
+    process_calls: list[tuple] = []
+    monkeypatch.setattr(process_inbound_email_task, "delay", lambda *a, **kw: process_calls.append(a))
+
     tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
     flagged = await _seed_inbound_email(rls_session, tenant_id=tenant_id, rfq_id=rfq.id, needs_review=True)
 
@@ -254,11 +259,14 @@ async def test_attach_inbound_email_denied_for_estimator_allowed_for_procurement
     with pytest.raises(ForbiddenError):
         await quotation_service.attach_inbound_email_to_rfq(rls_session, lead_ctx, flagged.id, rfq.id, "confirmed legit")
 
+    assert process_calls == []
+
     ph_ctx = _ctx(frozenset({"procurement_head"}), tenant_id=tenant_id)
     await set_rls_context(rls_session, ph_ctx)
     attached = await quotation_service.attach_inbound_email_to_rfq(rls_session, ph_ctx, flagged.id, rfq.id, "confirmed legit")
     assert attached.needs_review is False
     assert attached.review_status == "attached"
+    assert process_calls == [(str(flagged.id), str(tenant_id))]
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +312,10 @@ async def test_accept_reject_role_matrix(rls_session):
 
 
 async def test_new_version_never_overwrites_an_accepted_line_item(rls_session):
+    """A new version arriving after the current one has an accepted line
+    item is recorded but never auto-promoted -- it takes an explicit
+    promote_quotation_version() call (see test_quotation_versioning.py for
+    the dedicated promotion tests) to make it current."""
     from app.workers.tasks.quotation_ingestion import _create_quotation_version
 
     tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
@@ -324,12 +336,13 @@ async def test_new_version_never_overwrites_an_accepted_line_item(rls_session):
     await rls_session.flush()
     quotation_v2 = await _create_quotation_version(
         rls_session, rfq=rfq, inbound_email=inbound_email_v2, attachment=attachment_v2,
-        extraction_method="deterministic_xlsx", currency="AED", vat_inclusive=True, status="proposed",
+        extraction_method="deterministic_xlsx", currency="AED", vat_inclusive=True, status="proposed", line_item_count=1,
     )
 
     await rls_session.refresh(quotation_v1)
-    assert quotation_v1.is_current is False
-    assert quotation_v2.is_current is True
+    # v1 is still current -- v2 must NOT silently supersede an accepted quote.
+    assert quotation_v1.is_current is True
+    assert quotation_v2.is_current is False
     assert quotation_v2.version_no == quotation_v1.version_no + 1
 
     await rls_session.refresh(line_item_v1)
@@ -398,3 +411,66 @@ async def test_bid_leveling_shows_accepted_only_and_never_mixes_currencies(rls_s
     assert by_currency["AED"].vat_inclusive is True
     assert by_currency["USD"].unit_price == Decimal("30.0")
     assert by_currency["USD"].vat_inclusive is False
+
+
+async def test_bid_leveling_uses_accepted_line_items_not_current_version(rls_session):
+    """Accept v1's price, then receive v2 (a fresh, unaccepted reply from
+    the same vendor) -- the matrix must keep showing v1's accepted price
+    until v2's own line item is separately accepted, regardless of which
+    version is_current."""
+    from app.workers.tasks.quotation_ingestion import _create_quotation_version
+
+    tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
+    system_ctx = await _system_ctx(rls_session, tenant_id)
+    boq_item = await boq_service.create_line_item(
+        rls_session, system_ctx, rfq.project_id, BoqLineItemCreate(item_no="1.0", description="Excavation", uom="m3", boq_quantity=100.0)
+    )
+
+    quotation_v1, line_v1 = await _seed_quotation_with_line_item(rls_session, tenant_id=tenant_id, rfq=rfq, currency="AED", vat_inclusive=True, unit_price="100.0")
+    line_v1.boq_line_item_id = boq_item.id
+    await rls_session.flush()
+
+    ph_ctx = _ctx(frozenset({"procurement_head"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, ph_ctx)
+    await quotation_service.accept_line_item(rls_session, ph_ctx, line_v1.id)
+
+    rows_before = await quotation_service.get_bid_leveling_matrix(rls_session, rfq.package_id)
+    assert len(rows_before) == 1
+    assert rows_before[0].cells[0].unit_price == Decimal("100.0")
+
+    # v2 arrives: a fresh reply, not yet accepted -- and per the versioning
+    # fix, doesn't even become is_current since v1 has an accepted line.
+    await _system_ctx(rls_session, tenant_id)
+    inbound_email_v2 = await _seed_inbound_email(rls_session, tenant_id=tenant_id, rfq_id=rfq.id, needs_review=False)
+    attachment_v2 = QuotationAttachment(
+        tenant_id=tenant_id, inbound_email_id=inbound_email_v2.id, filename="quote-v2.xlsx",
+        size_bytes=1, raw_object_key="inbound/1/v2.xlsx", raw_sha256="0" * 64, safety_status="accepted",
+    )
+    rls_session.add(attachment_v2)
+    await rls_session.flush()
+    quotation_v2 = await _create_quotation_version(
+        rls_session, rfq=rfq, inbound_email=inbound_email_v2, attachment=attachment_v2,
+        extraction_method="deterministic_xlsx", currency="AED", vat_inclusive=True, status="proposed", line_item_count=1,
+    )
+    line_v2 = QuotationLineItem(
+        tenant_id=tenant_id, quotation_id=quotation_v2.id, project_id=rfq.project_id, boq_line_item_id=boq_item.id,
+        unit_price=Decimal("77.0"), source="deterministic", status="proposed",
+    )
+    rls_session.add(line_v2)
+    await rls_session.flush()
+
+    await set_rls_context(rls_session, ph_ctx)
+    rows_after = await quotation_service.get_bid_leveling_matrix(rls_session, rfq.package_id)
+    assert len(rows_after) == 1
+    assert len(rows_after[0].cells) == 1
+    assert rows_after[0].cells[0].unit_price == Decimal("100.0")
+    assert rows_after[0].cells[0].quotation_id == quotation_v1.id
+
+    # Now accept v2's line too -- both accepted prices show, from both
+    # versions, regardless of is_current.
+    await quotation_service.accept_line_item(rls_session, ph_ctx, line_v2.id)
+    rows_both = await quotation_service.get_bid_leveling_matrix(rls_session, rfq.package_id)
+    assert len(rows_both[0].cells) == 2
+    prices = {cell.quotation_id: cell.unit_price for cell in rows_both[0].cells}
+    assert prices[quotation_v1.id] == Decimal("100.0")
+    assert prices[quotation_v2.id] == Decimal("77.0")

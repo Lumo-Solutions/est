@@ -194,13 +194,9 @@ async def attach_inbound_email_to_rfq(
         payload={"attached_to_rfq_id": str(rfq_id), "reason": reason},
     )
 
-    from app.workers.tasks.quotation_ingestion import process_attachment_task
+    from app.workers.tasks.quotation_ingestion import process_inbound_email_task
 
-    attachment_ids = (
-        await session.execute(select(QuotationAttachment.id).where(QuotationAttachment.inbound_email_id == email.id))
-    ).scalars().all()
-    for attachment_id in attachment_ids:
-        process_attachment_task.delay(str(attachment_id), str(email.tenant_id))
+    process_inbound_email_task.delay(str(email.id), str(email.tenant_id))
 
     return email
 
@@ -232,6 +228,19 @@ async def list_quotation_line_items(session: AsyncSession, quotation_id: UUID) -
     return list(result.scalars().all())
 
 
+async def list_quotation_attachments(session: AsyncSession, quotation_id: UUID) -> list[QuotationAttachment]:
+    """Every attachment from the inbound email this quotation came from --
+    the primary extraction source (is_primary=true) plus any supporting
+    documents (SRS: attachments on one email are one submission, never
+    separately-extracted competing quotes)."""
+    result = await session.execute(
+        select(QuotationAttachment)
+        .where(QuotationAttachment.quotation_id == quotation_id)
+        .order_by(QuotationAttachment.is_primary.desc(), QuotationAttachment.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def resolve_currency_and_vat(
     session: AsyncSession, ctx: RequestContext, quotation_id: UUID, currency: str, vat_inclusive: bool
 ) -> Quotation:
@@ -258,6 +267,43 @@ async def reject_quotation(session: AsyncSession, ctx: RequestContext, quotation
     await audit.record(
         session, ctx, action=AuditAction.REJECT, entity_type="quotation", entity_id=quotation.id, project_id=quotation.project_id,
         payload={"reason": reason},
+    )
+    return quotation
+
+
+async def promote_quotation_version(session: AsyncSession, ctx: RequestContext, quotation_id: UUID) -> Quotation:
+    """The only way a version becomes is_current when
+    app/workers/tasks/quotation_ingestion.py::_create_quotation_version
+    itself declined to (an empty/failed extraction, or an existing current
+    version that already has an accepted line item) -- SRS: a new version
+    never silently replaces an accepted one; a reviewer chooses explicitly,
+    and it's audited."""
+    _require_review_authority(ctx)
+    quotation = await get_quotation(session, quotation_id)
+    if quotation.is_current:
+        raise ConflictError(f"Quotation {quotation_id} is already the current version")
+
+    previous_current = (
+        await session.execute(
+            select(Quotation).where(Quotation.rfq_id == quotation.rfq_id, Quotation.vendor_id == quotation.vendor_id, Quotation.is_current.is_(True))
+        )
+    ).scalar_one_or_none()
+    if previous_current is not None:
+        previous_current.is_current = False
+        # Flushed separately from setting the new one True below: the
+        # partial unique index (uq_quotations_current_per_rfq_vendor) checks
+        # each row immediately, and SQLAlchemy may batch same-table UPDATEs
+        # from a single flush() into one executemany() whose per-row order
+        # isn't guaranteed -- letting both rows briefly read is_current=true
+        # in the same statement violates the index. Same reason
+        # _create_quotation_version flushes the old row's flip before adding
+        # the new one.
+        await session.flush()
+    quotation.is_current = True
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="quotation", entity_id=quotation.id, project_id=quotation.project_id,
+        payload={"promoted_to_current": True, "previous_current_quotation_id": str(previous_current.id) if previous_current else None},
     )
     return quotation
 

@@ -36,6 +36,8 @@ class InboundEmailOut(ORMModel):
 class QuotationAttachmentOut(ORMModel):
     id: UUID
     inbound_email_id: UUID
+    quotation_id: UUID | None
+    is_primary: bool
     filename: str
     content_type_declared: str | None
     content_type_sniffed: str | None
