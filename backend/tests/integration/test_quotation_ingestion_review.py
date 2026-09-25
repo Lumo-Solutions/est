@@ -5,6 +5,7 @@ requirement #8). See app/services/quotation_ingestion.py."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -160,6 +161,29 @@ async def test_resolve_inbound_email_tenant_is_platform_admin_only(rls_session):
     assert audit_row[0] == admin_ctx.sub
     assert list(audit_row[1]) == ["platform_admin"]
     assert audit_row[2] == "update"
+
+    # A second audit event is recorded in the *target* tenant's own trail --
+    # a reviewer there should be able to see how this email came to belong
+    # to them, without needing platform_admin visibility themselves. Same
+    # actor (the real platform_admin), not "system".
+    target_tenant_readable_ctx = _ctx(frozenset({"managing_director"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, target_tenant_readable_ctx)
+    target_audit_row = (
+        await rls_session.execute(
+            text("SELECT actor_sub, actor_roles, action, payload FROM audit_events WHERE entity_type = 'inbound_email' AND entity_id = :e"),
+            {"e": str(unresolved.id)},
+        )
+    ).one()
+    assert target_audit_row[0] == admin_ctx.sub
+    assert list(target_audit_row[1]) == ["platform_admin"]
+    assert target_audit_row[2] == "update"
+    target_payload = target_audit_row[3] if isinstance(target_audit_row[3], dict) else json.loads(target_audit_row[3])
+    assert target_payload["resolved_by_platform_admin"] == str(admin_ctx.user_id)
+
+    # Restore admin_ctx's own (unrelated) tenant before the next check --
+    # the reads above deliberately left the session's RLS GUC pointed at
+    # other contexts.
+    await set_rls_context(rls_session, admin_ctx)
 
     # Once resolved, this admin (whose own tenant_id is unrelated) can no
     # longer even SELECT the row at all -- inbound_emails_read's RLS policy

@@ -82,22 +82,26 @@ async def resolve_inbound_email_tenant(
 
     Authorization (_require_platform_admin) is checked first, against the
     caller's own ctx, before anything else touches the database. Only then
-    does the single UPDATE below run under a tenant-scoped system context
-    instead of ctx: Postgres's RLS for UPDATE requires the *post-update* row
-    to still pass the table's SELECT policy, not just the UPDATE policy's
-    own WITH CHECK (undocumented clearly, but reproducibly true -- confirmed
-    empirically while writing
+    does the UPDATE (and the target tenant's own audit insert, see below)
+    run under a tenant-scoped elevated context instead of ctx: Postgres's
+    RLS for UPDATE requires the *post-update* row to still pass the table's
+    SELECT policy, not just the UPDATE policy's own WITH CHECK (undocumented
+    clearly, but reproducibly true -- confirmed empirically while writing
     tests/integration/test_quotation_ingestion_review.py). Once tenant_id
     moves off NULL, a platform_admin's own SELECT-policy branches both go
     false (it's neither "tenant_id IS NULL" nor "tenant_id =
     app_tenant_id()" for their own unrelated tenant), so the write itself
     would violate RLS even though *authorization* was already correctly
-    enforced above. The elevated context is scoped to that one statement via
-    try/finally -- ctx is restored even if the UPDATE raises -- and nothing
-    else runs while it's active. audit.record runs afterwards, under the
-    restored ctx (filed in the *actor's own* tenant's audit trail, with
-    ctx.user_id/sub/roles as the actor -- never "system" -- since ctx is
-    what's passed, not the elevated context)."""
+    enforced above. The elevated context is scoped to that block via
+    try/finally -- ctx is restored even if a statement inside raises -- and
+    nothing besides those two writes runs while it's active.
+
+    Two audit events are recorded, in two different tenants' own trails,
+    both with ctx.user_id/sub/roles as the actor -- never "system":
+    the actor's own tenant (after ctx is restored, below) and the *target*
+    tenant's (while still elevated, above -- a reviewer in that tenant
+    should be able to see how this email came to belong to them without
+    needing platform_admin visibility themselves)."""
     _require_platform_admin(ctx)
     email = await get_inbound_email(session, inbound_email_id)
     if email.tenant_id is not None:
@@ -105,13 +109,20 @@ async def resolve_inbound_email_tenant(
 
     now = datetime.now(timezone.utc)
     new_match_status = InboundEmailMatchStatus.QUARANTINED_NO_TOKEN.value
-    elevated_ctx = RequestContext(tenant_id=tenant_id, user_id=None, sub="system", roles=frozenset(), is_system=True)
-    await set_rls_context(session, elevated_ctx)
+    # Carries ctx's real identity (not an anonymous "system" actor) so the
+    # target-tenant audit insert below attributes correctly, while is_system
+    # bypasses that tenant's RLS for both writes.
+    target_tenant_ctx = RequestContext(tenant_id=tenant_id, user_id=ctx.user_id, sub=ctx.sub, roles=ctx.roles, is_system=True)
+    await set_rls_context(session, target_tenant_ctx)
     try:
         await session.execute(
             sa_update(InboundEmail)
             .where(InboundEmail.id == email.id)
             .values(tenant_id=tenant_id, match_status=new_match_status, review_note=note, reviewed_by=ctx.user_id, reviewed_at=now)
+        )
+        await audit.record(
+            session, target_tenant_ctx, action=AuditAction.UPDATE, entity_type="inbound_email", entity_id=email.id,
+            payload={"resolved_by_platform_admin": str(ctx.user_id), "note": note, "source": "platform_admin_resolution"},
         )
     finally:
         await set_rls_context(session, ctx)
