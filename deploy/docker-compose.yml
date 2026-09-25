@@ -62,6 +62,23 @@ x-backend-env: &backend-env
   EMAIL_REPLY_TO_LOCAL_PART: ${EMAIL_REPLY_TO_LOCAL_PART:-rfq}
   EMAIL_REPLY_TO_DOMAIN: ${EMAIL_REPLY_TO_DOMAIN:-installtec.local}
   EMAIL_REDIRECT_ALL_TO: ${EMAIL_REDIRECT_ALL_TO:-dev-catchall@installtec.local}
+  # --- addition: Module C2 inbound quotation ingestion. Mailpit has no IMAP
+  # server (verified against the pinned image -- only SMTP/POP3/HTTP), so
+  # GreenMail (service below) is the dev/test IMAP source instead.
+  # IMAP_DEV_ALLOWED_HOST mirrors EMAIL_REDIRECT_ALL_TO's fail-closed
+  # posture for the inbound direction: whenever APP_ENV != production,
+  # IMAP_HOST must equal this value or the poller refuses to start (see
+  # app/workers/tasks/quotation_ingestion.py::_assert_dev_imap_host_is_safe
+  # and docs/procurement-quotation-ingestion.md). ---
+  IMAP_HOST: ${IMAP_HOST:-greenmail}
+  IMAP_PORT: ${IMAP_PORT:-3143}
+  IMAP_USE_SSL: ${IMAP_USE_SSL:-false}
+  IMAP_USER: ${IMAP_USER:-rfq@installtec.local}
+  IMAP_PASSWORD: ${IMAP_PASSWORD:-anything}
+  IMAP_MAILBOX: ${IMAP_MAILBOX:-INBOX}
+  IMAP_DEV_ALLOWED_HOST: ${IMAP_DEV_ALLOWED_HOST:-greenmail}
+  QUOTATION_MAX_ATTACHMENT_SIZE_BYTES: ${QUOTATION_MAX_ATTACHMENT_SIZE_BYTES:-15728640}
+  QUOTATION_MAX_PDF_PAGES: ${QUOTATION_MAX_PDF_PAGES:-60}
 
 services:
   postgres:
@@ -177,6 +194,33 @@ services:
     restart: unless-stopped
     networks: [installtec]
 
+  # --- addition: GreenMail, a disposable IMAP/SMTP test server, used as the
+  # dev/test mailbox Module C2's IMAP poller polls for vendor replies
+  # (IMAP_HOST default above). Mailpit (above) cannot serve this role -- it
+  # has no IMAP server at all, only SMTP/POP3/HTTP (verified against the
+  # pinned image's --help output). `-Dgreenmail.auth.disabled` means any
+  # username/password logs in; GreenMail creates a mailbox per exact
+  # recipient address on first delivery, so a simulated "vendor reply" must
+  # be sent with envelope RCPT TO = IMAP_USER (the poller's one shared
+  # mailbox) while its To: header carries the real plus-addressed recipient
+  # -- exactly what a real folding mail provider (Gmail/Office 365/Postfix
+  # with recipient_delimiter=+) would itself hand to IMAP after folding.
+  # See docs/procurement-quotation-ingestion.md. ---
+  greenmail:
+    image: greenmail/standalone:latest
+    container_name: installtec_greenmail
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.setup.test.imap
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.auth.disabled
+    ports:
+      - "3025:3025"  # SMTP (test tooling injects simulated vendor replies here)
+      - "3143:3143"  # IMAP (the poller reads from here)
+    restart: unless-stopped
+    networks: [installtec]
+
   # --- addition: mock vLLM (OpenAI-compatible /v1/chat/completions) used as the
   # default "vllm" service until a GPU instance is available. Same service name
   # and port as the SRS template so backend config never needs to change. ---
@@ -255,6 +299,15 @@ services:
       - EMAIL_REPLY_TO_LOCAL_PART=${EMAIL_REPLY_TO_LOCAL_PART:-rfq}
       - EMAIL_REPLY_TO_DOMAIN=${EMAIL_REPLY_TO_DOMAIN:-installtec.local}
       - EMAIL_REDIRECT_ALL_TO=${EMAIL_REDIRECT_ALL_TO:-dev-catchall@installtec.local}
+      - IMAP_HOST=${IMAP_HOST:-greenmail}
+      - IMAP_PORT=${IMAP_PORT:-3143}
+      - IMAP_USE_SSL=${IMAP_USE_SSL:-false}
+      - IMAP_USER=${IMAP_USER:-rfq@installtec.local}
+      - IMAP_PASSWORD=${IMAP_PASSWORD:-anything}
+      - IMAP_MAILBOX=${IMAP_MAILBOX:-INBOX}
+      - IMAP_DEV_ALLOWED_HOST=${IMAP_DEV_ALLOWED_HOST:-greenmail}
+      - QUOTATION_MAX_ATTACHMENT_SIZE_BYTES=${QUOTATION_MAX_ATTACHMENT_SIZE_BYTES:-15728640}
+      - QUOTATION_MAX_PDF_PAGES=${QUOTATION_MAX_PDF_PAGES:-60}
     ports:
       - "8001:8000"
     depends_on:
@@ -326,7 +379,10 @@ services:
 
   # --- addition: Module C1 RFQ dispatch queue -- kept off the shared
   # `ingest` queue (Module B's DXF/PDF pipeline) since an SMTP relay outage
-  # should never back up drawing ingestion, and vice versa. ---
+  # should never back up drawing ingestion, and vice versa. Also runs
+  # Module C2's poll_inbound_mailbox (same "talk to a mail server" queue,
+  # see app/workers/celery_app.py's task_routes), hence the added
+  # dependency on greenmail alongside mailpit. ---
   celery-worker-email:
     build:
       context: ..
@@ -341,6 +397,36 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      greenmail:
+        condition: service_started
+    restart: unless-stopped
+    networks: [installtec]
+    # --- addition: see celery-worker above ---
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
+  # --- addition: Module C2 attachment safety checks + deterministic
+  # pricing-sheet parsing -- untrusted-input parsing of whatever a vendor
+  # attached, kept off every other queue so a hostile/oversized attachment
+  # can never back up outbound RFQ dispatch, inbound polling, or Module B's
+  # drawing ingestion. Never touches vLLM (no `vllm` dependency below). ---
+  celery-worker-quotation:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: installtec_celery_worker_quotation
+    command: celery -A app.workers.celery_app worker -Q quotation -c 2 -l info
+    environment: *backend-env
+    mem_limit: 512m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     networks: [installtec]
     # --- addition: see celery-worker above ---
