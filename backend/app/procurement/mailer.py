@@ -17,6 +17,7 @@ import aiosmtplib
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.procurement.inbound_address import build_reply_address
 
 logger = get_logger(__name__)
 
@@ -61,6 +62,7 @@ async def send_rfq_email(
     attachment_bytes: bytes,
     attachment_filename: str,
     reply_token: str,
+    tenant_slug: str,
     settings: Settings | None = None,
 ) -> SentEmail:
     settings = settings or get_settings()
@@ -72,10 +74,12 @@ async def send_rfq_email(
     message["From"] = settings.smtp_from_address
     message["To"] = recipient.to_address
     message["Subject"] = subject
-    # Plus-addressing Reply-To (see Settings.email_reply_to_local_part) lets
-    # Module C2's IMAP poller correlate a reply back to this exact Rfq row
-    # by parsing the token out of the recipient address it was sent to.
-    message["Reply-To"] = f"{settings.email_reply_to_local_part}+{reply_token}@{settings.email_reply_to_domain}"
+    # Plus-addressing Reply-To embeds both the tenant slug and the reply
+    # token (see app/procurement/inbound_address.py) so Module C2's IMAP
+    # poller can identify the tenant straight from the recipient address --
+    # independent of whether the reply-token lookup itself succeeds -- and
+    # correlate the reply back to this exact Rfq row.
+    message["Reply-To"] = build_reply_address(tenant_slug=tenant_slug, reply_token=reply_token, settings=settings)
     message_id = make_msgid(domain=settings.email_reply_to_domain)
     message["Message-ID"] = message_id
     message.set_content("This message requires an HTML-capable email client to view the RFQ.")

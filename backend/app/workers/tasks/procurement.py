@@ -16,7 +16,7 @@ from app.core.enums import AuditAction, RfqStatus
 from app.integrations.s3 import put_object_streaming
 from app.models.boq import BoqLineItem
 from app.models.procurement import ProcurementPackage, Rfq
-from app.models.tenancy import Tenant
+from app.models.tenancy import Project, Tenant
 from app.models.vendors import Vendor, VendorContact
 from app.procurement.content import RfqLineItem
 from app.procurement.mailer import send_rfq_email
@@ -57,6 +57,10 @@ async def _dispatch_rfq_body(session: AsyncSession, rfq_id: str) -> None:
     # otherwise-deliverable RFQ.
     tenant = (await session.execute(select(Tenant).where(Tenant.id == rfq.tenant_id))).scalar_one_or_none()
     tenant_name = tenant.name if tenant is not None else "INSTALLTEC"
+    # Falls back to the raw tenant_id (never contains '.', so still parses
+    # safely -- see app/procurement/inbound_address.py) in the same
+    # extremely-unlikely no-tenants-row case as tenant_name above.
+    tenant_slug = tenant.slug if tenant is not None else str(rfq.tenant_id)
     contact = None
     if rfq.vendor_contact_id is not None:
         contact = (
@@ -81,15 +85,17 @@ async def _dispatch_rfq_body(session: AsyncSession, rfq_id: str) -> None:
         vendor_name=vendor.legal_name, rfq_ref=rfq.rfq_ref, package_name=package.name, items=rfq_items,
         due_at=rfq.due_at.date().isoformat() if rfq.due_at else None, sender_name=f"{tenant_name} Procurement Team",
     )
+    project = (await session.execute(select(Project).where(Project.id == rfq.project_id))).scalar_one()
     xlsx_bytes, xlsx_sha256 = build_pricing_workbook(
         rfq_id=rfq.id, rfq_ref=rfq.rfq_ref, reply_token=rfq.reply_token, package_name=package.name, items=rfq_items,
+        default_currency=project.base_currency,
     )
     attachment_key = f"{rfq.tenant_id}/{rfq.id}.xlsx"
 
     try:
         sent = await send_rfq_email(
             vendor_email=vendor_email, subject=subject, html_body=html, attachment_bytes=xlsx_bytes,
-            attachment_filename=f"{rfq.rfq_ref}.xlsx", reply_token=rfq.reply_token,
+            attachment_filename=f"{rfq.rfq_ref}.xlsx", reply_token=rfq.reply_token, tenant_slug=tenant_slug,
         )
     except Exception as exc:  # noqa: BLE001 -- any SMTP/config failure lands the RFQ in `failed`, never crashes the worker
         rfq.status = RfqStatus.FAILED.value
