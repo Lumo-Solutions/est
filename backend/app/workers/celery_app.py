@@ -11,7 +11,12 @@ celery_app = Celery(
     "installtec",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.tasks.takeoff", "app.workers.tasks.maintenance", "app.workers.tasks.procurement"],
+    include=[
+        "app.workers.tasks.takeoff",
+        "app.workers.tasks.maintenance",
+        "app.workers.tasks.procurement",
+        "app.workers.tasks.quotation_ingestion",
+    ],
 )
 
 celery_app.conf.update(
@@ -31,6 +36,16 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
         "app.workers.tasks.procurement.*": {"queue": "email"},
+        # --- Module C2: inbound quotation ingestion ---
+        # poll_inbound_mailbox is pure IMAP I/O, same "talk to a mail
+        # server" queue as C1's outbound SMTP dispatch. process_attachment
+        # (untrusted-input safety checks + deterministic parsing) is kept
+        # off both of those -- a hostile/oversized attachment must never
+        # back up outbound RFQ dispatch or inbound polling. extract_quotation
+        # shares Module B's vLLM-backed queue/worker.
+        "app.workers.tasks.quotation_ingestion.poll_inbound_mailbox": {"queue": "email"},
+        "app.workers.tasks.quotation_ingestion.process_attachment": {"queue": "quotation"},
+        "app.workers.tasks.quotation_ingestion.extract_quotation": {"queue": "vlm"},
     },
     beat_schedule={
         "scan-certificate-expiry": {
@@ -48,6 +63,10 @@ celery_app.conf.update(
         "reap-stale-jobs": {
             "task": "app.workers.tasks.maintenance.reap_stale_jobs",
             "schedule": crontab(minute=0),
+        },
+        "poll-inbound-mailbox": {
+            "task": "app.workers.tasks.quotation_ingestion.poll_inbound_mailbox",
+            "schedule": 60.0,
         },
     },
 )
