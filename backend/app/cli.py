@@ -274,7 +274,14 @@ def _simple_pdf_bytes(lines: list[str]) -> bytes:
     return buf.getvalue()
 
 
-def _build_reply_email(*, from_addr: str, to_addr: str, subject: str, body: str, attachment: tuple[bytes, str, str, str] | None) -> EmailMessage:
+def _build_reply_email(
+    *, from_addr: str, to_addr: str, subject: str, body: str,
+    attachment: tuple[bytes, str, str, str] | None = None, attachments: list[tuple[bytes, str, str, str]] | None = None,
+) -> EmailMessage:
+    """`attachment` is a convenience for the single-attachment case;
+    `attachments` (scenario f: one email, several attachments -- one
+    submission, see docs/procurement-quotation-ingestion.md) takes a list
+    instead. Exactly one of the two should be given."""
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to_addr
@@ -282,8 +289,7 @@ def _build_reply_email(*, from_addr: str, to_addr: str, subject: str, body: str,
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
     msg.set_content(body)
-    if attachment is not None:
-        data, filename, maintype, subtype = attachment
+    for data, filename, maintype, subtype in (attachments or ([attachment] if attachment else [])):
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
     return msg
 
@@ -294,13 +300,16 @@ def _send_via_greenmail(msg: EmailMessage, *, envelope_to: str, host: str, port:
 
 
 async def simulate_quotes() -> None:
-    """DEV ONLY: sends five simulated vendor replies into GreenMail against
+    """DEV ONLY: sends six simulated vendor replies into GreenMail against
     a demo RFQ (created if none exists) -- (a) a correctly filled pricing
     sheet, (b) a PDF quote, (c) a reply from a non-matching sender, (d) mail
-    with no reply token, (e) a PDF containing a prompt-injection attempt --
-    then enqueues poll_inbound_mailbox immediately rather than waiting for
-    the beat schedule. Refuses outright if APP_ENV=production or if
-    IMAP_HOST isn't the recognized dev/test host -- see
+    with no reply token, (e) a PDF containing a prompt-injection attempt,
+    (f) one email with BOTH a filled pricing sheet AND a PDF attached
+    together (must become one submission, the sheet as primary, the PDF as
+    a linked supporting document -- never two competing quotes) -- then
+    enqueues poll_inbound_mailbox immediately rather than waiting for the
+    beat schedule. Refuses outright if APP_ENV=production or if IMAP_HOST
+    isn't the recognized dev/test host -- see
     app/workers/tasks/quotation_ingestion.py::_assert_dev_imap_host_is_safe,
     same fail-closed posture."""
     settings = get_settings()
@@ -370,6 +379,20 @@ async def simulate_quotes() -> None:
                     ]),
                     f"{rfq_ref}-quote-v2.pdf", "application", "pdf",
                 ),
+            ),
+        ),
+        (
+            "f_sheet_plus_pdf_one_submission",
+            _build_reply_email(
+                from_addr=vendor_email, to_addr=reply_address, subject=f"RE: {rfq_ref} - Quotation (final, signed)",
+                body="Final priced sheet plus our signed cover letter attached.",
+                attachments=[
+                    xlsx_attachment,
+                    (
+                        _simple_pdf_bytes([f"Signed cover letter for {rfq_ref}", "We confirm the attached pricing sheet is final."]),
+                        f"{rfq_ref}-cover-letter.pdf", "application", "pdf",
+                    ),
+                ],
             ),
         ),
     ]

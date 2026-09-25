@@ -79,7 +79,7 @@ bootstrap-keycloak:
 dev-token:
 	set -a; . deploy/.env; set +a; bash deploy/keycloak/dev-token.sh
 
-# DEV ONLY -- sends five simulated vendor quote replies into GreenMail
+# DEV ONLY -- sends six simulated vendor quote replies into GreenMail
 # against a demo RFQ (creating one if none exists yet) and enqueues an
 # immediate IMAP poll instead of waiting for celery-beat's 60s schedule.
 # Refuses outright if APP_ENV=production or IMAP_HOST isn't the recognized
