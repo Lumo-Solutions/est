@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/quotation_extraction.schema.json",
+  "title": "VendorQuotationExtraction",
+  "description": "Structured fields extracted verbatim from a vendor's quotation document (PDF, scanned image, or a spreadsheet that isn't our own pricing-sheet template) by the vision-language extraction step. This schema is a pure data-extraction contract: it has no field that identifies a BOQ line item, names an action, or changes any record's status -- matching a returned row to a BOQ line item is a separate, deterministic step (app/procurement/quotation_matching.py), never something the model decides. Every extracted value is 'proposed' and requires human review before use (see app/services/quotation_ingestion.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "currency": {
+      "type": ["string", "null"],
+      "description": "The 3-letter currency code the quotation is priced in, if stated or unambiguously inferable (e.g. a visible 'AED' or a dirham symbol). Null if not determinable."
+    },
+    "vat_inclusive": {
+      "type": ["boolean", "null"],
+      "description": "true if the document states prices include VAT, false if it states prices exclude VAT, null if this is not stated anywhere in the document. Never guess -- null means unknown, not false."
+    },
+    "line_items": {
+      "type": "array",
+      "description": "One entry per priced line item found in the document, in the order they appear.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "vendor_item_text": {
+            "type": ["string", "null"],
+            "description": "The item number/code exactly as printed next to this line, if any. Null if the document has no item numbering."
+          },
+          "vendor_description_text": {
+            "type": "string",
+            "description": "The item description exactly as printed, verbatim."
+          },
+          "unit_price": {
+            "type": ["number", "null"],
+            "description": "The unit rate for this line, if stated. Null if not stated or not legible -- never 0."
+          },
+          "quantity": {
+            "type": ["number", "null"],
+            "description": "The quantity for this line, if stated. Null if not stated."
+          },
+          "extended_price_stated": {
+            "type": ["number", "null"],
+            "description": "The line total (unit_price * quantity) if the vendor printed one explicitly. Null if not shown -- do not compute it yourself."
+          },
+          "remarks_text": {
+            "type": ["string", "null"],
+            "description": "Any remark, note, or qualification printed against this specific line. Null if none."
+          }
+        },
+        "required": ["vendor_description_text"]
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "description": "Document-wide exclusions, qualifications, or scope carve-outs found anywhere in the text (e.g. 'excludes dewatering', 'testing by others') -- not necessarily tied to one line item.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "flag_text": {
+            "type": "string",
+            "description": "A short paraphrase of the exclusion, e.g. 'Excludes dewatering'."
+          },
+          "source_quote_text": {
+            "type": "string",
+            "description": "The exact sentence or phrase from the document this was found in -- a verbatim citation, never paraphrased or invented."
+          }
+        },
+        "required": ["flag_text", "source_quote_text"]
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The model's own confidence in the overall extraction quality across all fields, from 0 (no reliable fields extracted) to 1 (all fields extracted with high certainty)."
+    }
+  },
+  "required": ["line_items", "exclusions", "confidence"]
+}

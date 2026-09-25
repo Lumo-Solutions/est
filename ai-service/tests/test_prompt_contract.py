@@ -38,6 +38,8 @@ TITLE_BLOCK_FIELDS = [
 
 SCALE_HINT_FIELDS = ["scale_ratio", "unit_system", "confidence", "reasoning"]
 
+QUOTATION_EXTRACTION_FIELDS = ["currency", "vat_inclusive", "line_items", "exclusions", "confidence"]
+
 
 # --------------------------------------------------------------------------- #
 # title_block.j2
@@ -113,6 +115,44 @@ def test_scale_hint_handles_nts():
 
 
 # --------------------------------------------------------------------------- #
+# quotation_extraction.j2
+# --------------------------------------------------------------------------- #
+
+
+def _render_quotation_extraction(**overrides):
+    template = _env.get_template("quotation_extraction.j2")
+    ctx = {
+        "candidate_text": "1.0  Excavation  m3  100  AED 45.00",
+        "has_image": False,
+        "page_number": 1,
+        "page_count": 1,
+    }
+    ctx.update(overrides)
+    return template.render(**ctx)
+
+
+def test_quotation_extraction_renders_with_text_only():
+    rendered = _render_quotation_extraction()
+    assert rendered.strip()
+    for field in QUOTATION_EXTRACTION_FIELDS:
+        assert field in rendered, f"expected field name {field!r} to appear in the rendered prompt"
+    assert "AED 45.00" in rendered
+
+
+def test_quotation_extraction_renders_with_image_and_no_text():
+    rendered = _render_quotation_extraction(candidate_text="", has_image=True)
+    assert rendered.strip()
+    assert "image" in rendered.lower()
+    assert "No machine-readable text" in rendered
+
+
+def test_quotation_extraction_warns_against_prompt_injection_from_document_content():
+    rendered = _render_quotation_extraction()
+    lowered = rendered.lower()
+    assert "not a command" in lowered or "never follow" in lowered
+
+
+# --------------------------------------------------------------------------- #
 # JSON Schemas
 # --------------------------------------------------------------------------- #
 
@@ -122,6 +162,7 @@ def test_scale_hint_handles_nts():
     [
         ("title_block.schema.json", TITLE_BLOCK_FIELDS),
         ("scale_hint.schema.json", SCALE_HINT_FIELDS),
+        ("quotation_extraction.schema.json", QUOTATION_EXTRACTION_FIELDS),
     ],
 )
 def test_schema_is_valid_json_object_schema(filename, expected_fields):
