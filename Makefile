@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -79,6 +79,15 @@ bootstrap-keycloak:
 dev-token:
 	set -a; . deploy/.env; set +a; bash deploy/keycloak/dev-token.sh
 
+# DEV ONLY -- sends five simulated vendor quote replies into GreenMail
+# against a demo RFQ (creating one if none exists yet) and enqueues an
+# immediate IMAP poll instead of waiting for celery-beat's 60s schedule.
+# Refuses outright if APP_ENV=production or IMAP_HOST isn't the recognized
+# dev host -- see app/cli.py::simulate_quotes. See
+# docs/procurement-quotation-ingestion.md for what each scenario exercises.
+dev-simulate-quotes:
+	$(COMPOSE) exec backend python -m app.cli simulate-quotes
+
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve
 # `seaweedfs` and may not have the `aws` CLI installed).
@@ -94,20 +103,31 @@ fmt:
 typecheck:
 	cd backend && mypy app
 
-test-unit:
-	cd backend && python -m pytest tests/unit -q
-
 # `cd backend && python -m pytest` (the obvious thing to do here) needs a
 # host Python matching backend/pyproject.toml's `>=3.12,<3.13` pin, plus
-# every `[project.optional-dependencies].dev` package (pytest,
-# testcontainers, ...) installed into it. On a fresh Windows dev machine
-# neither is guaranteed -- there is no requirement that Python 3.12
-# specifically is on PATH, and nothing here ever `pip install`s the dev
-# extras into whatever host Python exists. So instead this runs pytest
-# inside a throwaway `python:3.12-slim` container: matches the pinned
-# interpreter exactly regardless of host setup, and needs nothing besides
-# Docker (which is already required for the rest of this Makefile).
-#
+# every `[project.optional-dependencies].dev` package installed into it. On
+# a fresh Windows dev machine neither is guaranteed. So this runs pytest
+# inside a throwaway `python:3.12-slim` container instead: matches the
+# pinned interpreter exactly regardless of host setup, and needs nothing
+# besides Docker. tests/unit has no DB/Redis/Docker-socket dependency at
+# all (unlike test-integration below), so this needs no network/socket
+# mounts -- just backend/ and the sibling ai-service/ (app/takeoff/prompts.py
+# and app/procurement/prompts.py both resolve prompts/schemas relative to
+# the container root, same layout the real backend image uses -- see
+# backend/Dockerfile). Found and fixed while verifying Module C2: this
+# target previously just ran `cd backend && python -m pytest`, which only
+# ever worked by coincidence on a host Python that happened to have the
+# dev extras pre-installed.
+test-unit:
+	export MSYS_NO_PATHCONV=1; \
+	docker run --rm \
+	  -v "$(CURDIR)/backend:/workspace" \
+	  -v "$(CURDIR)/ai-service:/ai-service" \
+	  -v installtec-test-pip-cache:/root/.cache/pip \
+	  -w /workspace \
+	  python:3.12-slim \
+	  bash -c "pip install --quiet -e '.[dev]' && python -m pytest tests/unit -q"
+
 # tests/conftest.py's DB/Redis fixtures use `testcontainers` to spin up
 # their OWN separate, ephemeral containers (never docker-compose.test.yml's
 # services -- see that file's own port-policy comment), which is *why* the
