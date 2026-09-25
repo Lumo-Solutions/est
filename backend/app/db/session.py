@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.core.context import RequestContext, current_context
@@ -33,6 +34,28 @@ def get_migrator_engine() -> AsyncEngine:
     return create_async_engine(_normalize(settings.migrator_database_url), pool_pre_ping=True)
 
 
+@lru_cache
+def get_worker_engine() -> AsyncEngine:
+    """Separate engine for Celery task bodies only (via
+    app/workers/base.py::with_worker_session) -- NullPool, not pooled like
+    get_app_engine(). A worker task wraps its whole body in asyncio.run()
+    (app/workers/base.py::run_async), a fresh event loop per task, in a
+    long-lived prefork process that runs many tasks over its lifetime.
+    asyncpg connections are bound to the event loop that created them, so a
+    connection left idle in a *pooled* engine's pool by one task's
+    asyncio.run() gets reused under a *different* loop by the next task's
+    asyncio.run() -- SQLAlchemy's pool_pre_ping surfaces this immediately as
+    'Future attached to a different loop' on that next checkout. NullPool
+    means every checkout is a brand-new connection, so nothing ever
+    survives across a run_async() boundary. Found running Module C2's
+    `simulate-quotes` end to end against real Celery workers (never caught
+    by tests, which call task *bodies* directly against one already-open
+    session, or by the FastAPI web process's own use of get_app_engine(),
+    which keeps one event loop for its whole lifetime and never hits this)."""
+    settings = get_settings()
+    return create_async_engine(_normalize(settings.app_database_url), poolclass=NullPool)
+
+
 _app_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
@@ -59,9 +82,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 @asynccontextmanager
 async def session_scope(ctx: RequestContext) -> AsyncIterator[AsyncSession]:
     """Same transaction/RLS setup as get_session(), for callers outside
-    FastAPI's own dependency injection (Celery tasks via workers/base.py,
-    the OIDC callback route, beat jobs): `async with session_scope(ctx) as
-    session: ...`.
+    FastAPI's own dependency injection that share the caller's single,
+    long-lived event loop (the OIDC callback route, `python -m app.cli`
+    commands): `async with session_scope(ctx) as session: ...`. Celery task
+    bodies use worker_session_scope() instead, below -- see its docstring
+    for why a pooled engine isn't safe for something that wraps every call
+    in its own asyncio.run().
 
     This MUST be its own @asynccontextmanager-decorated generator, not a
     wrapper that drives a second async generator via manual
@@ -78,5 +104,26 @@ async def session_scope(ctx: RequestContext) -> AsyncIterator[AsyncSession]:
     reimplementing it.
     """
     async with _session_factory()() as session, session.begin():
+        await set_rls_context(session, ctx)
+        yield session
+
+
+_worker_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _worker_session_factory_fn() -> async_sessionmaker[AsyncSession]:
+    global _worker_session_factory
+    if _worker_session_factory is None:
+        _worker_session_factory = async_sessionmaker(bind=get_worker_engine(), expire_on_commit=False, autoflush=False)
+    return _worker_session_factory
+
+
+@asynccontextmanager
+async def worker_session_scope(ctx: RequestContext) -> AsyncIterator[AsyncSession]:
+    """Same shape as session_scope(), bound to get_worker_engine() (NullPool)
+    instead of get_app_engine() -- see that function's docstring. Used only
+    by app/workers/base.py::with_worker_session, i.e. every Celery task
+    body."""
+    async with _worker_session_factory_fn()() as session, session.begin():
         await set_rls_context(session, ctx)
         yield session

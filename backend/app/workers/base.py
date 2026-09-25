@@ -17,7 +17,7 @@ from typing import ParamSpec, TypeVar
 from uuid import UUID
 
 from app.core.context import RequestContext, reset_context, set_context, system_context
-from app.db.session import session_scope
+from app.db.session import worker_session_scope
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -49,10 +49,15 @@ def build_worker_context(
 
 async def with_worker_session(ctx: RequestContext, body: Callable[..., Awaitable[T]], *args: object) -> T:
     """Opens one RLS-context'd DB session for the duration of `body`,
-    mirroring app/db/session.py::get_session() for request code."""
+    mirroring app/db/session.py::get_session() for request code. Uses
+    worker_session_scope() (NullPool), not session_scope() -- see that
+    function's docstring: run_async() wraps every task body in its own
+    asyncio.run(), and a *pooled* engine's connections, bound to the event
+    loop that created them, don't survive across that boundary in a
+    long-lived (many-tasks-per-process) Celery worker."""
     token = set_context(ctx)
     try:
-        async with session_scope(ctx) as session:
+        async with worker_session_scope(ctx) as session:
             return await body(session, *args)
     finally:
         reset_context(token)
