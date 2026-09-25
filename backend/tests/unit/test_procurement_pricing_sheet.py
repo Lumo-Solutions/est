@@ -62,6 +62,28 @@ def test_item_columns_are_locked_rate_and_remarks_are_not():
         assert ws[f"{col}4"].protection.locked is False
 
 
+def test_row_id_column_is_hidden_locked_and_matches_boq_line_item_id():
+    """SRS change #1: the deterministic parser keys off this column, not row
+    position -- see app/procurement/pricing_sheet_parser.py."""
+    (data, _sha), _ = _build()
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["Pricing"]
+    assert ws.column_dimensions["G"].hidden is True
+    assert ws["G4"].value == str(_ITEMS[0].boq_line_item_id)
+    assert ws["G5"].value == str(_ITEMS[1].boq_line_item_id)
+    assert ws["G4"].protection.locked is True
+
+
+def test_currency_and_vat_header_cells_are_present_and_editable():
+    (data, _sha), _ = _build()
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["Pricing"]
+    assert ws["B2"].value == "AED"
+    assert ws["B2"].protection.locked is False
+    assert ws["E2"].value is None
+    assert ws["E2"].protection.locked is False
+
+
 def test_meta_sheet_is_hidden_and_maps_rows_to_boq_line_item_ids():
     (data, _sha), rfq_id = _build()
     wb = load_workbook(io.BytesIO(data))
