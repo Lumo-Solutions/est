@@ -89,6 +89,19 @@ class QuotationAttachment(NullableTenantEntity):
     inbound_email_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("inbound_emails.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # NULL until the email's attachments are triaged (app/workers/tasks/
+    # quotation_ingestion.py::_process_inbound_email_body). All attachments
+    # on one inbound email that produce a submission link to the SAME
+    # Quotation -- one email is one submission, not one Quotation per
+    # attachment -- with is_primary marking which one was actually
+    # extracted from (our pricing sheet if present, else the first accepted
+    # attachment); the rest are supporting documents (e.g. a signed PDF
+    # alongside the priced xlsx), never separately extracted as competing
+    # quotes.
+    quotation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type_declared: Mapped[str | None] = mapped_column(String(128), nullable=True)
     content_type_sniffed: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -104,14 +117,24 @@ class QuotationAttachment(NullableTenantEntity):
 
 
 class Quotation(TenantEntity):
-    """One vendor submission for one RFQ, parsed from one attachment.
+    """One vendor submission for one RFQ -- one per *inbound email*, not one
+    per attachment: if the email has several attachments (e.g. a priced
+    xlsx and a signed cover PDF), they all belong to this one Quotation
+    (QuotationAttachment.quotation_id), with source_attachment_id marking
+    which one was actually extracted from; the rest are supporting
+    documents, never separately extracted as competing quotes.
+
     Versioned per (rfq_id, vendor_id): a new reply creates a new row with
-    version_no += 1 and is_current=true (the previous current row's
-    is_current is flipped to false in the same transaction) -- it never
-    mutates or supersedes an earlier version's own line items, so an
-    already-accepted QuotationLineItem is never overwritten (SRS change #3).
-    A partial unique index (migration 0016) enforces exactly one
-    is_current=true row per (rfq_id, vendor_id)."""
+    version_no += 1. It only becomes is_current=true automatically when
+    doing so is safe -- never when it has zero extracted line items
+    (status NEEDS_REVIEW/EXTRACTION_EMPTY), and never when the existing
+    current version already has an accepted line item (that always requires
+    a reviewer to promote_quotation_version() explicitly, audited) -- see
+    app/workers/tasks/quotation_ingestion.py::_create_quotation_version. A
+    new version never mutates or supersedes an earlier version's own line
+    items either way, so an already-accepted QuotationLineItem is never
+    overwritten (SRS change #3). A partial unique index (migration 0016)
+    enforces at most one is_current=true row per (rfq_id, vendor_id)."""
 
     __tablename__ = "quotations"
     __table_args__ = (

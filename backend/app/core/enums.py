@@ -215,17 +215,28 @@ class QuotationExtractionMethod(StrEnum):
     VLM_IMAGE = "vlm_image"
     VLM_XLSX_OTHER = "vlm_xlsx_other"
     VLM_CSV = "vlm_csv"
+    # No attachment on the inbound email survived the safety check (or there
+    # were none at all but the email was auto-processed) -- a shell
+    # Quotation row records the submission for manual follow-up.
+    NONE = "none"
 
 
 class QuotationStatus(StrEnum):
     """Deliberately no ACCEPTED value -- acceptance is a per-line-item
-    decision (QuotationLineItemStatus), never a whole-quotation rollup. This
-    only ever moves to needs_review (the pricing sheet's row-id identity
-    check failed -- SRS change #1) or rejected (an explicit reviewer
-    action)."""
+    decision (QuotationLineItemStatus), never a whole-quotation rollup.
+    NEEDS_REVIEW: the pricing sheet's row-id identity check failed (SRS
+    change #1) -- content is untrustworthy, not just empty.
+    EXTRACTION_EMPTY: the extraction ran cleanly but found zero line items
+    (a blank/irrelevant document, or nothing the extractor could read).
+    Both NEEDS_REVIEW and EXTRACTION_EMPTY quotations never become
+    is_current automatically -- see
+    app/workers/tasks/quotation_ingestion.py::_create_quotation_version --
+    and require a reviewer to promote_quotation_version() explicitly if
+    they're ever meant to be treated as the active submission."""
 
     PROPOSED = "proposed"
     NEEDS_REVIEW = "needs_review"
+    EXTRACTION_EMPTY = "extraction_empty"
     REJECTED = "rejected"
 
 
