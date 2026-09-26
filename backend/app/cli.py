@@ -871,6 +871,63 @@ async def simulate_takeoff_pdf() -> None:
         assert len(reverted_rows) == 1, f"expected exactly one alignment_length_m row after revert, got {len(reverted_rows)}"
         print(f"after revert: scale_ratio={reverted.scale_ratio} alignment_length_m={reverted_rows[0].value}")
 
+    # Module B Phase 4b: trade classification, non-destructive override,
+    # split-pane traceability -- against the same sheet/measurement above.
+    from app.models.taxonomy import TradeNode
+
+    async with session_scope(sys_ctx) as session:
+        trade = (
+            await session.execute(select(TradeNode).where(TradeNode.tenant_id == tenant_id, TradeNode.code == "ROAD"))
+        ).scalar_one_or_none()
+        if trade is None:
+            trade = TradeNode(tenant_id=tenant_id, parent_id=None, code="ROAD", name="Roadworks", path="road")
+            session.add(trade)
+            await session.flush()
+        trade_id = trade.id
+
+    async with session_scope(sys_ctx) as session:
+        # drawing_layer_trade_mappings' write policy is lead_estimator+
+        # (config CRUD, matching boq_tolerances), narrower than the
+        # estimator+ operational tier everything else in this simulation
+        # uses -- seeded as a system actor here, same as the TradeNode
+        # just above, rather than inventing a throwaway lead_estimator
+        # RequestContext just for this one call.
+        mappings = await takeoff_service.replace_layer_trade_mappings(
+            session, sys_ctx, project_id, [{"layer_pattern": "ROAD-CL", "trade_node_id": trade_id}]
+        )
+        print(f"seeded {len(mappings)} drawing-layer-trade mapping(s): ROAD-CL -> Roadworks")
+
+    async with session_scope(sys_ctx) as session:
+        sheet = await takeoff_service.get_sheet(session, drawing_id, 0)
+        await takeoff_service.recompute_sheet_measurements(session, sheet)
+
+    async with session_scope(estimator_ctx) as session:
+        measurements = await takeoff_service.list_measurements(session, drawing_id, sheet.id)
+        measurement = next(m for m in measurements if m.kind == "alignment_length_m")
+        assert measurement.trade_node_id == trade_id, "trade classification did not resolve from the layer mapping"
+        print(f"trade classification resolved: measurement {measurement.id} -> trade_node_id={measurement.trade_node_id}")
+
+        override = await takeoff_service.override_measurement(
+            session, estimator_ctx, measurement.id, value=42.0, unit="m", note="manual QS correction for dev-sim"
+        )
+        refreshed = await takeoff_service.get_measurement(session, measurement.id)
+        assert abs(float(refreshed.effective_value) - 42.0) < 1e-6, refreshed.effective_value
+        print(f"override set: override_id={override.id} effective_value={refreshed.effective_value} (raw value={refreshed.value})")
+
+        reverted_measurement = await takeoff_service.revert_measurement_override(session, estimator_ctx, measurement.id)
+        assert reverted_measurement.override is None
+        print(f"override reverted: effective_value={reverted_measurement.effective_value} (back to the raw extractor value)")
+
+        # The synthetic line is drawn at (100, 700)-(200, 700) -- see
+        # _synthetic_alignment_pdf_bytes() above.
+        entities_all = await takeoff_service.list_drawing_entities_in_region(session, sheet.id)
+        entities_in_region = await takeoff_service.list_drawing_entities_in_region(session, sheet.id, bbox=(150.0, 690.0, 250.0, 710.0))
+        entities_outside = await takeoff_service.list_drawing_entities_in_region(session, sheet.id, bbox=(500.0, 500.0, 600.0, 600.0))
+        print(
+            f"traceability: {len(entities_all)} entities on sheet, {len(entities_in_region)} intersecting the "
+            f"queried region, {len(entities_outside)} intersecting a disjoint region (expected 0)"
+        )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")

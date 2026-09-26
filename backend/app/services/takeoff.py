@@ -10,13 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction, DrawingStatus
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.integrations.embeddings import get_embedder
 from app.integrations.s3 import presign_get_url, put_object_streaming
 from app.models.takeoff import (
     Drawing,
     DrawingEntity,
+    DrawingLayerTradeMapping,
     DrawingMeasurement,
+    DrawingMeasurementOverride,
     DrawingSheet,
     ExtractionJob,
     PdfLayerMappingRule,
@@ -58,6 +60,34 @@ def row_to_geometric_entity(row: DrawingEntity) -> GeometricEntity:
     )
 
 
+def _resolve_trade_node_id(layers: set[str], rules: list[DrawingLayerTradeMapping]) -> UUID | None:
+    """First rule (in a stable, deterministic order) whose layer_pattern is
+    a case-insensitive substring of any of the given layers -- never
+    guessed when nothing matches. Same "simple and predictable" matching
+    convention as AlignmentConfig.layer_hints."""
+    for rule in rules:
+        pattern = rule.layer_pattern.upper()
+        if any(pattern in layer.upper() for layer in layers):
+            return rule.trade_node_id
+    return None
+
+
+def _union_bbox(
+    entities_by_handle: dict[str, DrawingEntity], handles: list[str]
+) -> tuple[float, float, float, float] | None:
+    boxes = [
+        (e.bbox_min_x, e.bbox_min_y, e.bbox_max_x, e.bbox_max_y)
+        for h in handles
+        if (e := entities_by_handle.get(h)) is not None and e.bbox_min_x is not None
+    ]
+    if not boxes:
+        return None
+    return (
+        min(b[0] for b in boxes), min(b[1] for b in boxes),
+        max(b[2] for b in boxes), max(b[3] for b in boxes),
+    )
+
+
 async def recompute_sheet_measurements(session: AsyncSession, sheet: DrawingSheet) -> None:
     """Deletes and rebuilds one sheet's drawing_measurements from its
     currently-persisted drawing_entities geometry, using the sheet's
@@ -67,7 +97,17 @@ async def recompute_sheet_measurements(session: AsyncSession, sheet: DrawingShee
     calibration changes scale_ratio), so dependent measurements are never
     computed against a stale ratio (Module B Phase 4a). A no-op when
     TAKEOFF_PERSIST_GEOMETRY is off (nothing persisted to recompute from)
-    or the sheet has no geometry entities at all yet."""
+    or the sheet has no geometry entities at all yet.
+
+    Also resolves trade_node_id (against drawing_layer_trade_mappings) and
+    a denormalized bbox (union of source entities' own boxes) per
+    measurement -- Module B Phase 4b. The delete-then-reinsert here means
+    a measurement's active override (drawing_measurement_overrides,
+    ON DELETE CASCADE on measurement_id) does NOT survive a recompute: a
+    scale recalibration or re-extraction is exactly the kind of change
+    that can make a prior manual override's number stale too, so this is
+    a deliberate choice, not an oversight -- an estimator re-overrides
+    after a recompute rather than a stale number surviving it silently."""
     if not get_settings().takeoff_persist_geometry:
         return
 
@@ -92,16 +132,27 @@ async def recompute_sheet_measurements(session: AsyncSession, sheet: DrawingShee
         return
 
     entities = [row_to_geometric_entity(r) for r in rows]
+    entities_by_handle = {r.handle: r for r in rows if r.handle}
+    trade_rules = (
+        await session.execute(
+            select(DrawingLayerTradeMapping).where(DrawingLayerTradeMapping.project_id == sheet.project_id)
+        )
+    ).scalars().all()
+
     for extractor in get_registry().values():
         if not extractor.supports(sheet):
             continue
         for m in extractor.extract(sheet, entities):
+            layers = {entities_by_handle[h].layer for h in m.source_entity_ids if h in entities_by_handle and entities_by_handle[h].layer}
+            bbox = _union_bbox(entities_by_handle, m.source_entity_ids)
             session.add(
                 DrawingMeasurement(
                     tenant_id=sheet.tenant_id, drawing_id=sheet.drawing_id, sheet_id=sheet.id,
                     project_id=sheet.project_id, capability=extractor.capability, kind=m.kind, value=m.value,
                     unit=m.unit, confidence=m.confidence, source_entity_ids=m.source_entity_ids,
-                    extractor_metadata=m.metadata,
+                    extractor_metadata=m.metadata, trade_node_id=_resolve_trade_node_id(layers, trade_rules),
+                    bbox_min_x=bbox[0] if bbox else None, bbox_min_y=bbox[1] if bbox else None,
+                    bbox_max_x=bbox[2] if bbox else None, bbox_max_y=bbox[3] if bbox else None,
                 )
             )
     await session.flush()
@@ -374,5 +425,145 @@ async def replace_pdf_layer_mapping_rules(
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="pdf_layer_mapping_rules", entity_id=project_id,
         project_id=project_id, payload={"rule_count": len(created)},
+    )
+    return created
+
+
+# --------------------------------------------------------------------------
+# Module B Phase 4b: non-destructive overrides, traceability, trade
+# classification config
+# --------------------------------------------------------------------------
+
+
+async def get_measurement(session: AsyncSession, measurement_id: UUID) -> DrawingMeasurement:
+    result = await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.id == measurement_id))
+    measurement = result.scalar_one_or_none()
+    if measurement is None:
+        raise NotFoundError(f"Measurement {measurement_id} not found")
+    return measurement
+
+
+async def override_measurement(
+    session: AsyncSession, ctx: RequestContext, measurement_id: UUID, *, value: float, unit: str, note: str,
+) -> DrawingMeasurementOverride:
+    """Setting a new override while one is already active supersedes it:
+    the old row's reverted_at is set in the same transaction (never
+    deleted -- it stays as history), then the new row is inserted, so
+    migration 0023's "at most one active row" partial unique index is
+    never violated. `note` is required -- "why", not just "what" (Module
+    B Phase 4b's own non-negotiable per the plan doc)."""
+    if not note.strip():
+        raise ValidationAppError("An override note is required -- explain why, not just what")
+    measurement = await get_measurement(session, measurement_id)
+    existing = (
+        await session.execute(
+            select(DrawingMeasurementOverride).where(
+                DrawingMeasurementOverride.measurement_id == measurement_id,
+                DrawingMeasurementOverride.reverted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if existing is not None:
+        existing.reverted_by = ctx.user_id
+        existing.reverted_at = now
+        await session.flush()
+
+    override = DrawingMeasurementOverride(
+        tenant_id=measurement.tenant_id, measurement_id=measurement_id, project_id=measurement.project_id,
+        value=value, unit=unit, note=note, overridden_by=ctx.user_id, overridden_at=now,
+    )
+    session.add(override)
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="drawing_measurement", entity_id=measurement_id,
+        project_id=measurement.project_id,
+        payload={"override_value": float(value), "override_unit": unit, "note": note, "superseded_override_id": str(existing.id) if existing else None},
+    )
+    # See revert_measurement_override's comment -- `measurement.override`
+    # (viewonly, lazy="joined") won't pick up this new row on its own.
+    session.expire(measurement, ["override"])
+    return override
+
+
+async def revert_measurement_override(
+    session: AsyncSession, ctx: RequestContext, measurement_id: UUID,
+) -> DrawingMeasurement:
+    measurement = await get_measurement(session, measurement_id)
+    active = (
+        await session.execute(
+            select(DrawingMeasurementOverride).where(
+                DrawingMeasurementOverride.measurement_id == measurement_id,
+                DrawingMeasurementOverride.reverted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if active is None:
+        raise ConflictError(f"Measurement {measurement_id} has no active override to revert")
+    active.reverted_by = ctx.user_id
+    active.reverted_at = datetime.now(timezone.utc)
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="drawing_measurement", entity_id=measurement_id,
+        project_id=measurement.project_id, payload={"reverted_override_id": str(active.id)},
+    )
+    # `override` is a viewonly, lazy="joined" relationship (its primaryjoin
+    # filters reverted_at IS NULL) -- it was already loaded, stale, before
+    # `active.reverted_at` was just set above, and the identity map won't
+    # silently refresh an already-populated relationship just because a
+    # later SELECT re-fetches the same parent row. Expiring it first, then
+    # immediately re-fetching (the expired attribute is repopulated as
+    # part of that awaited SELECT's own JOIN, not a separate lazy load --
+    # a *bare* attribute access after expire(), with no subsequent await,
+    # is what raises MissingGreenlet under async SQLAlchemy; this avoids
+    # that by never touching `.override` without an awaited query first).
+    session.expire(measurement, ["override"])
+    return await get_measurement(session, measurement_id)
+
+
+async def list_drawing_entities_in_region(
+    session: AsyncSession, sheet_id: UUID,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> list[DrawingEntity]:
+    """For the split-pane traceability view -- all entities on a sheet, or
+    (with bbox) only those *intersecting* a queried region, not just those
+    fully contained by it, so a region straddling a boundary still returns
+    what overlaps it (Module B Phase 4b)."""
+    stmt = select(DrawingEntity).where(DrawingEntity.sheet_id == sheet_id)
+    if bbox is not None:
+        min_x, min_y, max_x, max_y = bbox
+        stmt = stmt.where(
+            DrawingEntity.bbox_min_x <= max_x, DrawingEntity.bbox_max_x >= min_x,
+            DrawingEntity.bbox_min_y <= max_y, DrawingEntity.bbox_max_y >= min_y,
+        )
+    result = await session.execute(stmt.order_by(DrawingEntity.entity_type, DrawingEntity.handle))
+    return list(result.scalars().all())
+
+
+async def list_layer_trade_mappings(session: AsyncSession, project_id: UUID) -> list[DrawingLayerTradeMapping]:
+    result = await session.execute(
+        select(DrawingLayerTradeMapping)
+        .where(DrawingLayerTradeMapping.project_id == project_id)
+        .order_by(DrawingLayerTradeMapping.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def replace_layer_trade_mappings(
+    session: AsyncSession, ctx: RequestContext, project_id: UUID, mappings: list[dict],
+) -> list[DrawingLayerTradeMapping]:
+    """Whole-set replace, same reasoning as replace_pdf_layer_mapping_rules
+    above -- small project-scoped config, edited as a unit."""
+    await assert_can_see_project(session, ctx, project_id)
+    await session.execute(sa_delete(DrawingLayerTradeMapping).where(DrawingLayerTradeMapping.project_id == project_id))
+    created = []
+    for mapping in mappings:
+        row = DrawingLayerTradeMapping(tenant_id=ctx.tenant_id, project_id=project_id, **mapping)
+        session.add(row)
+        created.append(row)
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="drawing_layer_trade_mappings", entity_id=project_id,
+        project_id=project_id, payload={"mapping_count": len(created)},
     )
     return created

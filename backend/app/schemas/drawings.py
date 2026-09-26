@@ -72,6 +72,12 @@ class DrawingMeasurementOut(ORMModel):
     source_entity_ids: list[str]
     extractor_metadata: dict | None
     created_at: datetime
+    trade_node_id: UUID | None = None
+    bbox_min_x: float | None = None
+    bbox_min_y: float | None = None
+    bbox_max_x: float | None = None
+    bbox_max_y: float | None = None
+    effective_value: float
 
 
 class SheetSearchQuery(BaseModel):
@@ -122,3 +128,54 @@ class SheetScaleCalibrationOut(ORMModel):
     set_by: UUID | None
     set_at: datetime
     note: str | None
+
+
+# --------------------------------------------------------------------------
+# Module B Phase 4b
+# --------------------------------------------------------------------------
+
+
+class MeasurementOverrideIn(BaseModel):
+    value: float
+    unit: str
+    note: str  # required -- "why", not just "what"
+
+
+class MeasurementOverrideOut(ORMModel):
+    id: UUID
+    measurement_id: UUID
+    value: float
+    unit: str
+    note: str
+    overridden_by: UUID | None
+    overridden_at: datetime
+    reverted_by: UUID | None
+    reverted_at: datetime | None
+
+
+class DrawingEntityOut(ORMModel):
+    id: UUID
+    sheet_id: UUID
+    source: str
+    entity_type: str
+    layer: str | None
+    block_name: str | None
+    text_value: str | None
+    bbox_min_x: float | None
+    bbox_min_y: float | None
+    bbox_max_x: float | None
+    bbox_max_y: float | None
+    geometry: dict | None
+    handle: str | None
+
+
+class DrawingLayerTradeMappingIn(BaseModel):
+    layer_pattern: str
+    trade_node_id: UUID
+
+
+class DrawingLayerTradeMappingOut(ORMModel):
+    id: UUID
+    project_id: UUID
+    layer_pattern: str
+    trade_node_id: UUID

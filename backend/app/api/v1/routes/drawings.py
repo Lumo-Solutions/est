@@ -12,11 +12,16 @@ from app.core.context import RequestContext
 from app.core.enums import Role
 from app.core.errors import ValidationAppError
 from app.schemas.drawings import (
+    DrawingEntityOut,
+    DrawingLayerTradeMappingIn,
+    DrawingLayerTradeMappingOut,
     DrawingMeasurementOut,
     DrawingOut,
     DrawingSheetOut,
     ExtractionJobOut,
     ManualScaleCalibration,
+    MeasurementOverrideIn,
+    MeasurementOverrideOut,
     PdfLayerMappingRuleIn,
     PdfLayerMappingRuleOut,
     SheetScaleCalibrationOut,
@@ -28,6 +33,10 @@ from app.services import takeoff as takeoff_service
 router = APIRouter(tags=["takeoff"])
 
 _UPLOAD_ROLES = (Role.ESTIMATOR.value, Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
+# Config CRUD (which layer maps to which trade) -- same role set as
+# boq_tolerances' own (app/api/v1/routes/boq.py::_STRUCTURE_ROLES),
+# not the operational _UPLOAD_ROLES above.
+_TRADE_MAPPING_ROLES = (Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.MANAGING_DIRECTOR.value)
 _ALLOWED_CONTENT_TYPES = {"application/pdf", "application/dxf", "image/vnd.dxf"}
 
 
@@ -166,3 +175,70 @@ async def search_sheets_endpoint(
 ) -> list[SheetSearchResult]:
     rows = await takeoff_service.search_sheets(session, project_id, data.query, data.top_k)
     return [SheetSearchResult(**row) for row in rows]
+
+
+# --------------------------------------------------------------------------
+# Module B Phase 4b: non-destructive overrides, traceability, trade
+# classification config
+# --------------------------------------------------------------------------
+
+
+@router.post("/drawing-measurements/{measurement_id}/override", response_model=MeasurementOverrideOut)
+async def override_measurement_endpoint(
+    measurement_id: UUID,
+    data: MeasurementOverrideIn,
+    ctx: RequestContext = Depends(require_roles(*_UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> MeasurementOverrideOut:
+    override = await takeoff_service.override_measurement(
+        session, ctx, measurement_id, value=data.value, unit=data.unit, note=data.note
+    )
+    return MeasurementOverrideOut.model_validate(override)
+
+
+@router.post("/drawing-measurements/{measurement_id}/override/revert", response_model=DrawingMeasurementOut)
+async def revert_measurement_override_endpoint(
+    measurement_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> DrawingMeasurementOut:
+    measurement = await takeoff_service.revert_measurement_override(session, ctx, measurement_id)
+    return DrawingMeasurementOut.model_validate(measurement)
+
+
+@router.get("/drawing-sheets/{sheet_id}/entities", response_model=list[DrawingEntityOut])
+async def list_drawing_entities_endpoint(
+    sheet_id: UUID,
+    bbox_min_x: float | None = None,
+    bbox_min_y: float | None = None,
+    bbox_max_x: float | None = None,
+    bbox_max_y: float | None = None,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[DrawingEntityOut]:
+    bbox = None
+    if None not in (bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y):
+        bbox = (bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y)
+    entities = await takeoff_service.list_drawing_entities_in_region(session, sheet_id, bbox)
+    return [DrawingEntityOut.model_validate(e) for e in entities]
+
+
+@router.put("/projects/{project_id}/drawing-layer-trade-mappings", response_model=list[DrawingLayerTradeMappingOut])
+async def replace_drawing_layer_trade_mappings_endpoint(
+    project_id: UUID,
+    data: list[DrawingLayerTradeMappingIn],
+    ctx: RequestContext = Depends(require_roles(*_TRADE_MAPPING_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> list[DrawingLayerTradeMappingOut]:
+    mappings = await takeoff_service.replace_layer_trade_mappings(
+        session, ctx, project_id, [m.model_dump() for m in data]
+    )
+    return [DrawingLayerTradeMappingOut.model_validate(m) for m in mappings]
+
+
+@router.get("/projects/{project_id}/drawing-layer-trade-mappings", response_model=list[DrawingLayerTradeMappingOut])
+async def list_drawing_layer_trade_mappings_endpoint(
+    project_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[DrawingLayerTradeMappingOut]:
+    mappings = await takeoff_service.list_layer_trade_mappings(session, project_id)
+    return [DrawingLayerTradeMappingOut.model_validate(m) for m in mappings]

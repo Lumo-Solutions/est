@@ -139,10 +139,11 @@ async def list_boq_tolerances_endpoint(
 async def list_unlinked_measurements_endpoint(
     project_id: UUID,
     drawing_id: UUID | None = None,
+    trade_node_id: UUID | None = None,
     ctx: RequestContext = CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> list[LinkedMeasurementOut]:
-    measurements = await boq_service.list_unlinked_measurements(session, project_id, drawing_id)
+    measurements = await boq_service.list_unlinked_measurements(session, project_id, drawing_id, trade_node_id)
     return [LinkedMeasurementOut.model_validate(m) for m in measurements]
 
 
