@@ -135,7 +135,7 @@ async def _apply_reconciliation(session: AsyncSession, ctx: RequestContext, item
         note_override: str | None = None
     else:
         aggregated = aggregate_measurement_values(
-            item.uom, [(float(m.value), m.unit) for m in measurements]
+            item.uom, [(float(m.effective_value), m.unit) for m in measurements]
         )
         if aggregated is None:
             measurement_value, measurement_unit = None, None
@@ -386,7 +386,7 @@ async def list_tolerances(session: AsyncSession, project_id: UUID) -> list[BoqTo
 
 
 async def list_unlinked_measurements(
-    session: AsyncSession, project_id: UUID, drawing_id: UUID | None = None
+    session: AsyncSession, project_id: UUID, drawing_id: UUID | None = None, trade_node_id: UUID | None = None
 ) -> list[DrawingMeasurement]:
     """Measurements in this project that no boq_line_item_measurements row
     references at all -- "possible missed scope": the AI takeoff found
@@ -394,15 +394,13 @@ async def list_unlinked_measurements(
     app/api/v1/routes/drawings.py's GET .../measurements (which lists
     everything, linked or not).
 
-    No trade filter here (unlike the ask this was scoped against) --
-    drawing_measurements has no trade classification of its own (only
-    boq_line_items does, via trade_node_id, for tolerance lookups -- see
-    BoqTolerance), and a measurement with no BOQ line linking to it by
-    definition can't inherit one from a line item either. Mapping an
-    extractor `capability` (alignment/corridor_area/trench_prismoidal_
-    volume/pipe_network_topology) to a trade would need a real convention
-    this codebase doesn't have yet -- not invented here; see
-    docs/boq-reconciliation.md.
+    `trade_node_id` filters against DrawingMeasurement's own trade
+    classification (Module B Phase 4b: drawing_layer_trade_mappings,
+    resolved from source-entity layers at recompute time) -- this
+    docstring used to name that filter as a real gap because
+    drawing_measurements had no trade classification of its own at all;
+    it does now, so this is a straightforward WHERE addition, no design
+    change needed here.
     """
     linked_ids = select(BoqLineItemMeasurement.measurement_id)
     stmt = select(DrawingMeasurement).where(
@@ -410,5 +408,7 @@ async def list_unlinked_measurements(
     )
     if drawing_id is not None:
         stmt = stmt.where(DrawingMeasurement.drawing_id == drawing_id)
+    if trade_node_id is not None:
+        stmt = stmt.where(DrawingMeasurement.trade_node_id == trade_node_id)
     result = await session.execute(stmt.order_by(DrawingMeasurement.drawing_id, DrawingMeasurement.sheet_id))
     return list(result.scalars().all())

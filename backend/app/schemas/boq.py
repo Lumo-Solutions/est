@@ -51,6 +51,8 @@ class LinkedMeasurementOut(ORMModel):
     value: float
     unit: str
     confidence: float
+    trade_node_id: UUID | None = None
+    effective_value: float
 
 
 class BoqToleranceSet(BaseModel):

@@ -14,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
     DrawingKind,
@@ -137,6 +137,38 @@ class DrawingMeasurement(TenantEntity):
     confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
     source_entity_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     extractor_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Module B Phase 4b: resolved from source entities' layers against
+    # drawing_layer_trade_mappings at creation/recompute time (first
+    # matching pattern wins; no match leaves this NULL -- never guessed).
+    trade_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade_nodes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Denormalized union of source_entity_ids' own bboxes, computed once
+    # at creation/recompute -- lets the split pane render a measurement's
+    # extent without a join back through DrawingEntity for the common case.
+    bbox_min_x: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bbox_min_y: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bbox_max_x: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bbox_max_y: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+
+    # The active override, if any (migration 0023) -- see DrawingMeasurementOverride.
+    # Same 1:1-via-separate-table-with-a-looser-write-policy pattern as
+    # BoqLineItem.reconciliation (app/models/boq.py).
+    override: Mapped[DrawingMeasurementOverride | None] = relationship(
+        "DrawingMeasurementOverride", uselist=False, lazy="joined",
+        primaryjoin="and_(DrawingMeasurement.id == DrawingMeasurementOverride.measurement_id, "
+        "DrawingMeasurementOverride.reverted_at.is_(None))",
+        viewonly=True,
+    )
+
+    @property
+    def effective_value(self) -> float:
+        """The active override's value if one exists, else the
+        extractor-computed value -- app/boq/reconciliation.py sums this,
+        not `value` directly, so an override actually changes BOQ
+        reconciliation (the one behavioural ripple this phase's plan
+        calls out)."""
+        return self.override.value if self.override is not None else self.value
 
 
 class SheetChunk(TenantEntity):
@@ -228,3 +260,59 @@ class SheetScaleCalibration(TenantEntity):
     set_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     set_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DrawingMeasurementOverride(TenantEntity):
+    """Module B Phase 4b: one row per override *event* -- never deleted,
+    only reverted (reverted_by/reverted_at set, row kept) -- so the row
+    itself is the audit trail, same idea as SheetScaleCalibration above
+    but with an explicit revert flag instead of always-append-a-new-row,
+    since "was this ever overridden and by whom" needs a yes/no per
+    measurement, not just a latest-wins history. At most one row per
+    measurement has reverted_at IS NULL (migration 0023's partial unique
+    index) -- setting a new override while one is active supersedes it
+    (the old row's reverted_at is set in the same transaction, see
+    app.services.takeoff::override_measurement), never violates that
+    index. Own (estimator+) write policy, looser than drawing_measurements'
+    extractor-owned one -- same split as BoqLineItemReconciliation off
+    boq_line_items (app/models/boq.py)."""
+
+    __tablename__ = "drawing_measurement_overrides"
+
+    measurement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawing_measurements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    value: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    overridden_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    overridden_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    reverted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reverted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class DrawingLayerTradeMapping(TenantEntity):
+    """Module B Phase 4b: project-scoped mapping from a layer-name
+    substring (matched case-insensitively against GeometricEntity.layer,
+    same "simple and predictable" convention as AlignmentConfig.
+    layer_hints) to a trade_node_id, used to resolve
+    DrawingMeasurement.trade_node_id at creation/recompute time (first
+    matching pattern wins; no match leaves it NULL). Config-CRUD write
+    policy (lead_estimator+, migration 0023) mirrors BoqTolerance's own,
+    not drawing_measurement_overrides' operational estimator+ one."""
+
+    __tablename__ = "drawing_layer_trade_mappings"
+    __table_args__ = (
+        UniqueConstraint("project_id", "layer_pattern", name="uq_drawing_layer_trade_mappings_project_pattern"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    layer_pattern: Mapped[str] = mapped_column(String(128), nullable=False)
+    trade_node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade_nodes.id", ondelete="CASCADE"), nullable=False
+    )
