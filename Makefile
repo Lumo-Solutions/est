@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -98,6 +98,11 @@ dev-simulate-settlement:
 # see app/cli.py::simulate_takeoff_pdf and docs/module-b-phase4-plan.md §4a).
 dev-simulate-takeoff-pdf:
 	$(COMPOSE) exec backend python -m app.cli simulate-takeoff-pdf
+
+# Module B Phase 4c end to end -- typology cluster detect/confirm/rollup
+# against a real 2-sheet synthetic PDF (see app/cli.py::simulate_typology_pdf).
+dev-simulate-typology-pdf:
+	$(COMPOSE) exec backend python -m app.cli simulate-typology-pdf
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve
