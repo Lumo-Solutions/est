@@ -333,3 +333,182 @@ export interface FeedbackCreate {
   target_id: string
   outcome: FeedbackOutcome
 }
+
+// Mirrors backend/app/schemas/procurement.py.
+export interface ProcurementPackageCreate {
+  name: string
+  trade_node_id?: string | null
+  due_at?: string | null
+  notes?: string | null
+}
+
+export interface ProcurementPackageOut {
+  id: string
+  project_id: string
+  trade_node_id: string | null
+  name: string
+  status: string
+  due_at: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface MatchedVendorOut {
+  vendor_id: string
+  legal_name: string
+  primary_email: string | null
+  emirate: string | null
+  country: string | null
+  eligible: boolean
+  ineligible_reason: string | null
+  service_regions: string[]
+}
+
+export interface RfqCreateRequest {
+  vendor_ids: string[]
+  due_at?: string | null
+  override_reason?: string | null
+}
+
+export interface RfqOut {
+  id: string
+  package_id: string
+  project_id: string
+  vendor_id: string
+  vendor_contact_id: string | null
+  rfq_ref: string | null
+  status: string
+  due_at: string | null
+  is_override: boolean
+  override_reason: string | null
+  message_id: string | null
+  dispatch_attempts: number
+  dispatch_error: string | null
+  queued_at: string | null
+  sent_at: string | null
+  created_at: string
+}
+
+// Mirrors backend/app/schemas/quotation_ingestion.py.
+export interface InboundEmailOut {
+  id: string
+  tenant_id: string | null
+  rfq_id: string | null
+  from_address: string
+  from_domain: string
+  to_address: string
+  subject: string | null
+  received_at: string
+  match_status: string
+  needs_review: boolean
+  review_reasons: string[]
+  spf_result: string
+  dkim_result: string
+  dmarc_result: string
+  raw_object_key: string
+  raw_sha256: string
+  review_status: string
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
+  created_at: string
+}
+
+export interface QuotationOut {
+  id: string
+  rfq_id: string
+  vendor_id: string
+  package_id: string
+  project_id: string
+  extraction_method: string
+  version_no: number
+  is_current: boolean
+  currency: string | null
+  vat_inclusive: boolean | null
+  submitted_at: string
+  is_late: boolean
+  status: string
+  stated_total: number | null
+  total_mismatch: boolean
+  fx_rate_to_base: number | null
+  fx_rate_date: string | null
+  created_at: string
+}
+
+export interface QuotationLineItemOut {
+  id: string
+  quotation_id: string
+  boq_line_item_id: string | null
+  vendor_item_text: string | null
+  vendor_description_text: string | null
+  unit_price: number | null
+  quantity: number | null
+  extended_price_stated: number | null
+  extended_price_computed: number | null
+  arithmetic_mismatch: boolean
+  quantity_mismatch: boolean
+  vendor_uom: string | null
+  uom_mismatch: boolean
+  confidence: number
+  source: string
+  match_method: string | null
+  remarks_text: string | null
+  status: string
+  accepted_by: string | null
+  accepted_at: string | null
+}
+
+export interface QuotationExclusionFlagOut {
+  id: string
+  quotation_id: string
+  line_item_id: string | null
+  flag_text: string
+  source_quote_text: string
+  source_location: string | null
+  citation_verified: boolean
+  confidence: number
+  status: string
+  reviewed_by: string | null
+  reviewed_at: string | null
+}
+
+export interface BidLevelingCellOut {
+  quotation_id: string
+  vendor_id: string
+  unit_price: number
+  currency: string
+  vat_inclusive: boolean
+  confidence: number
+  arithmetic_mismatch: boolean
+  quantity_mismatch: boolean
+  normalized_unit_price: number | null
+  uom_mismatch: boolean
+}
+
+export interface BidLevelingRowOut {
+  boq_line_item_id: string
+  cells: BidLevelingCellOut[]
+}
+
+export interface QuotationTotalOut {
+  quotation_id: string
+  vendor_id: string
+  stated_total: number | null
+  total_mismatch: boolean
+}
+
+export interface QuotationFxRateSet {
+  fx_rate_to_base: number
+  fx_rate_date: string
+}
+
+export interface ResolveInboundTenantRequest {
+  tenant_id: string
+  note: string
+}
+
+export interface AttachInboundEmailRequest {
+  rfq_id: string
+  reason: string
+}

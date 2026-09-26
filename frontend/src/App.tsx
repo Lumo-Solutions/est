@@ -3,11 +3,15 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
+import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
+import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
+import { QuarantineQueuePage } from './pages/QuarantineQueuePage'
+import { QuoteReviewPage } from './pages/QuoteReviewPage'
 import { SheetIndexPage } from './pages/SheetIndexPage'
 import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 import { TypologyPage } from './pages/TypologyPage'
@@ -31,22 +35,10 @@ function AppRoutes() {
         <Route path="/projects/:projectId/typology" element={<TypologyPage />} />
         <Route path="/projects/:projectId/boq/import" element={<BoqImportWizardPage />} />
         <Route path="/projects/:projectId/boq" element={<BoqReconciliationPage />} />
-        <Route
-          path="/projects/:projectId/procurement/packages"
-          element={<PlaceholderPage title="Packages and RFQs" phase="8d" />}
-        />
-        <Route
-          path="/projects/:projectId/procurement/quarantine"
-          element={<PlaceholderPage title="Quarantine and review queue" phase="8d" />}
-        />
-        <Route
-          path="/projects/:projectId/procurement/quotes"
-          element={<PlaceholderPage title="Quote review and acceptance" phase="8d" />}
-        />
-        <Route
-          path="/projects/:projectId/procurement/bid-leveling"
-          element={<PlaceholderPage title="Bid-leveling matrix" phase="8d" />}
-        />
+        <Route path="/projects/:projectId/procurement/packages" element={<ProcurementPackagesPage />} />
+        <Route path="/projects/:projectId/procurement/quarantine" element={<QuarantineQueuePage />} />
+        <Route path="/projects/:projectId/procurement/quotes" element={<QuoteReviewPage />} />
+        <Route path="/projects/:projectId/procurement/bid-leveling" element={<BidLevelingPage />} />
         <Route
           path="/projects/:projectId/settlement"
           element={<PlaceholderPage title="Settlement cockpit" phase="8e" />}
