@@ -34,6 +34,7 @@ from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier
 from app.models.prequal import Authority, CertificateType
 from app.models.procurement import ProcurementPackage, Rfq
 from app.models.quotation_ingestion import Quotation, QuotationLineItem
+from app.models.settlement import SettlementReasonCode
 from app.models.taxonomy import TradeNode
 from app.models.tenancy import Project, ProjectMember, Tenant
 from app.models.vendors import Vendor, VendorContact, VendorTrade
@@ -89,6 +90,17 @@ _DEFAULT_APPROVAL_TIERS = [
 _BID_SUBMISSION_APPROVAL_TIERS = [
     (1, 0, 2_000_000.00, None, "bd_director"),
     (2, 2_000_000.01, None, 8, "managing_director"),
+]
+
+# Module D2: starter win/loss reason codes -- configurable data, not a
+# hardcoded enum (see app/models/settlement.py::SettlementReasonCode).
+_DEFAULT_SETTLEMENT_REASON_CODES = [
+    ("price", "Price"),
+    ("technical", "Technical/scope fit"),
+    ("relationship", "Client relationship"),
+    ("timeline", "Programme/timeline"),
+    ("scope", "Scope change"),
+    ("other", "Other"),
 ]
 
 
@@ -179,6 +191,13 @@ async def seed(tenant_slug: str) -> None:
                         max_amount=max_amount, max_margin_pct=max_margin_pct, required_role=role,
                     )
                 )
+
+        for code, label in _DEFAULT_SETTLEMENT_REASON_CODES:
+            existing_code = await session.execute(
+                select(SettlementReasonCode).where(SettlementReasonCode.tenant_id == tenant_id, SettlementReasonCode.code == code)
+            )
+            if existing_code.scalar_one_or_none() is None:
+                session.add(SettlementReasonCode(tenant_id=tenant_id, code=code, label=label))
 
         await session.flush()
     print(f"Seeded demo data for tenant '{tenant_slug}' ({tenant_id}).")
@@ -643,6 +662,24 @@ async def simulate_settlement() -> None:
             session, bd2_ctx, settlement_id, approve=True, note="approved by a different bd_director"
         )
         print(f"decided by a different bd_director: status={settlement.status}")
+
+    # Module D2: export (leak-free, generated) + win/loss, now that the
+    # settlement is approved.
+    async with session_scope(lead_ctx) as session:
+        from app.schemas.settlement import ExportRequest, OutcomeRequest
+
+        file_bytes, sha256, filename = await settlement_service.export_settlement(
+            session, lead_ctx, settlement_id, ExportRequest(include_vat=True, vat_pct=5.0)
+        )
+        leak_markers = ["45.50", "quotation_line"]
+        leaked = [m for m in leak_markers if m.encode() in file_bytes]
+        print(f"exported {filename} ({len(file_bytes)} bytes), sha256={sha256}, leak_scan={'CLEAN' if not leaked else leaked}")
+
+    async with session_scope(bd2_ctx) as session:
+        won = await settlement_service.record_outcome(
+            session, bd2_ctx, settlement_id, OutcomeRequest(outcome="won", note="D1/D2 simulation")
+        )
+        print(f"recorded outcome: status={won.status} our_price={won.outcome_our_price}")
 
 
 def main() -> None:
