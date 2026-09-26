@@ -196,3 +196,50 @@ def test_vat_no_is_parsed_as_false():
     result = _parse(_build_reply(fill))
     assert result.ok
     assert result.vat_inclusive is False
+
+
+# --------------------------------------------------------------------------
+# dump_workbook_text (Module C Phase 6: row-reference markers for exclusion
+# citations against a vendor spreadsheet that isn't our own template)
+# --------------------------------------------------------------------------
+
+
+def test_dump_workbook_text_prefixes_each_row_with_a_sheet_row_marker():
+    from openpyxl import Workbook
+
+    from app.procurement.pricing_sheet_parser import dump_workbook_text
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Pricing"
+    ws["A1"] = "Item"
+    ws["B1"] = "Description"
+    ws["A2"] = "1.0"
+    ws["B2"] = "Excavation, excludes dewatering"
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    text = dump_workbook_text(buf.getvalue())
+    lines = text.splitlines()
+    assert lines[0].startswith("Pricing!row1:\t")
+    assert lines[1].startswith("Pricing!row2:\t")
+    assert "Excavation, excludes dewatering" in lines[1]
+
+
+def test_dump_workbook_text_skips_fully_empty_rows_without_breaking_numbering():
+    from openpyxl import Workbook
+
+    from app.procurement.pricing_sheet_parser import dump_workbook_text
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "first"
+    # row 2 intentionally left empty
+    ws["A3"] = "third"
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    text = dump_workbook_text(buf.getvalue())
+    lines = text.splitlines()
+    assert lines == ["Sheet1!row1:\tfirst", "Sheet1!row3:\tthird"]
