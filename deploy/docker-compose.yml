@@ -493,8 +493,6 @@ services:
     networks: [installtec]
 
   frontend:
-    # Skipped by default until frontend/ exists; enable with `--profile frontend`.
-    profiles: ["frontend"]
     build: ../frontend
     container_name: installtec_frontend
     ports:
