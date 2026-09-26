@@ -23,7 +23,7 @@ from app.takeoff.geometry.geometry_math import (
     shoelace_area,
     stitch_chains,
 )
-from app.takeoff.geometry.units import meters_per_unit
+from app.takeoff.geometry.units import sheet_scale_factor
 
 
 def _sheet_units(sheet: object) -> str:
@@ -70,7 +70,7 @@ class AlignmentExtractor:
 
     def extract(self, sheet: object, entities: list[GeometricEntity]) -> list[Measurement]:
         unit = _sheet_units(sheet)
-        factor = meters_per_unit(unit)
+        factor = sheet_scale_factor(unit, getattr(sheet, "scale_ratio", None))
         confidence = 1.0 if factor is not None else 0.3
         native_tolerance = self.config.snap_tolerance_m / factor if factor else self.config.snap_tolerance_m
 
@@ -147,7 +147,7 @@ class CorridorAreaExtractor:
 
     def extract(self, sheet: object, entities: list[GeometricEntity]) -> list[Measurement]:
         unit = _sheet_units(sheet)
-        factor = meters_per_unit(unit)
+        factor = sheet_scale_factor(unit, getattr(sheet, "scale_ratio", None))
         # Lower baseline confidence than AlignmentExtractor: pairing sides
         # by layer-name suffix is a heuristic on top of an already-heuristic
         # layer match, not a direct read of the geometry.

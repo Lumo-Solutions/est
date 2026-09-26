@@ -80,6 +80,10 @@ class DrawingSheet(TenantEntity):
     extraction_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     vlm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     vlm_raw: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Module B Phase 4a: set when two signals confident enough to trust
+    # (>=0.5) disagree by more than 10% -- see app/takeoff/scale.py::
+    # estimate_scale. Surfaced to a reviewer, never auto-resolved.
+    scale_disagreement: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class DrawingEntity(TenantEntity):
@@ -180,3 +184,47 @@ class ExtractionJob(TenantEntity):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class PdfLayerMappingRule(TenantEntity):
+    """Module B Phase 4a: PDFs have no layers, so app.takeoff.pdf::
+    index_pdf_geometry() synthesizes GeometricEntity.layer from stroke
+    colour / line width / dash pattern / (best-effort) OCG name via this
+    project-scoped, ordered rule set. See docs/module-b-phase4-plan.md §4a
+    and app.takeoff.pdf::PdfLayerRule (the DB-free dataclass this mirrors)."""
+
+    __tablename__ = "pdf_layer_mapping_rules"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_layer: Mapped[str] = mapped_column(String(128), nullable=False)
+    stroke_color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    min_line_width: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
+    max_line_width: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
+    dash_pattern: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ocg_name_contains: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class SheetScaleCalibration(TenantEntity):
+    """Module B Phase 4a: append-only history of every scale change on a
+    sheet -- auto-detected (app.takeoff.scale::estimate_scale) or manual
+    two-point (app.services.takeoff::set_manual_scale) -- so a reviewer
+    can see, and a revert can restore, what auto-detection originally
+    found. DrawingSheet.scale_ratio/scale_source/scale_confidence always
+    mirror the latest row here; this table is the history, not a
+    replacement for those current-value columns."""
+
+    __tablename__ = "sheet_scale_calibrations"
+
+    sheet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawing_sheets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    ratio: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
+    set_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    set_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
