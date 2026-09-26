@@ -1218,6 +1218,131 @@ async def simulate_semantic_matching() -> None:
             print("no embedding on the BOQ line item (degraded path) -- feedback recording would be a no-op, skipped")
 
 
+async def simulate_module_e_schema() -> None:
+    """DEV ONLY: Module E Phase 1 end to end against the real dev stack.
+    This phase is schema-and-RLS-only (no workflow service layer, no
+    create endpoints -- see docs/module-e-schema-design.md), so unlike
+    every other simulate-* command this one seeds rows by direct ORM
+    construction (exactly how a later phase's real workflow, or this
+    command, is expected to write them today) rather than calling a
+    service function that doesn't exist yet -- then reads them back
+    through the actual module_e_service read functions the new GET
+    endpoints use, to prove the model end to end. Reuses the most
+    recently WON settlement in the demo tenant (from a prior
+    simulate-settlement run) as the contract's anchor; refuses clearly if
+    none exists yet."""
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from app.models.module_e import (
+        BoqRevision,
+        Contract,
+        ContractRevision,
+        ContractVariation,
+        ExclusionRegisterEntry,
+        OutturnCostObservation,
+    )
+    from app.models.settlement import BidSettlement
+    from app.services import module_e as module_e_service
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+
+    async with session_scope(sys_ctx) as session:
+        won_settlement = (
+            await session.execute(
+                select(BidSettlement).where(BidSettlement.tenant_id == tenant_id, BidSettlement.status == "won")
+                .order_by(BidSettlement.created_at.desc())
+            )
+        ).scalars().first()
+        if won_settlement is None:
+            raise RuntimeError(
+                "simulate-module-e-schema: no WON bid_settlements row found for the demo tenant -- "
+                "run `make dev-simulate-settlement` first (it records outcome='won')."
+            )
+        project_id = won_settlement.project_id
+
+        existing_contract = (
+            await session.execute(select(Contract).where(Contract.settlement_id == won_settlement.id))
+        ).scalar_one_or_none()
+        if existing_contract is not None:
+            contract = existing_contract
+            print(f"reusing an existing contract from a prior run: {contract.id}")
+        else:
+            contract = Contract(
+                tenant_id=tenant_id, project_id=project_id, settlement_id=won_settlement.id,
+                contract_ref=f"CTR-{won_settlement.id.hex[:8]}", status="active",
+            )
+            session.add(contract)
+            await session.flush()
+            print(f"created contract {contract.id} for won settlement {won_settlement.id} (tender_total={won_settlement.tender_total})")
+
+        existing_boq_revision = (
+            await session.execute(select(BoqRevision).where(BoqRevision.project_id == project_id, BoqRevision.revision_no == 1))
+        ).scalar_one_or_none()
+        if existing_boq_revision is not None:
+            rev1 = existing_boq_revision
+            print(f"reusing an existing boq_revision from a prior run: {rev1.id}")
+        else:
+            rev1 = BoqRevision(tenant_id=tenant_id, project_id=project_id, revision_no=1, reason="Initial tender BOQ (dev-sim)")
+            session.add(rev1)
+            await session.flush()
+            print(f"seeded boq_revision {rev1.id} (revision_no=1)")
+
+        contract_rev1 = (
+            await session.execute(select(ContractRevision).where(ContractRevision.contract_id == contract.id))
+        ).scalars().first()
+        if contract_rev1 is None:
+            contract_rev1 = ContractRevision(tenant_id=tenant_id, project_id=project_id, contract_id=contract.id, revision_no=1)
+            session.add(contract_rev1)
+            await session.flush()
+            contract_rev2 = ContractRevision(
+                tenant_id=tenant_id, project_id=project_id, contract_id=contract.id, revision_no=2,
+                parent_revision_id=contract_rev1.id, reason="Dev-sim variation",
+            )
+            session.add(contract_rev2)
+            await session.flush()
+            session.add(
+                ContractVariation(
+                    tenant_id=tenant_id, project_id=project_id, contract_id=contract.id, revision_id=contract_rev2.id,
+                    description="Dev-sim: add 2no additional manholes", delta_amount=15000.00, status="approved",
+                )
+            )
+            session.add(
+                ExclusionRegisterEntry(
+                    tenant_id=tenant_id, project_id=project_id, contract_id=contract.id,
+                    description="Dev-sim: dewatering excluded, needs a provisional sum", status="open",
+                )
+            )
+            session.add(
+                OutturnCostObservation(
+                    tenant_id=tenant_id, project_id=project_id, contract_id=contract.id,
+                    observed_unit_cost=52.75, currency="AED", observed_at=date.today(),
+                    source_note="Dev-sim: final account, item 1.0",
+                )
+            )
+            await session.flush()
+            print("seeded 2 contract_revisions (with lineage), 1 contract_variation, 1 exclusion_register entry, 1 outturn_cost_observation")
+        else:
+            print(f"reusing existing contract_revisions/variations/register/outturn rows from a prior run (first revision {contract_rev1.id})")
+
+    async with session_scope(sys_ctx) as session:
+        contracts = await module_e_service.list_contracts(session, project_id)
+        print(f"read back: {len(contracts)} contract(s) for project {project_id}")
+        revisions = await module_e_service.list_contract_revisions(session, contract.id)
+        print(f"read back: {len(revisions)} contract_revision(s), lineage: {[(r.revision_no, r.parent_revision_id is not None) for r in revisions]}")
+        variations = await module_e_service.list_contract_variations(session, contract.id)
+        print(f"read back: {len(variations)} contract_variation(s), delta_amount={[v.delta_amount for v in variations]}")
+        boq_revisions = await module_e_service.list_boq_revisions(session, project_id)
+        print(f"read back: {len(boq_revisions)} boq_revision(s)")
+        register = await module_e_service.list_exclusion_register(session, project_id, status="open")
+        print(f"read back: {len(register)} open exclusion_register entr(y/ies)")
+        outturn = await module_e_service.list_outturn_cost_observations(session, project_id)
+        print(f"read back: {len(outturn)} outturn_cost_observation(s), written_back_rate_id={[o.written_back_rate_id for o in outturn]} (always None -- no write-back workflow exists yet, this phase's own known gap)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1243,6 +1368,10 @@ def main() -> None:
         "simulate-semantic-matching",
         help="DEV ONLY: exercise Module B/C Phase 5 suggestion ranking and RAG re-ranking (degrades gracefully if the ONNX model isn't provisioned)",
     )
+    subparsers.add_parser(
+        "simulate-module-e-schema",
+        help="DEV ONLY: seed and read back Module E Phase 1 schema-readiness rows (contracts, revisions, variations, exclusion register, outturn observations) against a won settlement",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
@@ -1257,6 +1386,8 @@ def main() -> None:
         asyncio.run(simulate_typology_pdf())
     elif args.command == "simulate-semantic-matching":
         asyncio.run(simulate_semantic_matching())
+    elif args.command == "simulate-module-e-schema":
+        asyncio.run(simulate_module_e_schema())
 
 
 if __name__ == "__main__":
