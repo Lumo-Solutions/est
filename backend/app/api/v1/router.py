@@ -9,6 +9,7 @@ from app.api.v1.routes import (
     boq,
     cost_library,
     drawings,
+    module_e,
     prequal,
     procurement,
     projects,
@@ -31,6 +32,7 @@ api_router.include_router(audit.router)
 api_router.include_router(projects.router)
 api_router.include_router(drawings.router)
 api_router.include_router(boq.router)
+api_router.include_router(module_e.router)
 api_router.include_router(procurement.router)
 api_router.include_router(quotation_ingestion.router)
 api_router.include_router(semantic_matching.router)

@@ -88,6 +88,12 @@ class RateSource(StrEnum):
     AWARD = "award"
     INDEX_ADJUSTMENT = "index_adjustment"
     IMPORT = "import"
+    # Module E Phase 1 (schema readiness only -- see
+    # docs/module-e-schema-design.md §4): the label a future outturn
+    # cost write-back workflow will pass to costlib_service.record_rate()
+    # when writing an outturn_cost_observations row back into the cost
+    # library. Nothing in this codebase sets this value yet.
+    OUTTURN = "outturn"
 
 
 class ApprovalEntityType(StrEnum):
