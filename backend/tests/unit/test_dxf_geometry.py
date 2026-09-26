@@ -140,3 +140,28 @@ def test_index_dxf_geometry_feeds_alignment_extractor_end_to_end() -> None:
     # test_alignment_extractor.py::test_alignment_length_with_curved_segment_bulge
     # for the same fixture's fully worked math.
     assert by_layer["ALIGNMENT-CURVED"] == pytest.approx(5.0 * math.pi + 10.0)
+
+
+def test_index_dxf_geometry_harvests_dimension_with_explicit_text() -> None:
+    """Module B Phase 4a scale cross-check (app.takeoff.scale::
+    dimension_cross_check_signals) -- only a DIMENSION with an explicit
+    (non-auto) text override becomes a "dimension" GeometricEntity; the
+    default auto ("<>") text is intentionally skipped (see scale.py's
+    module docstring)."""
+    doc = ezdxf.new(setup=True)
+    msp = doc.modelspace()
+    dim = msp.add_linear_dim(base=(0.0, 5.0), p1=(0.0, 0.0), p2=(10.0, 0.0), dimstyle="EZDXF", text="5.000")
+    dim.render()
+    auto_dim = msp.add_linear_dim(base=(0.0, 15.0), p1=(0.0, 10.0), p2=(10.0, 10.0), dimstyle="EZDXF")
+    auto_dim.render()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "fixture.dxf"
+        doc.saveas(path)
+        data = path.read_bytes()
+
+    geoms = index_dxf_geometry(data)["Model"]
+    dimensions = [g for g in geoms if g.entity_type == "dimension"]
+    assert len(dimensions) == 1  # the auto-text one is skipped
+    assert dimensions[0].attributes["stated_length"] == "5.000"
+    assert dimensions[0].vertices == [(0.0, 0.0), (10.0, 0.0)]
