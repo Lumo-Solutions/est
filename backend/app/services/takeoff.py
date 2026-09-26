@@ -270,6 +270,13 @@ async def get_drawing(session: AsyncSession, drawing_id: UUID) -> Drawing:
     return drawing
 
 
+async def list_drawings(session: AsyncSession, project_id: UUID) -> list[Drawing]:
+    result = await session.execute(
+        select(Drawing).where(Drawing.project_id == project_id).order_by(Drawing.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id: UUID) -> list[str]:
     from app.workers.tasks.takeoff import index_sheets
 
@@ -316,6 +323,13 @@ async def get_sheet(session: AsyncSession, drawing_id: UUID, sheet_index: int) -
     if sheet is None:
         raise NotFoundError(f"Sheet {sheet_index} of drawing {drawing_id} not found")
     return sheet
+
+
+async def list_sheets(session: AsyncSession, drawing_id: UUID) -> list[DrawingSheet]:
+    result = await session.execute(
+        select(DrawingSheet).where(DrawingSheet.drawing_id == drawing_id).order_by(DrawingSheet.sheet_index)
+    )
+    return list(result.scalars().all())
 
 
 async def set_manual_scale(
