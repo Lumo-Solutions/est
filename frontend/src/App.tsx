@@ -4,6 +4,10 @@ import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 import { PlaceholderPage } from './pages/PlaceholderPage'
+import { ProjectDetailPage } from './pages/ProjectDetailPage'
+import { ProjectsListPage } from './pages/ProjectsListPage'
+import { SheetIndexPage } from './pages/SheetIndexPage'
+import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 
 const queryClient = new QueryClient()
 
@@ -14,15 +18,12 @@ function AppRoutes() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route path="/" element={<PlaceholderPage title="Projects" phase="8b" />} />
-        <Route path="/projects/:projectId" element={<PlaceholderPage title="Project overview" phase="8b" />} />
+        <Route path="/" element={<ProjectsListPage />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+        <Route path="/projects/:projectId/drawings/:drawingId" element={<SheetIndexPage />} />
         <Route
-          path="/projects/:projectId/drawings"
-          element={<PlaceholderPage title="Drawings" phase="8b" />}
-        />
-        <Route
-          path="/projects/:projectId/drawings/:sheetId"
-          element={<PlaceholderPage title="Takeoff split pane" phase="8b" />}
+          path="/projects/:projectId/drawings/:drawingId/sheets/:sheetIndex"
+          element={<TakeoffViewerPage />}
         />
         <Route
           path="/projects/:projectId/typology"
