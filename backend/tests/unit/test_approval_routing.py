@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from app.services.approvals import route_tiers
 
 
-def _tier(seq: int, min_amount: float, max_amount: float | None, role: str):
-    return SimpleNamespace(seq=seq, min_amount=min_amount, max_amount=max_amount, required_role=role)
+def _tier(seq: int, min_amount: float, max_amount: float | None, role: str, max_margin_pct: float | None = None):
+    return SimpleNamespace(
+        seq=seq, min_amount=min_amount, max_amount=max_amount, required_role=role, max_margin_pct=max_margin_pct
+    )
 
 
 DEFAULT_TIERS = [
@@ -53,3 +55,49 @@ def test_no_matching_tiers_returns_empty():
     tiers = [_tier(1, 100, 200, "lead_estimator")]
     assert route_tiers(tiers, 50, "sequential_up_to_tier") == []
     assert route_tiers(tiers, 50, "highest_tier_only") == []
+
+
+# --------------------------------------------------------------------------
+# Module D1: bid_submission policy -- managing_director if sell_total >
+# AED 2,000,000 OR margin-on-sell < 8%, otherwise bd_director. Boundary
+# tests required by docs/preconstruction-build-brief.md Phase 1 item 6 /
+# docs/module-d1-plan.md §6.
+# --------------------------------------------------------------------------
+
+BID_SUBMISSION_TIERS = [
+    _tier(1, 0, 2_000_000.00, "bd_director"),
+    _tier(2, 2_000_000.01, None, "managing_director", max_margin_pct=8),
+]
+
+
+def test_bid_submission_amount_exactly_at_threshold_stays_bd_director():
+    routed = route_tiers(BID_SUBMISSION_TIERS, 2_000_000.00, "highest_tier_only", margin_pct=15)
+    assert [t.required_role for t in routed] == ["bd_director"]
+
+
+def test_bid_submission_amount_one_cent_over_threshold_escalates():
+    routed = route_tiers(BID_SUBMISSION_TIERS, 2_000_000.01, "highest_tier_only", margin_pct=15)
+    assert [t.required_role for t in routed] == ["managing_director"]
+
+
+def test_bid_submission_margin_exactly_at_floor_stays_bd_director():
+    routed = route_tiers(BID_SUBMISSION_TIERS, 500_000, "highest_tier_only", margin_pct=8.00)
+    assert [t.required_role for t in routed] == ["bd_director"]
+
+
+def test_bid_submission_margin_just_below_floor_escalates():
+    routed = route_tiers(BID_SUBMISSION_TIERS, 500_000, "highest_tier_only", margin_pct=7.99)
+    assert [t.required_role for t in routed] == ["managing_director"]
+
+
+def test_bid_submission_zero_total_routes_on_margin_alone():
+    routed = route_tiers(BID_SUBMISSION_TIERS, 0, "highest_tier_only", margin_pct=15)
+    assert [t.required_role for t in routed] == ["bd_director"]
+    routed_thin = route_tiers(BID_SUBMISSION_TIERS, 0, "highest_tier_only", margin_pct=2)
+    assert [t.required_role for t in routed_thin] == ["managing_director"]
+
+
+def test_bid_submission_negative_markup_escalates_regardless_of_amount():
+    # Selling below landed cost -- margin-on-sell goes negative, always < 8.
+    routed = route_tiers(BID_SUBMISSION_TIERS, 100_000, "highest_tier_only", margin_pct=-5.26)
+    assert [t.required_role for t in routed] == ["managing_director"]
