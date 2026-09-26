@@ -50,13 +50,24 @@ from app.core.enums import (
     QuotationStatus,
     RfqStatus,
 )
+from app.integrations.embeddings import embed_best_effort
 from app.integrations.s3 import get_object_bytes, put_object_streaming
 from app.models.procurement import Rfq
-from app.models.quotation_ingestion import InboundEmail, Quotation, QuotationAttachment, QuotationExclusionFlag, QuotationLineItem
+from app.models.quotation_ingestion import (
+    InboundEmail,
+    Quotation,
+    QuotationAttachment,
+    QuotationExclusionFlag,
+    QuotationLineItem,
+)
 from app.procurement.attachment_safety import check_attachment
 from app.procurement.email_auth import parse_authentication_results
 from app.procurement.inbound_match import match_inbound_email
-from app.procurement.pricing_sheet_parser import dump_workbook_text, looks_like_our_pricing_sheet, parse_pricing_sheet
+from app.procurement.pricing_sheet_parser import (
+    dump_workbook_text,
+    looks_like_our_pricing_sheet,
+    parse_pricing_sheet,
+)
 from app.procurement.quotation_extraction import extract_quotation
 from app.procurement.quotation_matching import MatchCandidate, match_line_item
 from app.services import audit
@@ -66,6 +77,22 @@ from app.workers.base import build_worker_context, run_async, with_worker_sessio
 from app.workers.celery_app import celery_app
 
 _SYSTEM_TENANT_PLACEHOLDER = "00000000-0000-0000-0000-000000000000"
+
+
+def _embed_quotation_line_items_best_effort(items: list[QuotationLineItem]) -> None:
+    """Module B/C Phase 5: one batched embed_best_effort() call for every
+    line item this ingestion pass just built (not one call per row) --
+    same text shape app.procurement.quotation_matching.match_line_item()
+    already fuzzy-matches with. Degrades to leaving description_embedding
+    NULL on every row when the ONNX model isn't provisioned."""
+    if not items:
+        return
+    texts = [f"{i.vendor_item_text or ''} {i.vendor_description_text or ''}".strip() for i in items]
+    embeddings = embed_best_effort(texts)
+    if embeddings is None:
+        return
+    for item, embedding in zip(items, embeddings, strict=True):
+        item.description_embedding = embedding
 
 
 class ImapMisconfiguredError(RuntimeError):
@@ -345,20 +372,22 @@ async def _ingest_deterministic(
         return
 
     boq_by_id = {item.id: item for item in boq_items}
+    new_items: list[QuotationLineItem] = []
     for row in parsed.rows:
         boq_item = boq_by_id.get(row.boq_line_item_id)
         quantity = boq_item.boq_quantity if boq_item else None
         extended_computed = (row.rate.value * quantity) if row.rate.value is not None and quantity is not None else None
         line_status = QuotationLineItemStatus.NEEDS_REVIEW.value if row.rate.needs_review else QuotationLineItemStatus.PROPOSED.value
-        session.add(
-            QuotationLineItem(
-                tenant_id=rfq.tenant_id, quotation_id=quotation.id, project_id=rfq.project_id,
-                boq_line_item_id=row.boq_line_item_id, vendor_description_text=boq_item.description if boq_item else None,
-                unit_price=row.rate.value, quantity=quantity, extended_price_computed=extended_computed,
-                confidence=Decimal("1.0"), source=QuotationLineSource.DETERMINISTIC.value, match_method=LineItemMatchMethod.ROW_ID.value,
-                remarks_text=row.remarks, status=line_status,
-            )
+        item = QuotationLineItem(
+            tenant_id=rfq.tenant_id, quotation_id=quotation.id, project_id=rfq.project_id,
+            boq_line_item_id=row.boq_line_item_id, vendor_description_text=boq_item.description if boq_item else None,
+            unit_price=row.rate.value, quantity=quantity, extended_price_computed=extended_computed,
+            confidence=Decimal("1.0"), source=QuotationLineSource.DETERMINISTIC.value, match_method=LineItemMatchMethod.ROW_ID.value,
+            remarks_text=row.remarks, status=line_status,
         )
+        session.add(item)
+        new_items.append(item)
+    _embed_quotation_line_items_best_effort(new_items)
     await session.flush()
 
 
@@ -486,6 +515,7 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
     ).scalars().all()
     await _link_supporting_documents(session, quotation, [attachment.id, *other_attachment_ids])
 
+    new_items: list[QuotationLineItem] = []
     for item in result.line_items:
         match = match_line_item(vendor_item_text=item.vendor_item_text, vendor_description_text=item.vendor_description_text, candidates=candidates)
         boq_item = boq_by_id.get(match.boq_line_item_id) if match.boq_line_item_id else None
@@ -503,17 +533,18 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
         )
 
         line_status = QuotationLineItemStatus.PROPOSED.value if match.boq_line_item_id else QuotationLineItemStatus.NEEDS_REVIEW.value
-        session.add(
-            QuotationLineItem(
-                tenant_id=rfq.tenant_id, quotation_id=quotation.id, project_id=rfq.project_id,
-                boq_line_item_id=match.boq_line_item_id, vendor_item_text=item.vendor_item_text,
-                vendor_description_text=item.vendor_description_text, unit_price=item.unit_price, quantity=item.quantity,
-                extended_price_stated=item.extended_price_stated, extended_price_computed=extended_computed,
-                arithmetic_mismatch=arithmetic_mismatch, quantity_mismatch=bool(quantity_mismatch),
-                confidence=Decimal(str(round(match.score, 3))), source=QuotationLineSource.LLM.value,
-                match_method=match.match_method, remarks_text=item.remarks_text, status=line_status,
-            )
+        new_item = QuotationLineItem(
+            tenant_id=rfq.tenant_id, quotation_id=quotation.id, project_id=rfq.project_id,
+            boq_line_item_id=match.boq_line_item_id, vendor_item_text=item.vendor_item_text,
+            vendor_description_text=item.vendor_description_text, unit_price=item.unit_price, quantity=item.quantity,
+            extended_price_stated=item.extended_price_stated, extended_price_computed=extended_computed,
+            arithmetic_mismatch=arithmetic_mismatch, quantity_mismatch=bool(quantity_mismatch),
+            confidence=Decimal(str(round(match.score, 3))), source=QuotationLineSource.LLM.value,
+            match_method=match.match_method, remarks_text=item.remarks_text, status=line_status,
         )
+        session.add(new_item)
+        new_items.append(new_item)
+    _embed_quotation_line_items_best_effort(new_items)
     await session.flush()
 
     for excl in result.exclusions:

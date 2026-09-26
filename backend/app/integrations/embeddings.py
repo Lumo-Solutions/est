@@ -100,3 +100,18 @@ def get_embedder() -> EmbeddingBackend:
     if settings.embedding_backend == "vllm":
         return VllmEmbedder(settings)
     return OnnxEmbedder(settings)
+
+
+def embed_best_effort(texts: list[str]) -> list[list[float]] | None:
+    """Module B/C Phase 5's degradation contract: every semantic-matching
+    write path calls this, never get_embedder().embed() directly, so a
+    dev/CI environment without the ONNX model provisioned (see
+    docs/deploy-deltas.md's "Populating the ONNX embedding model volume")
+    degrades that write to "no embedding stored" -- never a failed
+    request. Only FileNotFoundError (OnnxEmbedder._ensure_loaded's own
+    "model not provisioned" signal) is caught; any other exception is a
+    real bug and still propagates."""
+    try:
+        return get_embedder().embed(texts)
+    except FileNotFoundError:
+        return None

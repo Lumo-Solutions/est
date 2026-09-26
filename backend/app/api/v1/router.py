@@ -13,6 +13,7 @@ from app.api.v1.routes import (
     procurement,
     projects,
     quotation_ingestion,
+    semantic_matching,
     settlement,
     taxonomy,
     typology,
@@ -32,5 +33,6 @@ api_router.include_router(drawings.router)
 api_router.include_router(boq.router)
 api_router.include_router(procurement.router)
 api_router.include_router(quotation_ingestion.router)
+api_router.include_router(semantic_matching.router)
 api_router.include_router(settlement.router)
 api_router.include_router(typology.router)

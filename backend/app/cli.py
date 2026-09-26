@@ -1073,6 +1073,118 @@ async def simulate_typology_pdf() -> None:
         print(f"rollup: total_instance_count={rollup['total_instance_count']} items={rollup['items']} (no BOQ items linked in this simulation)")
 
 
+_SIM_LEAD_ESTIMATOR_SEMANTIC_ID = UUID("00000000-0000-0000-0000-0000000000d6")
+
+
+async def simulate_semantic_matching() -> None:
+    """DEV ONLY: Module B/C Phase 5 end to end against the real dev stack.
+    First checks whether the real ONNX model is actually provisioned on
+    this machine (embed_best_effort probe) and prints which path is being
+    exercised -- the suggestion/RAG logic itself works either way (it's
+    designed to degrade gracefully), but a reviewer should know which one
+    they just watched run, same as Phase 4a's own VLM-reliability note.
+    Seeds a BOQ line item + two takeoff measurements (one semantically
+    close, one far), gets suggestions, records feedback, and shows the
+    ranking shift. See docs/module-b-c-phase5-plan.md."""
+    import uuid
+
+    from app.integrations.embeddings import embed_best_effort
+    from app.schemas.boq import BoqLineItemCreate
+    from app.services import boq as boq_service
+    from app.services import semantic_matching as semantic_matching_service
+
+    probe = embed_best_effort(["probe"])
+    if probe is None:
+        print("ONNX model not provisioned on this machine -- exercising the DEGRADED (fuzzy-only) path (see docs/deploy-deltas.md's 'Populating the ONNX embedding model volume' / `make download-embedding-model`)")
+    else:
+        print(f"ONNX model available -- exercising the full semantic-matching path (probe embedding dim={len(probe[0])})")
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    lead_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_LEAD_ESTIMATOR_SEMANTIC_ID, sub="lead-estimator-semantic",
+        roles=frozenset({"lead_estimator"}),
+    )
+
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        rfq, _package, _boq_items, _vendor = await _get_or_create_d1_demo_rfq(session, sys_ctx, tenant_id)
+        project_id = rfq.project_id
+
+        existing_member = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == _SIM_LEAD_ESTIMATOR_SEMANTIC_ID)
+            )
+        ).scalar_one_or_none()
+        if existing_member is None:
+            session.add(ProjectMember(project_id=project_id, user_id=_SIM_LEAD_ESTIMATOR_SEMANTIC_ID, tenant_id=tenant_id))
+            await session.flush()
+
+    suffix = uuid.uuid4().hex[:8]
+    async with session_scope(sys_ctx) as session:
+        from app.models.takeoff import Drawing, DrawingMeasurement, DrawingSheet
+
+        drawing = Drawing(
+            tenant_id=tenant_id, project_id=project_id, original_filename=f"semantic-sim-{suffix}.dxf", kind="dxf",
+            bucket="installtec-drawings", object_key=f"semantic-sim/{suffix}", size_bytes=1, sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        )
+        session.add(drawing)
+        await session.flush()
+        sheet = DrawingSheet(tenant_id=tenant_id, drawing_id=drawing.id, project_id=project_id, sheet_index=0, units="m")
+        session.add(sheet)
+        await session.flush()
+
+        close_descriptor = semantic_matching_service.build_measurement_descriptor(
+            capability="alignment", kind="alignment_length_m", layer="ROAD-CL", trade_name=None,
+        )
+        far_descriptor = semantic_matching_service.build_measurement_descriptor(
+            capability="volume", kind="trench_volume_m3", layer="DRAIN-PIPE", trade_name=None,
+        )
+        embeddings = embed_best_effort([close_descriptor, far_descriptor])
+        close = DrawingMeasurement(
+            tenant_id=tenant_id, drawing_id=drawing.id, sheet_id=sheet.id, project_id=project_id,
+            capability="alignment", kind="alignment_length_m", value=Decimal("120.0"), unit="m", confidence=Decimal("1.0"),
+            source_entity_ids=[], extractor_metadata={"layer": "ROAD-CL"},
+            descriptor_embedding=embeddings[0] if embeddings is not None else None,
+        )
+        far = DrawingMeasurement(
+            tenant_id=tenant_id, drawing_id=drawing.id, sheet_id=sheet.id, project_id=project_id,
+            capability="volume", kind="trench_volume_m3", value=Decimal("40.0"), unit="m3", confidence=Decimal("1.0"),
+            source_entity_ids=[], extractor_metadata={"layer": "DRAIN-PIPE"},
+            descriptor_embedding=embeddings[1] if embeddings is not None else None,
+        )
+        session.add_all([close, far])
+        await session.flush()
+        close_id, far_id = close.id, far.id
+        print(f"seeded 2 unlinked takeoff measurements: close={close_id} far={far_id}")
+
+    async with session_scope(lead_ctx) as session:
+        boq_item = await boq_service.create_line_item(
+            session, lead_ctx, project_id,
+            BoqLineItemCreate(item_no=f"SEM-{suffix}", description="alignment alignment_length_m road centreline works", uom="m", boq_quantity=100),
+        )
+        print(f"created BOQ line item {boq_item.id} (description_embedding={'set' if boq_item.description_embedding is not None else 'NULL'})")
+
+        suggestions = await semantic_matching_service.suggest_measurements_for_boq_line(session, boq_item)
+        for s in suggestions:
+            tag = "close" if s.target_id == close_id else ("far" if s.target_id == far_id else "?")
+            print(f"  suggestion[{tag}]: fuzzy={s.fuzzy_score:.3f} semantic={s.semantic_score} combined={s.combined_score:.3f} rag={s.rag_adjustment:+.3f} final={s.final_score:.3f}")
+
+        if boq_item.description_embedding is not None:
+            await semantic_matching_service.record_feedback(
+                session, lead_ctx, project_id=project_id, match_type=semantic_matching_service.MATCH_TYPE_BOQ_MEASUREMENT,
+                query_embedding=list(boq_item.description_embedding), target_id=far_id, outcome="accepted",
+            )
+            print("recorded feedback: 'far' measurement accepted for this query (an unusual precedent, on purpose)")
+
+            reranked = await semantic_matching_service.suggest_measurements_for_boq_line(session, boq_item)
+            far_rank = next(i for i, s in enumerate(reranked) if s.target_id == far_id)
+            print(f"after feedback: 'far' measurement's rag_adjustment is now positive and it ranks #{far_rank + 1} of {len(reranked)}")
+        else:
+            print("no embedding on the BOQ line item (degraded path) -- feedback recording would be a no-op, skipped")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1094,6 +1206,10 @@ def main() -> None:
         "simulate-typology-pdf",
         help="DEV ONLY: ingest a 2-sheet synthetic PDF and exercise Module B Phase 4c typology detect/confirm/rollup",
     )
+    subparsers.add_parser(
+        "simulate-semantic-matching",
+        help="DEV ONLY: exercise Module B/C Phase 5 suggestion ranking and RAG re-ranking (degrades gracefully if the ONNX model isn't provisioned)",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
@@ -1106,6 +1222,8 @@ def main() -> None:
         asyncio.run(simulate_takeoff_pdf())
     elif args.command == "simulate-typology-pdf":
         asyncio.run(simulate_typology_pdf())
+    elif args.command == "simulate-semantic-matching":
+        asyncio.run(simulate_semantic_matching())
 
 
 if __name__ == "__main__":

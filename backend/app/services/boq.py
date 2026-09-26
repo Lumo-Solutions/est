@@ -18,7 +18,13 @@ from app.boq.reconciliation import (
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import NotFoundError, ValidationAppError
-from app.models.boq import BoqLineItem, BoqLineItemMeasurement, BoqLineItemReconciliation, BoqTolerance
+from app.integrations.embeddings import embed_best_effort
+from app.models.boq import (
+    BoqLineItem,
+    BoqLineItemMeasurement,
+    BoqLineItemReconciliation,
+    BoqTolerance,
+)
 from app.models.takeoff import DrawingMeasurement
 from app.schemas.boq import BoqLineItemCreate
 from app.services import audit
@@ -67,6 +73,14 @@ async def create_line_item(
     # value until explicitly refreshed (same pattern as
     # app/services/taxonomy.py::create_node for trade_nodes).
     await session.refresh(item, attribute_names=["path", "level"])
+
+    # Module B/C Phase 5: best-effort, degrades to leaving
+    # description_embedding NULL when the ONNX model isn't provisioned.
+    embeddings = embed_best_effort([f"{item.item_no} {item.description}"])
+    if embeddings is not None:
+        item.description_embedding = embeddings[0]
+        await session.flush()
+
     await audit.record(
         session, ctx, action=AuditAction.CREATE, entity_type="boq_line_item", entity_id=item.id,
         project_id=project_id, payload={"item_no": data.item_no, "description": data.description},

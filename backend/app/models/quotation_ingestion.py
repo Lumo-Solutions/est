@@ -16,7 +16,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ARRAY, BigInteger, Boolean, ForeignKey, Numeric, String, Text, UniqueConstraint
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    ARRAY,
+    BigInteger,
+    Boolean,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +37,7 @@ from app.core.enums import (
     QuotationStatus,
 )
 from app.db.base import NullableTenantEntity, TenantEntity
+from app.db.types import DEFAULT_EMBEDDING_DIM
 
 
 class InboundEmail(NullableTenantEntity):
@@ -201,6 +212,11 @@ class QuotationLineItem(TenantEntity):
 
     vendor_item_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     vendor_description_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Module B/C Phase 5: embeds f"{vendor_item_text or ''} {vendor_description_text}"
+    # (same text shape app.procurement.quotation_matching.match_line_item
+    # already fuzzy-matches with). NULL under the same degradation
+    # contract as BoqLineItem.description_embedding.
+    description_embedding: Mapped[list[float] | None] = mapped_column(Vector(DEFAULT_EMBEDDING_DIM), nullable=True)
     unit_price: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
     quantity: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
     extended_price_stated: Mapped[float | None] = mapped_column(Numeric(16, 4), nullable=True)
