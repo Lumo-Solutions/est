@@ -136,6 +136,13 @@ async def _boq_items_by_id(session: AsyncSession, boq_line_item_ids: list[UUID])
     return {item.id: item for item in result.scalars().all()}
 
 
+async def list_settlements(session: AsyncSession, project_id: UUID) -> list[BidSettlement]:
+    result = await session.execute(
+        select(BidSettlement).where(BidSettlement.project_id == project_id).order_by(BidSettlement.version_no)
+    )
+    return list(result.scalars().all())
+
+
 async def get_settlement_detail(
     session: AsyncSession, settlement_id: UUID
 ) -> tuple[BidSettlement, list[BidSettlementLineItem], list[BidSettlementTradeOverride]]:
