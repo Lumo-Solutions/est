@@ -62,9 +62,13 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const method = opts.method ?? 'GET'
   const headers: Record<string, string> = {}
-  let body: string | undefined
+  let body: BodyInit | undefined
 
-  if (opts.body !== undefined) {
+  if (opts.body instanceof FormData) {
+    // Let the browser set Content-Type itself (multipart boundary) --
+    // JSON.stringify-ing a FormData produces "{}" and silently drops the file.
+    body = opts.body
+  } else if (opts.body !== undefined) {
     headers['Content-Type'] = 'application/json'
     body = JSON.stringify(opts.body)
   }

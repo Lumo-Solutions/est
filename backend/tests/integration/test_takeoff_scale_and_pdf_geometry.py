@@ -249,3 +249,45 @@ async def test_replace_and_list_pdf_layer_mapping_rules(rls_session):
     assert len(replaced) == 1
     listed_again = await takeoff_service.list_pdf_layer_mapping_rules(rls_session, project_id)
     assert [r.target_layer for r in listed_again] == ["ONLY-ONE"]
+
+
+# --------------------------------------------------------------------------
+# Phase 8b: list_drawings / list_sheets (new -- the frontend's drawing-list
+# and sheet-index screens need these; neither existed before, only get-by-id
+# for a single already-known drawing/sheet). See docs/module-frontend-
+# phase8b-plan.md §0/§1.
+# --------------------------------------------------------------------------
+
+_NON_MEMBER_USER_ID = uuid.uuid4()
+
+
+async def test_list_drawings_visible_to_member_invisible_to_non_member(rls_session):
+    tenant_id, project_id = await _seed_project(rls_session)
+    sys_ctx = _ctx(frozenset(), tenant_id=tenant_id, is_system=True)
+    await set_rls_context(rls_session, sys_ctx)
+    drawing, _sheet = await _seed_pdf_sheet_with_alignment_line(rls_session, tenant_id, project_id)
+
+    member_ctx = _ctx(_ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, member_ctx)
+    visible = await takeoff_service.list_drawings(rls_session, project_id)
+    assert [d.id for d in visible] == [drawing.id]
+
+    non_member_ctx = _ctx(_ESTIMATOR, tenant_id=tenant_id, user_id=_NON_MEMBER_USER_ID)
+    await set_rls_context(rls_session, non_member_ctx)
+    assert await takeoff_service.list_drawings(rls_session, project_id) == []
+
+
+async def test_list_sheets_visible_to_member_invisible_to_non_member(rls_session):
+    tenant_id, project_id = await _seed_project(rls_session)
+    sys_ctx = _ctx(frozenset(), tenant_id=tenant_id, is_system=True)
+    await set_rls_context(rls_session, sys_ctx)
+    drawing, sheet = await _seed_pdf_sheet_with_alignment_line(rls_session, tenant_id, project_id)
+
+    member_ctx = _ctx(_ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, member_ctx)
+    visible = await takeoff_service.list_sheets(rls_session, drawing.id)
+    assert [s.id for s in visible] == [sheet.id]
+
+    non_member_ctx = _ctx(_ESTIMATOR, tenant_id=tenant_id, user_id=_NON_MEMBER_USER_ID)
+    await set_rls_context(rls_session, non_member_ctx)
+    assert await takeoff_service.list_sheets(rls_session, drawing.id) == []

@@ -61,6 +61,14 @@ async def upload_drawing_endpoint(
     return DrawingOut.model_validate(drawing)
 
 
+@router.get("/projects/{project_id}/drawings", response_model=list[DrawingOut])
+async def list_drawings_endpoint(
+    project_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[DrawingOut]:
+    drawings = await takeoff_service.list_drawings(session, project_id)
+    return [DrawingOut.model_validate(d) for d in drawings]
+
+
 @router.post("/drawings/{drawing_id}/ingest", status_code=202)
 async def ingest_drawing_endpoint(
     drawing_id: UUID,
@@ -92,6 +100,14 @@ async def get_sheet_endpoint(
 ) -> DrawingSheetOut:
     sheet = await takeoff_service.get_sheet(session, drawing_id, sheet_index)
     return DrawingSheetOut.model_validate(sheet)
+
+
+@router.get("/drawings/{drawing_id}/sheets", response_model=list[DrawingSheetOut])
+async def list_sheets_endpoint(
+    drawing_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[DrawingSheetOut]:
+    sheets = await takeoff_service.list_sheets(session, drawing_id)
+    return [DrawingSheetOut.model_validate(s) for s in sheets]
 
 
 @router.patch("/drawings/{drawing_id}/sheets/{sheet_index}/scale", response_model=DrawingSheetOut)
