@@ -452,18 +452,34 @@ def _send_via_greenmail(msg: EmailMessage, *, envelope_to: str, host: str, port:
 
 
 async def simulate_quotes() -> None:
-    """DEV ONLY: sends six simulated vendor replies into GreenMail against
+    """DEV ONLY: sends seven simulated vendor replies into GreenMail against
     a demo RFQ (created if none exists) -- (a) a correctly filled pricing
     sheet, (b) a PDF quote, (c) a reply from a non-matching sender, (d) mail
     with no reply token, (e) a PDF containing a prompt-injection attempt,
     (f) one email with BOTH a filled pricing sheet AND a PDF attached
     together (must become one submission, the sheet as primary, the PDF as
-    a linked supporting document -- never two competing quotes) -- then
-    enqueues poll_inbound_mailbox immediately rather than waiting for the
-    beat schedule. Refuses outright if APP_ENV=production or if IMAP_HOST
-    isn't the recognized dev/test host -- see
+    a linked supporting document -- never two competing quotes), (g) a PDF
+    quote (Module C Phase 6) deliberately written to exercise the new
+    verification fields against the real LLM: a unit stated as "CUM"
+    against the demo BOQ item's own "m3" (convertible, same volume unit,
+    should NOT flag uom_mismatch), a grand total that doesn't reconcile
+    with the line total (should flag total_mismatch), and a buried
+    exclusion with a locatable citation --
+    then enqueues poll_inbound_mailbox immediately rather than waiting for
+    the beat schedule. Refuses outright if APP_ENV=production or if
+    IMAP_HOST isn't the recognized dev/test host -- see
     app/workers/tasks/quotation_ingestion.py::_assert_dev_imap_host_is_safe,
-    same fail-closed posture."""
+    same fail-closed posture.
+
+    This command only sends mail and enqueues the poll (it never waits for
+    or inspects the result, same as scenarios (a)-(f) always have) --
+    scenario (g)'s new fields (vendor_uom, uom_mismatch, stated_total,
+    total_mismatch, source_location, citation_verified) depend on a real
+    vLLM call, whose extraction quality this dev machine's model isn't
+    guaranteed to nail exactly (same caveat as Module B Phase 4a's own
+    VLM-reliability note) -- check the resulting QuotationLineItem/
+    QuotationExclusionFlag rows via the API afterward to see what was
+    actually extracted."""
     settings = get_settings()
     if settings.app_env == "production":
         raise SystemExit("Refusing to run simulate-quotes with APP_ENV=production.")
@@ -545,6 +561,23 @@ async def simulate_quotes() -> None:
                         f"{rfq_ref}-cover-letter.pdf", "application", "pdf",
                     ),
                 ],
+            ),
+        ),
+        (
+            "g_subtotal_unit_and_exclusion_citation",
+            _build_reply_email(
+                from_addr=vendor_email, to_addr=reply_address, subject=f"RE: {rfq_ref} - Quotation (Module C Phase 6 sim)",
+                body="Please see our attached PDF quotation.",
+                attachment=(
+                    _simple_pdf_bytes([
+                        f"Vendor Quotation for {rfq_ref}",
+                        "Item 1.0 Excavation to formation level - Rate: AED 48.00/CUM",
+                        "Quantity: 250 CUM",
+                        "Note: excludes dewatering and any groundwater control.",
+                        "Grand Total: AED 15000.00",  # deliberately != 48.00 * 250 = 12000.00
+                    ]),
+                    f"{rfq_ref}-quote-phase6.pdf", "application", "pdf",
+                ),
             ),
         ),
     ]

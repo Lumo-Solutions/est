@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ARRAY, Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ARRAY, Boolean, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,15 @@ class Project(TenantEntity):
     tender_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     submission_due_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="AED")
+    # Module C Phase 6: vendor-matching geography filter (app.services.
+    # procurement::_vendor_eligibility) and bid-leveling normalization
+    # target currency (base_currency, already above) both read this.
+    # Nullable/never backfilled -- existing projects simply have none of
+    # this until an estimator sets it.
+    emirate: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    area: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
 
 
 class ProjectMember(Base):

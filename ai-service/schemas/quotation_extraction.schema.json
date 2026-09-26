@@ -41,6 +41,10 @@
             "type": ["number", "null"],
             "description": "The line total (unit_price * quantity) if the vendor printed one explicitly. Null if not shown -- do not compute it yourself."
           },
+          "vendor_uom": {
+            "type": ["string", "null"],
+            "description": "The unit of measure printed against this line exactly as shown (e.g. 'M', 'M2', 'NO', 'LM') -- verbatim, do not normalize or translate it. Null if no unit is stated."
+          },
           "remarks_text": {
             "type": ["string", "null"],
             "description": "Any remark, note, or qualification printed against this specific line. Null if none."
@@ -48,6 +52,10 @@
         },
         "required": ["vendor_description_text"]
       }
+    },
+    "stated_total": {
+      "type": ["number", "null"],
+      "description": "The vendor's own overall grand total for this whole quotation, if printed anywhere (e.g. a 'Grand Total', 'Total Amount', or 'Total Price' line). Null if no such overall total is stated anywhere in the document -- do not compute it yourself from the line items."
     },
     "exclusions": {
       "type": "array",
@@ -63,6 +71,10 @@
           "source_quote_text": {
             "type": "string",
             "description": "The exact sentence or phrase from the document this was found in -- a verbatim citation, never paraphrased or invented."
+          },
+          "source_location": {
+            "type": ["string", "null"],
+            "description": "Where in the document this citation was found -- copy a page marker (e.g. 'page 2') or a row/cell marker (e.g. 'Pricing!row12') exactly as it appears in the supplied text, if the text includes one nearby. Null if you cannot determine a specific location -- never guess or invent one."
           }
         },
         "required": ["flag_text", "source_quote_text"]

@@ -113,14 +113,21 @@ def looks_like_our_pricing_sheet(data: bytes) -> bool:
 
 def dump_workbook_text(data: bytes) -> str:
     """Flattens every cell of every sheet into text, for the LLM path when a
-    vendor returns a spreadsheet that isn't our own template."""
+    vendor returns a spreadsheet that isn't our own template. Each
+    non-empty row is prefixed with its own `SheetName!row<N>:` marker
+    (Module C Phase 6) so the extraction model has a citable coordinate
+    to copy verbatim into ExtractedExclusion.source_location, rather than
+    being asked to infer one from nothing -- dump_workbook_text() itself
+    never had cell/row coordinates before this, so a citation for a
+    spreadsheet-sourced exclusion was previously impossible to place at
+    all."""
     wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     lines: list[str] = []
     for ws in wb.worksheets:
-        for row in ws.iter_rows(values_only=True):
+        for row_number, row in enumerate(ws.iter_rows(values_only=True), start=1):
             cells = [str(v) for v in row if v is not None]
             if cells:
-                lines.append("\t".join(cells))
+                lines.append(f"{ws.title}!row{row_number}:\t" + "\t".join(cells))
     return "\n".join(lines)
 
 

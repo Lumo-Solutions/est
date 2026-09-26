@@ -9,7 +9,7 @@ from app.core.context import RequestContext
 from app.core.enums import AuditAction, Role
 from app.core.errors import ForbiddenError, NotFoundError
 from app.models.tenancy import Project, ProjectMember
-from app.schemas.projects import ProjectCreate
+from app.schemas.projects import ProjectCreate, ProjectLocationUpdate
 from app.services import audit
 
 # Mirrors app_can_see_project()'s role list (app/db/ddl.py) exactly --
@@ -78,6 +78,29 @@ async def assert_can_see_project(session: AsyncSession, ctx: RequestContext, pro
         if result.scalar_one_or_none() is not None:
             return
     raise ForbiddenError(f"Not a member of project {project_id}")
+
+
+async def update_location(
+    session: AsyncSession, ctx: RequestContext, project_id: UUID, data: ProjectLocationUpdate
+) -> Project:
+    """Module C Phase 6: feeds app.services.procurement::
+    _vendor_geography_eligible's project side. Nullable fields are set
+    exactly as given, including explicitly clearing one back to NULL (a
+    plain PATCH-with-omitted-field semantic isn't used here -- every field
+    on ProjectLocationUpdate is always applied, matching how
+    replace_pdf_layer_mapping_rules-style whole-value config updates work
+    elsewhere in this codebase, not a partial merge)."""
+    project = await get_project(session, project_id)
+    project.emirate = data.emirate
+    project.area = data.area
+    project.latitude = data.latitude
+    project.longitude = data.longitude
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="project", entity_id=project_id,
+        project_id=project_id, payload={"emirate": data.emirate, "area": data.area},
+    )
+    return project
 
 
 async def add_member(session: AsyncSession, ctx: RequestContext, project_id: UUID, user_id: UUID, role: str | None) -> None:

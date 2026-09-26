@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import DuplicateVendorError, NotFoundError
-from app.models.vendors import Vendor, VendorDuplicateCandidate
+from app.models.vendors import Vendor, VendorDuplicateCandidate, VendorServiceRegion
 from app.schemas.vendors import VendorCreate
 from app.services import audit
 from app.services.dedupe import (
@@ -240,3 +241,36 @@ async def resolve_duplicate(
         payload={"resolution": resolution},
     )
     return candidate
+
+
+# --------------------------------------------------------------------------
+# Module C Phase 6: vendor service regions
+# --------------------------------------------------------------------------
+
+
+async def list_service_regions(session: AsyncSession, vendor_id: UUID) -> list[VendorServiceRegion]:
+    result = await session.execute(
+        select(VendorServiceRegion).where(VendorServiceRegion.vendor_id == vendor_id).order_by(VendorServiceRegion.emirate)
+    )
+    return list(result.scalars().all())
+
+
+async def replace_service_regions(
+    session: AsyncSession, ctx: RequestContext, vendor_id: UUID, emirates: list[str]
+) -> list[VendorServiceRegion]:
+    """Whole-set replace (not incremental add/remove) -- same convention as
+    app.services.takeoff::replace_pdf_layer_mapping_rules: a small,
+    vendor-scoped config set, edited as a unit."""
+    await get_vendor(session, ctx.tenant_id, vendor_id)  # 404 if this vendor isn't in the caller's tenant
+    await session.execute(sa_delete(VendorServiceRegion).where(VendorServiceRegion.vendor_id == vendor_id))
+    created = []
+    for emirate in emirates:
+        row = VendorServiceRegion(tenant_id=ctx.tenant_id, vendor_id=vendor_id, emirate=emirate)
+        session.add(row)
+        created.append(row)
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="vendor_service_regions", entity_id=vendor_id,
+        payload={"emirates": emirates},
+    )
+    return created

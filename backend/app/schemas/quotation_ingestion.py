@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -61,6 +61,10 @@ class QuotationOut(ORMModel):
     submitted_at: datetime
     is_late: bool
     status: str
+    stated_total: Decimal | None
+    total_mismatch: bool
+    fx_rate_to_base: Decimal | None
+    fx_rate_date: date | None
     created_at: datetime
 
 
@@ -76,6 +80,8 @@ class QuotationLineItemOut(ORMModel):
     extended_price_computed: Decimal | None
     arithmetic_mismatch: bool
     quantity_mismatch: bool
+    vendor_uom: str | None
+    uom_mismatch: bool
     confidence: Decimal
     source: str
     match_method: str | None
@@ -91,6 +97,8 @@ class QuotationExclusionFlagOut(ORMModel):
     line_item_id: UUID | None
     flag_text: str
     source_quote_text: str
+    source_location: str | None
+    citation_verified: bool
     confidence: Decimal
     status: str
     reviewed_by: UUID | None
@@ -129,8 +137,27 @@ class BidLevelingCellOut(ORMModel):
     confidence: float
     arithmetic_mismatch: bool
     quantity_mismatch: bool
+    normalized_unit_price: Decimal | None
+    uom_mismatch: bool
 
 
 class BidLevelingRowOut(ORMModel):
     boq_line_item_id: UUID
     cells: list[BidLevelingCellOut]
+
+
+class QuotationTotalOut(ORMModel):
+    quotation_id: UUID
+    vendor_id: UUID
+    stated_total: Decimal | None
+    total_mismatch: bool
+
+
+class QuotationFxRateSet(BaseModel):
+    """Bid-leveling-stage FX (Module C Phase 6) -- named distinctly from
+    app.schemas.settlement.FxRateSet (Module D1's own acceptance-stage
+    rate) even though both exist in this codebase; they are deliberately
+    separate concepts, not the same schema reused."""
+
+    fx_rate_to_base: Decimal = Field(gt=0)
+    fx_rate_date: date

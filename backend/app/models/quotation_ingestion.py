@@ -14,13 +14,14 @@ TenantEntity rows.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     BigInteger,
     Boolean,
+    Date,
     ForeignKey,
     Numeric,
     String,
@@ -193,6 +194,22 @@ class Quotation(TenantEntity):
     # rejected (an explicit bulk reviewer action).
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=QuotationStatus.PROPOSED.value)
 
+    # Module C Phase 6: subtotal-level arithmetic verification -- LLM path
+    # only (the deterministic pricing-sheet template has no independent
+    # grand-total cell of its own to check the sum of lines against, so
+    # these stay NULL/false there; see app.services.quotation_ingestion::
+    # _check_stated_total's docstring).
+    stated_total: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    total_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
+    # Bid-leveling-stage FX (Module C), deliberately separate from
+    # BidSettlementLineItem.fx_rate/fx_rate_date's own acceptance-stage
+    # rate (Module D1, migration 0019) -- a quote reviewed today and
+    # settled months later may warrant a different recorded rate at each
+    # stage. Never auto-populated -- a human records it (set_quotation_fx_rate).
+    fx_rate_to_base: Mapped[float | None] = mapped_column(Numeric(14, 6), nullable=True)
+    fx_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
 
 class QuotationLineItem(TenantEntity):
     __tablename__ = "quotation_line_items"
@@ -223,6 +240,17 @@ class QuotationLineItem(TenantEntity):
     extended_price_computed: Mapped[float | None] = mapped_column(Numeric(16, 4), nullable=True)
     arithmetic_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     quantity_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Module C Phase 6: the unit the vendor actually printed against this
+    # line (LLM path only, verbatim, not normalized -- the deterministic
+    # path matches by hidden row-id against a BOQ item whose own uom is
+    # already authoritative, so it never has its own). quantity_mismatch's
+    # comparison above converts through this via app.boq.units when it's
+    # convertible-but-different from the matched BOQ item's uom;
+    # uom_mismatch is set instead when the two units aren't even the same
+    # dimension (e.g. M vs M2) -- a stronger, distinct signal from "the
+    # numbers don't match."
+    vendor_uom: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    uom_mismatch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False, server_default="1.0")
     source: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -259,3 +287,12 @@ class QuotationExclusionFlag(TenantEntity):
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Module C Phase 6: "page or cell" citation (page number for PDF/image,
+    # a sheet!row reference for XLSX -- see dump_workbook_text_with_refs)
+    # alongside the verbatim source_quote_text this table already had.
+    # citation_verified is set by a deterministic substring search against
+    # the actual source text sent to the model, NOT trusted from the
+    # model's own say-so -- a citation that doesn't verify is kept, never
+    # dropped (it might still be real), just flagged for closer review.
+    source_location: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    citation_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

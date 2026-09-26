@@ -23,18 +23,21 @@ class ExtractedLineItem(BaseModel):
     unit_price: float | None = None
     quantity: float | None = None
     extended_price_stated: float | None = None
+    vendor_uom: str | None = None
     remarks_text: str | None = None
 
 
 class ExtractedExclusion(BaseModel):
     flag_text: str
     source_quote_text: str
+    source_location: str | None = None
 
 
 class QuotationExtractionResult(BaseModel):
     currency: str | None = None
     vat_inclusive: bool | None = None
     line_items: list[ExtractedLineItem] = Field(default_factory=list)
+    stated_total: float | None = None
     exclusions: list[ExtractedExclusion] = Field(default_factory=list)
     confidence: float = 0.0
 

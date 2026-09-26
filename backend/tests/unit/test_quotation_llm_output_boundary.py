@@ -60,11 +60,12 @@ def test_schema_forbids_additional_properties_at_every_object_level():
 
 def test_pydantic_models_only_carry_extraction_fields():
     assert set(ExtractedLineItem.model_fields) == {
-        "vendor_item_text", "vendor_description_text", "unit_price", "quantity", "extended_price_stated", "remarks_text",
+        "vendor_item_text", "vendor_description_text", "unit_price", "quantity", "extended_price_stated",
+        "vendor_uom", "remarks_text",
     }
-    assert set(ExtractedExclusion.model_fields) == {"flag_text", "source_quote_text"}
+    assert set(ExtractedExclusion.model_fields) == {"flag_text", "source_quote_text", "source_location"}
     assert set(QuotationExtractionResult.model_fields) == {
-        "currency", "vat_inclusive", "line_items", "exclusions", "confidence",
+        "currency", "vat_inclusive", "line_items", "stated_total", "exclusions", "confidence",
     }
 
 
