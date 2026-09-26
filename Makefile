@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -109,6 +109,13 @@ dev-simulate-typology-pdf:
 # model isn't provisioned -- see `make download-embedding-model`.
 dev-simulate-semantic-matching:
 	$(COMPOSE) exec backend python -m app.cli simulate-semantic-matching
+
+# Module E Phase 1 end to end -- schema readiness only (no workflow), so
+# this seeds rows by direct ORM construction and reads them back through
+# the real GET endpoints' service functions. Requires a WON settlement in
+# the demo tenant -- run `make dev-simulate-settlement` first.
+dev-simulate-module-e-schema:
+	$(COMPOSE) exec backend python -m app.cli simulate-module-e-schema
 
 # DEV ONLY -- provisions the ONNX embedding model into the `onnxmodels`
 # named volume the real backend/celery-worker containers read from
