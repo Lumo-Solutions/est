@@ -929,6 +929,150 @@ async def simulate_takeoff_pdf() -> None:
         )
 
 
+_SIM_LEAD_ESTIMATOR_TYPOLOGY_ID = UUID("00000000-0000-0000-0000-0000000000d5")
+
+
+async def simulate_typology_pdf() -> None:
+    """DEV ONLY: Module B Phase 4c end to end against the real ingest
+    pipeline -- a two-sheet PDF (one drawing, two pages), page 1 with two
+    translated copies of the same 50x30 rectangle "unit" plus one 40x40
+    distractor shape, page 2 with a third copy of the same 50x30 unit --
+    then detect_clusters (PDF geometry-hash grouping, across both sheets),
+    confirm (single group, no split), and rollup (no BOQ items linked in
+    this simulation, so the rollup's "no items" path is what's exercised;
+    the full arithmetic path is covered by the integration test suite).
+    See docs/module-b-phase4-plan.md §4c."""
+    import asyncio as _asyncio
+
+    from app.core.enums import ExtractionJobStatus, ExtractionJobType
+    from app.models.takeoff import ExtractionJob
+    from app.services import takeoff as takeoff_service
+    from app.services import typology as typology_service
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    lead_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_LEAD_ESTIMATOR_TYPOLOGY_ID, sub="lead-estimator-typology",
+        roles=frozenset({"lead_estimator"}),
+    )
+
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        rfq, _package, _boq_items, _vendor = await _get_or_create_d1_demo_rfq(session, sys_ctx, tenant_id)
+        project_id = rfq.project_id
+
+        existing_member = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == _SIM_LEAD_ESTIMATOR_TYPOLOGY_ID)
+            )
+        ).scalar_one_or_none()
+        if existing_member is None:
+            session.add(ProjectMember(project_id=project_id, user_id=_SIM_LEAD_ESTIMATOR_TYPOLOGY_ID, tenant_id=tenant_id))
+            await session.flush()
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    for page_rects in ([(100, 600, 50, 30), (300, 600, 50, 30), (500, 600, 40, 40)], [(100, 600, 50, 30)]):
+        c.drawString(50, 800, "PROJECT: Module B Phase 4c typology clustering simulation")
+        c.drawString(50, 780, "SHEET: unit layout")
+        for x, y, w, h in page_rects:
+            c.rect(x, y, w, h, stroke=1, fill=0)
+        c.showPage()
+    c.save()
+    pdf_bytes = buf.getvalue()
+
+    async with session_scope(lead_ctx) as session:
+        drawing = await takeoff_service.upload_drawing(
+            session, lead_ctx, project_id, "unit-layout.pdf", "application/pdf", pdf_bytes
+        )
+        drawing_id = drawing.id
+        print(f"uploaded 2-sheet drawing {drawing_id}")
+        job_ids = await takeoff_service.trigger_ingest(session, lead_ctx, drawing_id)
+        print(f"triggered ingest: celery task {job_ids}")
+
+    # extract_title_block runs once PER SHEET (sheet_id set); extract_geometry
+    # runs once for the WHOLE DRAWING (sheet_id NULL -- it loops every sheet
+    # internally, see app.workers.tasks.takeoff::_extract_geometry_
+    # measurements_body) -- this drawing has 2 sheets, so 2 title-block rows
+    # + 1 geometry row need to succeed, not "2 of each".
+    deadline = _asyncio.get_event_loop().time() + 60
+    rows: list[ExtractionJob] = []
+    while _asyncio.get_event_loop().time() < deadline:
+        async with session_scope(sys_ctx) as session:
+            rows = (
+                await session.execute(select(ExtractionJob).where(ExtractionJob.drawing_id == drawing_id))
+            ).scalars().all()
+        title_block_succeeded = sum(
+            1 for r in rows
+            if r.job_type == ExtractionJobType.EXTRACT_TITLE_BLOCK.value and r.status == ExtractionJobStatus.SUCCEEDED.value
+        )
+        geometry_succeeded = any(
+            r.job_type == ExtractionJobType.EXTRACT_GEOMETRY.value and r.status == ExtractionJobStatus.SUCCEEDED.value
+            for r in rows
+        )
+        if title_block_succeeded >= 2 and geometry_succeeded:
+            break
+        if any(r.status == ExtractionJobStatus.FAILED.value for r in rows):
+            raise RuntimeError(f"simulate-typology-pdf: an extraction job failed: {[(r.job_type, r.status, r.error) for r in rows]}")
+        await _asyncio.sleep(2)
+    else:
+        raise RuntimeError(f"simulate-typology-pdf: timed out waiting for extraction, saw {[(r.job_type, r.status) for r in rows]}")
+    print("both sheets' extraction jobs succeeded")
+
+    async with session_scope(lead_ctx) as session:
+        newly_created = await typology_service.detect_clusters(session, lead_ctx, project_id)
+        print(f"detect_clusters created {len(newly_created)} new proposal(s) this run")
+
+        # This demo project is reused across every simulate-* CLI command
+        # (_get_or_create_d1_demo_rfq) and every run re-uploads the SAME
+        # fixture geometry, so detection is genuinely project-wide (by
+        # design -- see detect_clusters' own docstring): a second+ run's
+        # 40x40 "distractor" rectangle now legitimately repeats too (one
+        # per prior run), which detect_clusters correctly proposes as its
+        # OWN separate, valid cluster -- it just isn't the one this
+        # simulation cares about. Disambiguate by instance_count (3 is
+        # this fixture's own known shape -- 2 from sheet 1 + 1 from sheet
+        # 2), not by "whichever cluster is newest", across every
+        # pdf_geometry_hash cluster the project has (old runs' + this
+        # run's), so a rerun against this same persistent dev database
+        # never depends on run history.
+        all_pdf_clusters = [c for c in await typology_service.list_clusters(session, project_id) if c.detection_method == "pdf_geometry_hash"]
+        cluster = None
+        for candidate in all_pdf_clusters:
+            candidate_instances = await typology_service.list_cluster_instances(session, candidate.id)
+            if sum(i.instance_count for i in candidate_instances) == 3:
+                cluster = candidate
+                break
+        assert cluster is not None, f"no pdf_geometry_hash cluster with instance_count==3 among {len(all_pdf_clusters)} candidate(s)"
+        print(f"using cluster {cluster.id} (status={cluster.status}, key={cluster.detection_key[:16]}...) -- {len(all_pdf_clusters) - 1} other unrelated cluster(s) from prior runs ignored")
+
+        instances = await typology_service.list_cluster_instances(session, cluster.id)
+        assert len(instances) == 1 and instances[0].instance_count == 3, instances
+        print(f"instance group {instances[0].group_label!r}: instance_count={instances[0].instance_count} (2 from sheet 1 + 1 from sheet 2, distractor excluded)")
+
+        again = await typology_service.detect_clusters(session, lead_ctx, project_id)
+        assert again == [], "re-running detect must not create a duplicate proposed cluster"
+        print("re-running detect created no duplicate (idempotent)")
+
+        if cluster.status == "confirmed":
+            confirmed = cluster
+            print(f"already confirmed by a prior run: status={confirmed.status} master_instance_id={confirmed.master_instance_id}")
+        else:
+            confirmed = await typology_service.confirm_cluster(
+                session, lead_ctx, cluster.id,
+                groups=[{"group_label": "type A", "handles": instances[0].source_handles}],
+                master_group_label="type A", deltas=[],
+            )
+            print(f"confirmed: status={confirmed.status} master_instance_id={confirmed.master_instance_id}")
+
+        rollup = await typology_service.get_rollup(session, cluster.id)
+        print(f"rollup: total_instance_count={rollup['total_instance_count']} items={rollup['items']} (no BOQ items linked in this simulation)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -946,6 +1090,10 @@ def main() -> None:
         "simulate-takeoff-pdf",
         help="DEV ONLY: ingest a synthetic vector PDF through the real Celery pipeline and exercise scale calibration",
     )
+    subparsers.add_parser(
+        "simulate-typology-pdf",
+        help="DEV ONLY: ingest a 2-sheet synthetic PDF and exercise Module B Phase 4c typology detect/confirm/rollup",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
@@ -956,6 +1104,8 @@ def main() -> None:
         asyncio.run(simulate_settlement())
     elif args.command == "simulate-takeoff-pdf":
         asyncio.run(simulate_takeoff_pdf())
+    elif args.command == "simulate-typology-pdf":
+        asyncio.run(simulate_typology_pdf())
 
 
 if __name__ == "__main__":
