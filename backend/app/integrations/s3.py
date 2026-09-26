@@ -60,8 +60,19 @@ async def get_object_bytes(object_key: str, settings: Settings | None = None, *,
 async def presign_get_url(
     object_key: str, expires_in: int = 300, settings: Settings | None = None, *, bucket: str | None = None
 ) -> str:
+    """Signed against `s3_public_endpoint`, not `s3_endpoint` -- the client's
+    configured endpoint_url is baked into both the returned URL's host AND
+    the signature itself, so the URL must be built against the host it will
+    actually be fetched from (a real browser), never rewritten after the
+    fact. This is a pure, local computation (no network call), so a second
+    client purely for signing costs nothing extra."""
     settings = settings or get_settings()
-    async with s3_client(settings) as client:
+    session = _session(settings)
+    async with session.client(
+        "s3",
+        endpoint_url=settings.s3_public_endpoint,
+        config=Config(s3={"addressing_style": "path" if settings.s3_force_path_style else "auto"}),
+    ) as client:
         return await client.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket or settings.s3_bucket_drawings, "Key": object_key},

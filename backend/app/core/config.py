@@ -29,6 +29,13 @@ class Settings(BaseSettings):
 
     # --- object storage ---
     s3_endpoint: str = Field(alias="S3_ENDPOINT")
+    # Browser-facing host for presigned URLs (drawing downloads) -- same
+    # internal/public split as keycloak_base_url/keycloak_public_url above.
+    # `s3_endpoint` (e.g. "http://seaweedfs:8333") only resolves inside the
+    # compose network; a presigned URL handed to a real browser must be
+    # signed against a host it can actually reach. Found while building
+    # Phase 8b's PDF viewer -- see docs/module-frontend-phase8b-plan.md.
+    s3_public_endpoint: str = Field(default="http://localhost:8333", alias="S3_PUBLIC_ENDPOINT")
     s3_access_key: str = Field(default="", alias="S3_ACCESS_KEY")
     s3_secret_key: str = Field(default="", alias="S3_SECRET_KEY")
     s3_region: str = Field(default="us-east-1", alias="S3_REGION")
