@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_session, require_roles
@@ -14,10 +14,13 @@ from app.schemas.settlement import (
     BidSettlementOut,
     BidSettlementScenarioOut,
     BidSettlementTradeOverrideOut,
+    ExportRequest,
     FxRateSet,
     LineCostUpdate,
+    OutcomeRequest,
     ScenarioCreate,
     SettlementDefaultsUpdate,
+    SettlementReasonCodeOut,
     SimulateRequest,
     SimulateResult,
     TradeOverrideUpdate,
@@ -28,6 +31,8 @@ router = APIRouter(tags=["bid-settlements"])
 
 _HEADER_ROLES = (Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
 _LINE_ROLES = (Role.ESTIMATOR.value, *_HEADER_ROLES)
+_OUTCOME_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _SUBMIT_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
 # decide's role requirement is dynamic (whichever tier the approval routed
 # to -- bd_director or managing_director) and segregation-of-duties is
@@ -171,3 +176,37 @@ async def decide_settlement_endpoint(
     await settlement_service.decide_settlement(session, ctx, settlement_id, approve=data.approve, note=data.note)
     settlement, lines, trade_overrides = await settlement_service.get_settlement_detail(session, settlement_id)
     return _to_out(settlement, lines, trade_overrides)
+
+
+@router.post("/bid-settlements/{settlement_id}/export")
+async def export_settlement_endpoint(
+    settlement_id: UUID,
+    data: ExportRequest = ExportRequest(),
+    ctx: RequestContext = Depends(require_roles(*_LINE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    file_bytes, sha256, filename = await settlement_service.export_settlement(session, ctx, settlement_id, data)
+    return Response(
+        content=file_bytes, media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "X-File-SHA256": sha256},
+    )
+
+
+@router.post("/bid-settlements/{settlement_id}/outcome", response_model=BidSettlementOut)
+async def record_outcome_endpoint(
+    settlement_id: UUID,
+    data: OutcomeRequest,
+    ctx: RequestContext = Depends(require_roles(*_OUTCOME_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> BidSettlementOut:
+    await settlement_service.record_outcome(session, ctx, settlement_id, data)
+    settlement, lines, trade_overrides = await settlement_service.get_settlement_detail(session, settlement_id)
+    return _to_out(settlement, lines, trade_overrides)
+
+
+@router.get("/settlement-reason-codes", response_model=list[SettlementReasonCodeOut])
+async def list_reason_codes_endpoint(
+    ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[SettlementReasonCodeOut]:
+    codes = await settlement_service.list_reason_codes(session, ctx)
+    return [SettlementReasonCodeOut.model_validate(c) for c in codes]

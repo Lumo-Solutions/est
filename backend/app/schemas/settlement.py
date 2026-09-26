@@ -119,6 +119,14 @@ class BidSettlementOut(ORMModel):
     decided_at: datetime | None
     decided_by: UUID | None
     outcome: str | None
+    outcome_our_price: Decimal | None
+    outcome_winning_price: Decimal | None
+    outcome_competitor_names: list[str]
+    outcome_competitor_vendor_ids: list[UUID]
+    outcome_reason_codes: list[str]
+    outcome_recorded_by: UUID | None
+    outcome_recorded_at: datetime | None
+    outcome_note: str | None
     notes: str | None
     lines: list[BidSettlementLineItemOut] = []
     trade_overrides: list[BidSettlementTradeOverrideOut] = []
@@ -202,3 +210,30 @@ class BidSettlementScenarioOut(ORMModel):
     result: dict
     created_by: UUID | None
     created_at: datetime
+
+
+# --------------------------------------------------------------------------
+# Module D2: generated export, win/loss
+# --------------------------------------------------------------------------
+
+
+class ExportRequest(BaseModel):
+    include_vat: bool = False
+    vat_pct: float = 5.0
+
+
+class OutcomeRequest(BaseModel):
+    outcome: Literal["won", "lost"]
+    our_price: Decimal | None = None
+    winning_price: Decimal | None = None
+    competitor_names: list[str] = Field(default_factory=list)
+    competitor_vendor_ids: list[UUID] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+
+class SettlementReasonCodeOut(ORMModel):
+    id: UUID
+    code: str
+    label: str
+    is_active: bool

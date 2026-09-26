@@ -8,10 +8,14 @@ at submit (§5c), and the worked example (§5).
 
 from __future__ import annotations
 
+import hashlib
+import io
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,11 +35,15 @@ from app.models.settlement import (
     BidSettlementLineItem,
     BidSettlementScenario,
     BidSettlementTradeOverride,
+    SettlementReasonCode,
 )
+from app.models.vendors import Vendor
 from app.schemas.approvals import ApprovalRequestCreate
 from app.schemas.settlement import (
+    ExportRequest,
     FxRateSet,
     LineCostUpdate,
+    OutcomeRequest,
     QuantityMismatch,
     ScenarioCreate,
     SettlementDefaultsUpdate,
@@ -48,6 +56,8 @@ from app.schemas.settlement import (
 from app.services import approvals as approvals_service
 from app.services import audit
 from app.services import costlib as costlib_service
+
+_SUBMIT_AND_OUTCOME_STATUSES = (BidSettlementStatus.SUBMITTED.value, BidSettlementStatus.APPROVED.value)
 
 # lead_estimator+: structural decisions on the settlement itself (matches
 # quotations' own WRITE_ROLES, migration 0016). estimator+ additionally
@@ -665,5 +675,166 @@ async def decide_settlement(
     await audit.record(
         session, ctx, action=AuditAction.APPROVE if approve else AuditAction.REJECT, entity_type="bid_settlement",
         entity_id=settlement.id, project_id=settlement.project_id, payload={"status": settlement.status, "note": note},
+    )
+    return settlement
+
+
+# --------------------------------------------------------------------------
+# Module D2: generated export (§3 of docs/module-d2-plan.md)
+# --------------------------------------------------------------------------
+
+
+def _build_export_workbook(
+    settlement: BidSettlement, all_items: list[BoqLineItem], lines_by_item_id: dict[UUID, BidSettlementLineItem],
+    data: ExportRequest,
+) -> bytes:
+    """A fresh workbook, built entirely from the six columns below -- never
+    opens or touches any retained original (that's D3). No document
+    properties, comments, defined names, or extra sheets are ever set, so
+    there is nothing beyond these cells for the leak test (§4 of the plan)
+    to have to find clean."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOQ"
+    header = ("Item No", "Description", "Unit", "Qty", "Rate", "Amount")
+    ws.append(header)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    row = 1
+    for item in all_items:
+        row += 1
+        line = lines_by_item_id.get(item.id)
+        ws.cell(row=row, column=1, value=item.item_no)
+        ws.cell(row=row, column=2, value=item.description)
+        ws.cell(row=row, column=3, value=item.uom)
+        qty = line.quantity if line is not None else item.boq_quantity
+        ws.cell(row=row, column=4, value=float(qty) if qty is not None else None)
+        if line is not None and line.unit_sell_rate is not None:
+            ws.cell(row=row, column=5, value=float(line.unit_sell_rate))
+            ws.cell(row=row, column=6, value=float(line.line_amount))
+
+    last_data_row = row
+    subtotal_row = last_data_row + 2
+    ws.cell(row=subtotal_row, column=2, value="Subtotal").font = Font(bold=True)
+    ws.cell(row=subtotal_row, column=6, value=f"=SUM(F2:F{last_data_row})")
+
+    if data.include_vat:
+        vat_row = subtotal_row + 1
+        ws.cell(row=vat_row, column=2, value=f"VAT @ {data.vat_pct:g}%")
+        ws.cell(row=vat_row, column=6, value=f"=F{subtotal_row}*{data.vat_pct}/100")
+        total_row = vat_row + 1
+        ws.cell(row=total_row, column=2, value="Total incl. VAT").font = Font(bold=True)
+        ws.cell(row=total_row, column=6, value=f"=F{subtotal_row}+F{vat_row}").font = Font(bold=True)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def export_settlement(
+    session: AsyncSession, ctx: RequestContext, settlement_id: UUID, data: ExportRequest
+) -> tuple[bytes, str, str]:
+    """Returns (file_bytes, sha256, filename). Export only from an
+    approved settlement; audited with the sha256 (§3)."""
+    _require_role(ctx, _LINE_ROLES, "Exporting a settlement")
+    settlement = await _get_settlement(session, settlement_id)
+    if settlement.status != BidSettlementStatus.APPROVED.value:
+        raise ConflictError(f"Bid settlement is {settlement.status}, not approved -- export is only available once approved")
+
+    lines = await list_settlement_lines(session, settlement.id)
+    lines_by_item_id = {line.boq_line_item_id: line for line in lines}
+    all_items = list(
+        (
+            await session.execute(
+                select(BoqLineItem).where(BoqLineItem.project_id == settlement.project_id).order_by(BoqLineItem.path)
+            )
+        ).scalars().all()
+    )
+
+    file_bytes = _build_export_workbook(settlement, all_items, lines_by_item_id, data)
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    filename = f"settlement-{settlement.project_id}-v{settlement.version_no}.xlsx"
+
+    await audit.record(
+        session, ctx, action=AuditAction.EXPORT, entity_type="bid_settlement", entity_id=settlement.id,
+        project_id=settlement.project_id,
+        payload={
+            "version_no": settlement.version_no, "sha256": sha256, "include_vat": data.include_vat,
+            "vat_pct": data.vat_pct if data.include_vat else None,
+        },
+    )
+    return file_bytes, sha256, filename
+
+
+# --------------------------------------------------------------------------
+# Module D2: win/loss (§5 of docs/module-d2-plan.md)
+# --------------------------------------------------------------------------
+
+_OUTCOME_ROLES = ("bd_director", "managing_director")
+
+
+async def list_reason_codes(session: AsyncSession, ctx: RequestContext) -> list[SettlementReasonCode]:
+    result = await session.execute(
+        select(SettlementReasonCode)
+        .where(SettlementReasonCode.tenant_id == ctx.tenant_id, SettlementReasonCode.is_active.is_(True))
+        .order_by(SettlementReasonCode.code)
+    )
+    return list(result.scalars().all())
+
+
+async def record_outcome(
+    session: AsyncSession, ctx: RequestContext, settlement_id: UUID, data: OutcomeRequest
+) -> BidSettlement:
+    _require_role(ctx, _OUTCOME_ROLES, "Recording a settlement outcome")
+    settlement = await _get_settlement(session, settlement_id)
+    if settlement.status not in _SUBMIT_AND_OUTCOME_STATUSES:
+        raise ConflictError(
+            f"Bid settlement is {settlement.status} -- outcome can only be recorded from submitted or approved"
+        )
+
+    if data.reason_codes:
+        valid = {
+            row.code
+            for row in (
+                await session.execute(
+                    select(SettlementReasonCode).where(
+                        SettlementReasonCode.tenant_id == ctx.tenant_id, SettlementReasonCode.is_active.is_(True),
+                        SettlementReasonCode.code.in_(data.reason_codes),
+                    )
+                )
+            ).scalars().all()
+        }
+        unknown = set(data.reason_codes) - valid
+        if unknown:
+            raise ValidationAppError(f"Unknown or inactive reason code(s): {', '.join(sorted(unknown))}")
+
+    if data.competitor_vendor_ids:
+        found = {
+            row.id
+            for row in (
+                await session.execute(select(Vendor).where(Vendor.id.in_(data.competitor_vendor_ids)))
+            ).scalars().all()
+        }
+        missing = set(data.competitor_vendor_ids) - found
+        if missing:
+            raise ValidationAppError(f"Unknown vendor id(s): {', '.join(str(v) for v in sorted(missing, key=str))}")
+
+    settlement.outcome = data.outcome
+    settlement.status = data.outcome  # "won"/"lost" -- moving to won/lost sets the settlement status
+    settlement.outcome_our_price = data.our_price if data.our_price is not None else settlement.tender_total
+    settlement.outcome_winning_price = data.winning_price
+    settlement.outcome_competitor_names = data.competitor_names
+    settlement.outcome_competitor_vendor_ids = data.competitor_vendor_ids
+    settlement.outcome_reason_codes = data.reason_codes
+    settlement.outcome_recorded_by = ctx.user_id
+    settlement.outcome_recorded_at = datetime.now(timezone.utc)
+    settlement.outcome_note = data.note
+    await session.flush()
+
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="bid_settlement", entity_id=settlement.id,
+        project_id=settlement.project_id,
+        payload={"outcome": data.outcome, "reason_codes": data.reason_codes, "our_price": str(settlement.outcome_our_price)},
     )
     return settlement

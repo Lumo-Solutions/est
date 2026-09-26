@@ -71,6 +71,11 @@ class BidSettlement(TenantEntity):
     outcome_our_price: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
     outcome_winning_price: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
     outcome_competitor_names: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    # Module D2: an optional structured link alongside the free-text names
+    # above, for a competitor who happens to be a known Vendor row.
+    outcome_competitor_vendor_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}"
+    )
     outcome_reason_codes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
     outcome_recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     outcome_recorded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
@@ -172,3 +177,18 @@ class BidSettlementScenario(TenantEntity):
     result: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # created_by -- who saved this scenario -- is TenantEntity's own
     # ActorStampMixin column; no separate field needed.
+
+
+class SettlementReasonCode(TenantEntity):
+    """Module D2 win/loss capture: a tenant-configurable reason code list
+    (price/technical/relationship/timeline/scope/other, seeded by
+    app.cli seed), not a hardcoded Python enum -- per the build brief's
+    standing constraint that configurable values live in the DB. Validated
+    against by app/services/settlement.py::record_outcome."""
+
+    __tablename__ = "settlement_reason_codes"
+    __table_args__ = (UniqueConstraint("tenant_id", "code", name="uq_settlement_reason_codes_tenant_code"),)
+
+    code: Mapped[str] = mapped_column(String(32), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
