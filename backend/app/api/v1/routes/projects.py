@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_session, require_roles
 from app.core.context import RequestContext
 from app.core.enums import Role
-from app.schemas.projects import ProjectCreate, ProjectMemberAdd, ProjectOut
+from app.schemas.projects import ProjectCreate, ProjectLocationUpdate, ProjectMemberAdd, ProjectOut
 from app.services import projects as projects_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -38,6 +38,17 @@ async def get_project_endpoint(
     project_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> ProjectOut:
     return ProjectOut.model_validate(await projects_service.get_project(session, project_id))
+
+
+@router.patch("/{project_id}/location", response_model=ProjectOut)
+async def update_project_location_endpoint(
+    project_id: UUID,
+    data: ProjectLocationUpdate,
+    ctx: RequestContext = Depends(require_roles(*_CREATE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectOut:
+    project = await projects_service.update_location(session, ctx, project_id, data)
+    return ProjectOut.model_validate(project)
 
 
 @router.post("/{project_id}/members", status_code=204, response_model=None)

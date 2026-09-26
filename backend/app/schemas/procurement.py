@@ -45,6 +45,7 @@ class MatchedVendorOut(BaseModel):
     country: str | None
     eligible: bool
     ineligible_reason: str | None = None
+    service_regions: list[str] = []
 
 
 class RfqCreateRequest(BaseModel):

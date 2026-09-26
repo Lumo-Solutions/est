@@ -111,3 +111,22 @@ async def scan_duplicates_endpoint(
 ) -> list[DuplicateCandidateOut]:
     rows = await vendors_service.scan_duplicates(session, ctx, vendor_id)
     return [DuplicateCandidateOut.model_validate(r) for r in rows]
+
+
+@router.get("/{vendor_id}/service-regions", response_model=list[str])
+async def list_service_regions_endpoint(
+    vendor_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[str]:
+    rows = await vendors_service.list_service_regions(session, vendor_id)
+    return [r.emirate for r in rows]
+
+
+@router.put("/{vendor_id}/service-regions", response_model=list[str])
+async def replace_service_regions_endpoint(
+    vendor_id: UUID,
+    emirates: list[str],
+    ctx: RequestContext = Depends(require_roles(*_WRITE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> list[str]:
+    rows = await vendors_service.replace_service_regions(session, ctx, vendor_id, emirates)
+    return [r.emirate for r in rows]

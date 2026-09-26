@@ -60,6 +60,7 @@ from app.models.quotation_ingestion import (
     QuotationExclusionFlag,
     QuotationLineItem,
 )
+from app.procurement import quotation_verification
 from app.procurement.attachment_safety import check_attachment
 from app.procurement.email_auth import parse_authentication_results
 from app.procurement.inbound_match import match_inbound_email
@@ -493,15 +494,19 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
     data = await get_object_bytes(attachment.raw_object_key, bucket=settings.s3_bucket_procurement)
 
     if extraction_method == QuotationExtractionMethod.VLM_PDF.value:
+        source_text = ""
         page_png = render_page_png(data, 0)
-        result = await extract_quotation(candidate_text="", image_bytes=page_png, image_mime="image/png", page_number=1, page_count=1)
+        result = await extract_quotation(candidate_text=source_text, image_bytes=page_png, image_mime="image/png", page_number=1, page_count=1)
     elif extraction_method == QuotationExtractionMethod.VLM_IMAGE.value:
+        source_text = ""
         mime = "image/png" if attachment.content_type_sniffed == "png" else "image/jpeg"
-        result = await extract_quotation(candidate_text="", image_bytes=data, image_mime=mime)
+        result = await extract_quotation(candidate_text=source_text, image_bytes=data, image_mime=mime)
     elif extraction_method == QuotationExtractionMethod.VLM_XLSX_OTHER.value:
-        result = await extract_quotation(candidate_text=dump_workbook_text(data), image_bytes=None)
+        source_text = dump_workbook_text(data)
+        result = await extract_quotation(candidate_text=source_text, image_bytes=None)
     else:
-        result = await extract_quotation(candidate_text=data.decode("utf-8", errors="replace"), image_bytes=None)
+        source_text = data.decode("utf-8", errors="replace")
+        result = await extract_quotation(candidate_text=source_text, image_bytes=None)
 
     status = QuotationStatus.PROPOSED.value if result.line_items else QuotationStatus.EXTRACTION_EMPTY.value
     quotation = await _create_quotation_version(
@@ -527,9 +532,22 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
             if item.extended_price_stated is not None:
                 arithmetic_mismatch = abs(extended_computed - Decimal(str(item.extended_price_stated))) > Decimal("0.01")
 
+        # Module C Phase 6: compare through a unit conversion, not raw
+        # numbers, when the vendor's own stated unit and the matched BOQ
+        # item's unit are both known and dimensionally convertible but not
+        # literally the same string (e.g. "LM" vendor-side vs "M" BOQ-side
+        # -- the same length, different notation). Genuinely different
+        # dimensions (e.g. "M" vs "M2") get their own uom_mismatch flag
+        # instead -- a stronger, distinct signal from "the numbers don't
+        # match" that a plain quantity comparison would otherwise conflate.
+        vendor_quantity_decimal = Decimal(str(item.quantity)) if item.quantity is not None else None
+        compare_quantity, uom_mismatch = quotation_verification.resolve_quantity_comparison(
+            item.vendor_uom, boq_item.uom if boq_item is not None else None, vendor_quantity_decimal,
+        )
+
         quantity_mismatch = (
-            boq_item is not None and boq_item.boq_quantity is not None and item.quantity is not None
-            and abs(Decimal(str(item.quantity)) - Decimal(str(boq_item.boq_quantity))) > Decimal("0.01")
+            boq_item is not None and boq_item.boq_quantity is not None and compare_quantity is not None
+            and abs(Decimal(str(compare_quantity)) - Decimal(str(boq_item.boq_quantity))) > Decimal("0.01")
         )
 
         line_status = QuotationLineItemStatus.PROPOSED.value if match.boq_line_item_id else QuotationLineItemStatus.NEEDS_REVIEW.value
@@ -539,6 +557,7 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
             vendor_description_text=item.vendor_description_text, unit_price=item.unit_price, quantity=item.quantity,
             extended_price_stated=item.extended_price_stated, extended_price_computed=extended_computed,
             arithmetic_mismatch=arithmetic_mismatch, quantity_mismatch=bool(quantity_mismatch),
+            vendor_uom=item.vendor_uom, uom_mismatch=uom_mismatch,
             confidence=Decimal(str(round(match.score, 3))), source=QuotationLineSource.LLM.value,
             match_method=match.match_method, remarks_text=item.remarks_text, status=line_status,
         )
@@ -547,11 +566,24 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
     _embed_quotation_line_items_best_effort(new_items)
     await session.flush()
 
+    # Module C Phase 6: subtotal-level arithmetic verification -- LLM path
+    # only, since the deterministic pricing-sheet template has no
+    # independent grand-total cell of its own to check against (see
+    # migration 0026's own docstring).
+    if result.stated_total is not None:
+        quotation.stated_total = Decimal(str(result.stated_total))
+        line_amounts = [item.extended_price_computed or item.extended_price_stated for item in new_items]
+        quotation.total_mismatch = quotation_verification.check_total_mismatch(quotation.stated_total, line_amounts)
+        await session.flush()
+
     for excl in result.exclusions:
+        source_location = excl.source_location
+        citation_verified = quotation_verification.verify_citation(excl.source_quote_text, source_text)
         session.add(
             QuotationExclusionFlag(
                 tenant_id=rfq.tenant_id, quotation_id=quotation.id, project_id=rfq.project_id,
                 flag_text=excl.flag_text, source_quote_text=excl.source_quote_text,
+                source_location=source_location, citation_verified=citation_verified,
                 confidence=Decimal(str(round(result.confidence, 3))),
             )
         )

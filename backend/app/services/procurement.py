@@ -34,6 +34,7 @@ from app.core.errors import (
 )
 from app.models.boq import BoqLineItem
 from app.models.procurement import ProcurementPackage, ProcurementPackageItem, Rfq
+from app.models.tenancy import Project
 from app.models.vendors import Vendor, VendorContact, VendorTrade
 from app.schemas.procurement import MatchedVendorOut, ProcurementPackageCreate, RfqCreateRequest
 from app.services import audit
@@ -144,30 +145,69 @@ async def list_package_boq_items(session: AsyncSession, package_id: UUID) -> lis
 # --------------------------------------------------------------------------
 
 
-async def _vendor_eligibility(session: AsyncSession, vendor: Vendor, trade_node_id: UUID) -> tuple[bool, str | None]:
-    """A vendor is eligible when it is ACTIVE (SRS default #2) AND has an
-    APPROVED/CONDITIONAL prequalification effective today, scoped either to
-    this exact trade or to "all trades" (scope_trade_node_id IS NULL -- a
-    blanket prequalification). Anything else -- not active, no
-    prequalification row, an expired one, or one in
-    pending/suspended/rejected/blacklisted -- excludes the vendor by
-    default (SRS default #6: "excludes vendors whose prequalification for
-    the trade is expired or missing"). Checked here (not just filtered out
-    of match_vendors' query) so create_rfqs enforces the exact same rule for
-    a vendor_id supplied directly, not only one picked from that listing."""
+def _resolve_geography_eligibility(project_emirate: str | None, served_regions: set[str]) -> tuple[bool, str | None]:
+    """Pure decision (Module C Phase 6), split out from
+    _vendor_geography_eligible below for unit testing with no DB at all.
+    Geography is only ever evaluated when there's something real to
+    compare: a project with no emirate set, or a vendor with zero declared
+    service_regions, means "nothing to filter on" and this returns
+    eligible -- never "assume available everywhere" (a silent guess) and
+    never "assume unavailable" (which would wrongly exclude every vendor
+    until every one of them is configured). Only an actual project-emirate
+    vs vendor-regions mismatch excludes."""
+    if project_emirate is None or not served_regions:
+        return True, None
+    if project_emirate in served_regions:
+        return True, None
+    return False, f"vendor does not serve {project_emirate!r} (serves: {sorted(served_regions)})"
+
+
+async def _vendor_geography_eligible(session: AsyncSession, vendor: Vendor, project_id: UUID) -> tuple[bool, str | None]:
+    project = (await session.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+    project_emirate = project.emirate if project is not None else None
+    regions = await vendors_service.list_service_regions(session, vendor.id)
+    return _resolve_geography_eligibility(project_emirate, {r.emirate for r in regions})
+
+
+async def _vendor_eligibility(
+    session: AsyncSession, vendor: Vendor, trade_node_id: UUID, project_id: UUID
+) -> tuple[bool, str | None]:
+    """A vendor is eligible when it is ACTIVE (SRS default #2), has an
+    APPROVED/CONDITIONAL prequalification effective today (scoped either to
+    this exact trade or to "all trades" -- scope_trade_node_id IS NULL, a
+    blanket prequalification), AND (Module C Phase 6) is geography-eligible
+    for the project -- see _vendor_geography_eligible. Anything else --
+    not active, no prequalification row, an expired one, one in
+    pending/suspended/rejected/blacklisted, or a project/vendor-region
+    mismatch -- excludes the vendor by default (SRS default #6: "excludes
+    vendors whose prequalification for the trade is expired or missing",
+    extended the same way to geography). Checked here (not just filtered
+    out of match_vendors' query) so create_rfqs enforces the exact same
+    rule for a vendor_id supplied directly, not only one picked from that
+    listing. Returns the first failing reason -- one override_reason still
+    covers whichever check(s) failed (create_rfqs's existing single-reason
+    design, unchanged)."""
     if vendor.status != VendorStatus.ACTIVE.value:
         return False, f"vendor status is {vendor.status!r}, not active"
 
     today = datetime.now(timezone.utc).date()
+    prequal_ok = False
+    prequal_reason: str | None = None
     trade_scoped = await prequal_service.get_prequalification_as_of(session, vendor.id, today, trade_node_id)
     if trade_scoped is not None and trade_scoped.status in _ELIGIBLE_PREQUAL_STATUSES:
-        return True, None
-    blanket = await prequal_service.get_prequalification_as_of(session, vendor.id, today, None)
-    if blanket is not None and blanket.status in _ELIGIBLE_PREQUAL_STATUSES:
-        return True, None
-    if trade_scoped is not None or blanket is not None:
-        return False, "prequalification for this trade is not currently approved"
-    return False, "no effective prequalification for this trade"
+        prequal_ok = True
+    else:
+        blanket = await prequal_service.get_prequalification_as_of(session, vendor.id, today, None)
+        if blanket is not None and blanket.status in _ELIGIBLE_PREQUAL_STATUSES:
+            prequal_ok = True
+        elif trade_scoped is not None or blanket is not None:
+            prequal_reason = "prequalification for this trade is not currently approved"
+        else:
+            prequal_reason = "no effective prequalification for this trade"
+    if not prequal_ok:
+        return False, prequal_reason
+
+    return await _vendor_geography_eligible(session, vendor, project_id)
 
 
 async def match_vendors(session: AsyncSession, package_id: UUID) -> list[MatchedVendorOut]:
@@ -185,11 +225,13 @@ async def match_vendors(session: AsyncSession, package_id: UUID) -> list[Matched
 
     matches: list[MatchedVendorOut] = []
     for vendor in vendors:
-        eligible, reason = await _vendor_eligibility(session, vendor, package.trade_node_id)
+        eligible, reason = await _vendor_eligibility(session, vendor, package.trade_node_id, package.project_id)
+        regions = await vendors_service.list_service_regions(session, vendor.id)
         matches.append(
             MatchedVendorOut(
                 vendor_id=vendor.id, legal_name=vendor.legal_name, primary_email=vendor.primary_email,
                 emirate=vendor.emirate, country=vendor.country, eligible=eligible, ineligible_reason=reason,
+                service_regions=[r.emirate for r in regions],
             )
         )
     return matches
@@ -222,7 +264,7 @@ async def create_rfqs(
         vendor = await vendors_service.get_vendor(session, ctx.tenant_id, vendor_id)
         is_override = False
         if package.trade_node_id is not None:
-            eligible, reason = await _vendor_eligibility(session, vendor, package.trade_node_id)
+            eligible, reason = await _vendor_eligibility(session, vendor, package.trade_node_id, package.project_id)
             if not eligible:
                 if not data.override_reason:
                     raise ValidationAppError(

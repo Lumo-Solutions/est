@@ -68,6 +68,23 @@ class VendorTrade(TenantEntity):
     capability_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class VendorServiceRegion(TenantEntity):
+    """Module C Phase 6: which emirates a vendor is willing to serve --
+    distinct from Vendor.emirate (the vendor's own registered/home-base
+    location, single-valued). A vendor with zero rows here is "region
+    unknown": app.services.procurement::_vendor_eligibility never treats
+    that as either "available everywhere" or "ineligible" on its own --
+    see that function's own docstring."""
+
+    __tablename__ = "vendor_service_regions"
+    __table_args__ = (UniqueConstraint("vendor_id", "emirate", name="uq_vendor_service_regions_vendor_emirate"),)
+
+    vendor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    emirate: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class VendorDuplicateCandidate(TenantEntity):
     __tablename__ = "vendor_duplicate_candidates"
     __table_args__ = (

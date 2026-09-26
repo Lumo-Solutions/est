@@ -24,9 +24,20 @@ class ProjectOut(ORMModel):
     status: str
     tender_ref: str | None
     base_currency: str
+    emirate: str | None
+    area: str | None
+    latitude: float | None
+    longitude: float | None
     created_at: datetime
 
 
 class ProjectMemberAdd(BaseModel):
     user_id: UUID
     project_role: str | None = None
+
+
+class ProjectLocationUpdate(BaseModel):
+    emirate: str | None = None
+    area: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None

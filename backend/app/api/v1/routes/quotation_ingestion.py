@@ -15,8 +15,10 @@ from app.schemas.quotation_ingestion import (
     InboundEmailOut,
     QuotationAttachmentOut,
     QuotationExclusionFlagOut,
+    QuotationFxRateSet,
     QuotationLineItemOut,
     QuotationOut,
+    QuotationTotalOut,
     RejectQuotationRequest,
     ResolveCurrencyVatRequest,
     ResolveInboundTenantRequest,
@@ -174,3 +176,22 @@ async def bid_leveling_endpoint(
 ) -> list[BidLevelingRowOut]:
     rows = await quotation_service.get_bid_leveling_matrix(session, package_id)
     return [BidLevelingRowOut.model_validate(r) for r in rows]
+
+
+@router.get("/procurement-packages/{package_id}/quotation-totals", response_model=list[QuotationTotalOut])
+async def quotation_totals_endpoint(
+    package_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[QuotationTotalOut]:
+    totals = await quotation_service.get_quotation_totals(session, package_id)
+    return [QuotationTotalOut.model_validate(t) for t in totals]
+
+
+@router.patch("/quotations/{quotation_id}/fx-rate", response_model=QuotationOut)
+async def set_quotation_fx_rate_endpoint(
+    quotation_id: UUID,
+    data: QuotationFxRateSet,
+    ctx: RequestContext = Depends(require_roles(*_REVIEW_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> QuotationOut:
+    quotation = await quotation_service.set_quotation_fx_rate(session, ctx, quotation_id, data.fx_rate_to_base, data.fx_rate_date)
+    return QuotationOut.model_validate(quotation)

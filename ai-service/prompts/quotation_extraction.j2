@@ -42,8 +42,9 @@ regardless of what the document says.
 
 Extract only these fields: currency, vat_inclusive, line_items (each with
 vendor_item_text, vendor_description_text, unit_price, quantity,
-extended_price_stated, remarks_text), exclusions (each with flag_text and a
-verbatim source_quote_text citation), and an overall confidence.
+extended_price_stated, vendor_uom, remarks_text), stated_total, exclusions
+(each with flag_text, a verbatim source_quote_text citation, and
+source_location), and an overall confidence.
 
 Rules:
 - Respond with ONLY a single JSON object matching the required schema. No
@@ -52,13 +53,26 @@ Rules:
   confident in it, set it to null. Do NOT guess or fabricate a value,
   and never substitute 0 for a missing price -- null means "not stated",
   0 means "stated as zero".
-- Copy vendor_description_text, vendor_item_text, and remarks_text verbatim
-  as printed. Do not summarize or reword them.
+- Copy vendor_description_text, vendor_item_text, vendor_uom, and
+  remarks_text verbatim as printed. Do not summarize, reword, or
+  normalize them (e.g. do not turn "LM" into "M").
 - vat_inclusive must be true only if the document explicitly states prices
   include VAT, false only if it explicitly states prices exclude VAT, and
   null in every other case (including when VAT simply isn't mentioned).
+- stated_total is the vendor's own overall grand total if one is printed
+  anywhere in the document -- never compute it yourself from the line
+  items; null if no such overall figure is stated.
 - Every exclusions[].source_quote_text must be an exact quotation copied
   from the document -- never invent or paraphrase a citation.
+  exclusions[].source_location should copy a page or row/cell marker
+  already present in the supplied text near that citation, if there is
+  one -- null if you can't identify a specific location, never invent one.
+- If the supplied text below has lines starting with a `SheetName!rowN:`
+  marker (a spreadsheet dump), that marker is NOT part of the document's
+  own content -- it is a coordinate label added so you can cite a
+  location. Never include it in vendor_description_text or any other
+  extracted field's own value; only ever copy it into
+  exclusions[].source_location when citing something found on that row.
 - Set `confidence` to your honest overall confidence (0 to 1) in the
   extraction as a whole.
 {# user #}

@@ -12,7 +12,7 @@ RFQ dispatch.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -21,7 +21,14 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
-from app.core.enums import AuditAction, InboundEmailMatchStatus, QuotationLineItemStatus, QuotationStatus, Role, RfqStatus
+from app.core.enums import (
+    AuditAction,
+    InboundEmailMatchStatus,
+    QuotationLineItemStatus,
+    QuotationStatus,
+    RfqStatus,
+    Role,
+)
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.db.rls import set_rls_context
 from app.models.procurement import Rfq
@@ -385,12 +392,27 @@ class BidLevelingCell:
     confidence: float
     arithmetic_mismatch: bool
     quantity_mismatch: bool
+    # Module C Phase 6: additive -- normalized_unit_price is unit_price *
+    # the quotation's own recorded fx_rate_to_base, shown ALONGSIDE
+    # unit_price/currency above, never replacing them (no auto-conversion
+    # without a recorded rate -- see set_quotation_fx_rate). None when no
+    # rate has been recorded.
+    normalized_unit_price: Decimal | None
+    uom_mismatch: bool
 
 
 @dataclass(frozen=True, slots=True)
 class BidLevelingRow:
     boq_line_item_id: UUID
     cells: list[BidLevelingCell] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class QuotationTotal:
+    quotation_id: UUID
+    vendor_id: UUID
+    stated_total: Decimal | None
+    total_mismatch: bool
 
 
 async def get_bid_leveling_matrix(session: AsyncSession, package_id: UUID) -> list[BidLevelingRow]:
@@ -406,6 +428,9 @@ async def get_bid_leveling_matrix(session: AsyncSession, package_id: UUID) -> li
     rows: dict[UUID, BidLevelingRow] = {}
     for line_item, quotation in result.all():
         row = rows.setdefault(line_item.boq_line_item_id, BidLevelingRow(boq_line_item_id=line_item.boq_line_item_id))
+        normalized = (
+            line_item.unit_price * quotation.fx_rate_to_base if quotation.fx_rate_to_base is not None else None
+        )
         row.cells.append(
             BidLevelingCell(
                 quotation_id=quotation.id,
@@ -416,6 +441,46 @@ async def get_bid_leveling_matrix(session: AsyncSession, package_id: UUID) -> li
                 confidence=float(line_item.confidence),
                 arithmetic_mismatch=line_item.arithmetic_mismatch,
                 quantity_mismatch=line_item.quantity_mismatch,
+                normalized_unit_price=normalized,
+                uom_mismatch=line_item.uom_mismatch,
             )
         )
     return list(rows.values())
+
+
+async def get_quotation_totals(session: AsyncSession, package_id: UUID) -> list[QuotationTotal]:
+    """Module C Phase 6: quotation-level (not per-BOQ-line) subtotal
+    verification, surfaced as its own endpoint rather than folded into
+    get_bid_leveling_matrix's existing response shape -- additive, not a
+    breaking change to an established API response."""
+    result = await session.execute(
+        select(Quotation).where(Quotation.package_id == package_id, Quotation.status != QuotationStatus.REJECTED.value)
+    )
+    return [
+        QuotationTotal(
+            quotation_id=q.id, vendor_id=q.vendor_id, stated_total=q.stated_total, total_mismatch=q.total_mismatch,
+        )
+        for q in result.scalars().all()
+    ]
+
+
+async def set_quotation_fx_rate(
+    session: AsyncSession, ctx: RequestContext, quotation_id: UUID, fx_rate_to_base: Decimal, fx_rate_date: date
+) -> Quotation:
+    """Bid-leveling-stage FX (Module C Phase 6) -- deliberately separate
+    from BidSettlementLineItem.fx_rate/fx_rate_date's own acceptance-stage
+    rate (Module D1, migration 0019). Never inferred -- a human records
+    it, same rule as that D1 field. Same review-authority role tier as
+    resolve_currency_and_vat (this is the same kind of "the extractor
+    couldn't determine this, a reviewer resolves it" correction)."""
+    _require_review_authority(ctx)
+    quotation = await get_quotation(session, quotation_id)
+    quotation.fx_rate_to_base = fx_rate_to_base
+    quotation.fx_rate_date = fx_rate_date
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="quotation", entity_id=quotation.id,
+        project_id=quotation.project_id,
+        payload={"fx_rate_to_base": str(fx_rate_to_base), "fx_rate_date": fx_rate_date.isoformat()},
+    )
+    return quotation
