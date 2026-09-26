@@ -715,6 +715,163 @@ async def simulate_settlement() -> None:
         print(f"recorded outcome: status={won.status} our_price={won.outcome_our_price}")
 
 
+_SIM_ESTIMATOR_1_ID = UUID("00000000-0000-0000-0000-0000000000d4")
+
+# Length (in PDF page points) of the synthetic "road centreline" vector
+# line drawn below -- also asserted against directly, so a regression in
+# either the drawing or the extraction pipeline shows up as a print
+# mismatch, not just a silent wrong number.
+_TAKEOFF_SIM_LINE_LENGTH_PT = 100.0
+
+
+def _synthetic_alignment_pdf_bytes() -> bytes:
+    """A one-page vector PDF: enough real drawString text to clear
+    index_pdf_geometry()'s raster-page threshold, plus one 100pt-long red
+    (matches the PdfLayerMappingRule this simulation seeds below), 2pt-wide
+    solid line standing in for a road centreline -- real vector geometry a
+    CAD-to-PDF export would produce, not a raster scan."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.drawString(50, 800, "PROJECT: Module B Phase 4a PDF geometry simulation")
+    c.drawString(50, 780, "SHEET: C-101  ROAD ALIGNMENT PLAN  SCALE: 1:100")
+    c.drawString(50, 760, "DISCIPLINE: Civil  REVISION: A")
+    c.setStrokeColorRGB(1, 0, 0)
+    c.setLineWidth(2)
+    c.line(100, 700, 100 + _TAKEOFF_SIM_LINE_LENGTH_PT, 700)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+async def simulate_takeoff_pdf() -> None:
+    """DEV ONLY: Module B Phase 4a end to end against the real ingest
+    pipeline (upload -> Celery index_sheets -> extract_sheet ->
+    extract_geometry_measurements -> finalize_drawing, TAKEOFF_PERSIST_
+    GEOMETRY=true -- see deploy/.env). Uploads a synthetic vector PDF with
+    one real geometry line, seeds a project PDF layer-mapping rule so that
+    line resolves to a road-centreline layer, waits for ingestion to
+    finish, prints the auto-detected scale + resulting alignment
+    measurement, then demonstrates a manual two-point recalibration and a
+    revert. See docs/module-b-phase4-plan.md §4a.
+
+    Polls extraction_jobs for extract_title_block + extract_geometry
+    specifically, not drawing.status reaching "ready" -- on a dev machine
+    that hasn't provisioned the ONNX embedding model (see
+    docs/deploy-deltas.md's "Populating the ONNX embedding model volume" --
+    ai-service/embeddings/download_model.py, no make target for it yet),
+    embed_drawing fails and the chord's finalize_drawing callback never
+    fires, so status sticks at "extracting" forever even though everything
+    this phase touches finished. A pre-existing gap (Phase 5 scope), not a
+    Phase 4a bug -- logged in docs/build-log.md rather than worked around
+    here."""
+    import asyncio as _asyncio
+
+    from app.core.enums import DrawingStatus, ExtractionJobStatus, ExtractionJobType
+    from app.models.takeoff import Drawing, ExtractionJob
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    estimator_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_ESTIMATOR_1_ID, sub="estimator-1", roles=frozenset({"estimator"})
+    )
+
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        rfq, _package, _boq_items, _vendor = await _get_or_create_d1_demo_rfq(session, sys_ctx, tenant_id)
+        project_id = rfq.project_id
+
+        existing_member = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == _SIM_ESTIMATOR_1_ID)
+            )
+        ).scalar_one_or_none()
+        if existing_member is None:
+            session.add(ProjectMember(project_id=project_id, user_id=_SIM_ESTIMATOR_1_ID, tenant_id=tenant_id))
+            await session.flush()
+
+    async with session_scope(estimator_ctx) as session:
+        from app.services import takeoff as takeoff_service
+
+        rules = await takeoff_service.replace_pdf_layer_mapping_rules(
+            session, estimator_ctx, project_id,
+            [{"target_layer": "ROAD-CL", "stroke_color": "#ff0000", "min_line_width": 1.5, "max_line_width": 2.5, "priority": 1}],
+        )
+        print(f"seeded {len(rules)} PDF layer-mapping rule(s): {[r.target_layer for r in rules]}")
+
+        drawing = await takeoff_service.upload_drawing(
+            session, estimator_ctx, project_id, "alignment-plan.pdf", "application/pdf", _synthetic_alignment_pdf_bytes()
+        )
+        drawing_id = drawing.id
+        print(f"uploaded drawing {drawing_id} (status={drawing.status})")
+
+        job_ids = await takeoff_service.trigger_ingest(session, estimator_ctx, drawing_id)
+        print(f"triggered ingest: celery task {job_ids}")
+
+    _needed_jobs = (ExtractionJobType.EXTRACT_TITLE_BLOCK.value, ExtractionJobType.EXTRACT_GEOMETRY.value)
+    deadline = _asyncio.get_event_loop().time() + 60
+    job_statuses: dict[str, str] = {}
+    while _asyncio.get_event_loop().time() < deadline:
+        async with session_scope(sys_ctx) as session:
+            rows = (
+                await session.execute(select(ExtractionJob).where(ExtractionJob.drawing_id == drawing_id))
+            ).scalars().all()
+            job_statuses = {r.job_type: r.status for r in rows}
+        if all(job_statuses.get(jt) == ExtractionJobStatus.SUCCEEDED.value for jt in _needed_jobs):
+            break
+        if any(job_statuses.get(jt) == ExtractionJobStatus.FAILED.value for jt in _needed_jobs):
+            raise RuntimeError(f"simulate-takeoff-pdf: a required extraction job failed: {job_statuses}")
+        await _asyncio.sleep(2)
+    else:
+        raise RuntimeError(f"simulate-takeoff-pdf: timed out waiting for {_needed_jobs}, saw {job_statuses}")
+    print(f"required extraction jobs succeeded: {job_statuses}")
+
+    async with session_scope(sys_ctx) as session:
+        drawing_row = (await session.execute(select(Drawing).where(Drawing.id == drawing_id))).scalar_one()
+    if drawing_row.status not in (DrawingStatus.READY.value,):
+        print(
+            f"note: drawing.status={drawing_row.status!r}, not 'ready' -- almost certainly the pre-existing "
+            "missing-ONNX-embedding-model gap (embed_drawing fails -> the chord's finalize_drawing callback "
+            "never runs), unrelated to Phase 4a; proceeding since the jobs this phase actually touches succeeded"
+        )
+
+    async with session_scope(estimator_ctx) as session:
+        sheet = await takeoff_service.get_sheet(session, drawing_id, 0)
+        print(
+            f"auto-detected scale: ratio={sheet.scale_ratio} source={sheet.scale_source} "
+            f"confidence={sheet.scale_confidence} disagreement={sheet.scale_disagreement}"
+        )
+        measurements = await takeoff_service.list_measurements(session, drawing_id, sheet.id)
+        alignment_rows = [m for m in measurements if m.kind == "alignment_length_m"]
+        assert len(alignment_rows) == 1, f"expected exactly one alignment_length_m row, got {len(alignment_rows)}"
+        print(f"alignment_length_m = {alignment_rows[0].value} (from {len(measurements)} total measurement(s))")
+
+        # Manual recalibration: state the same 100pt line is actually 8m,
+        # confirm the measurement updates, then revert back to what
+        # auto-detection found and confirm it's restored. Each step
+        # re-asserts exactly one surviving row -- the regression this
+        # simulation originally caught (migration 0022's own commit
+        # message/docstring has the full story).
+        updated = await takeoff_service.set_manual_scale(
+            session, estimator_ctx, drawing_id, 0, p1=(100.0, 700.0), p2=(100.0 + _TAKEOFF_SIM_LINE_LENGTH_PT, 700.0), known_length_m=8.0
+        )
+        recalibrated = await takeoff_service.list_measurements(session, drawing_id, sheet.id)
+        recalibrated_rows = [m for m in recalibrated if m.kind == "alignment_length_m"]
+        assert len(recalibrated_rows) == 1, f"expected exactly one alignment_length_m row after calibration, got {len(recalibrated_rows)}"
+        print(f"after manual calibration (line stated as 8m): scale_ratio={updated.scale_ratio} alignment_length_m={recalibrated_rows[0].value}")
+
+        history = await takeoff_service.list_scale_calibrations(session, drawing_id, 0)
+        auto_detected = next(h for h in history if h.source != "manual_two_point")
+        reverted = await takeoff_service.revert_scale_calibration(session, estimator_ctx, drawing_id, 0, auto_detected.id)
+        reverted_measurements = await takeoff_service.list_measurements(session, drawing_id, sheet.id)
+        reverted_rows = [m for m in reverted_measurements if m.kind == "alignment_length_m"]
+        assert len(reverted_rows) == 1, f"expected exactly one alignment_length_m row after revert, got {len(reverted_rows)}"
+        print(f"after revert: scale_ratio={reverted.scale_ratio} alignment_length_m={reverted_rows[0].value}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -728,6 +885,10 @@ def main() -> None:
         "simulate-settlement",
         help="DEV ONLY: build/submit a Module D1 bid settlement and demonstrate segregation of duties",
     )
+    subparsers.add_parser(
+        "simulate-takeoff-pdf",
+        help="DEV ONLY: ingest a synthetic vector PDF through the real Celery pipeline and exercise scale calibration",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
@@ -736,6 +897,8 @@ def main() -> None:
         asyncio.run(simulate_quotes())
     elif args.command == "simulate-settlement":
         asyncio.run(simulate_settlement())
+    elif args.command == "simulate-takeoff-pdf":
+        asyncio.run(simulate_takeoff_pdf())
 
 
 if __name__ == "__main__":

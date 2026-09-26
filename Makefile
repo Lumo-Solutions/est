@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -92,6 +92,12 @@ dev-simulate-quotes:
 # app/cli.py::simulate_settlement and docs/module-d1-plan.md.
 dev-simulate-settlement:
 	$(COMPOSE) exec backend python -m app.cli simulate-settlement
+
+# Module B Phase 4a end to end against the real Celery ingest pipeline --
+# requires TAKEOFF_PERSIST_GEOMETRY=true in deploy/.env (default false;
+# see app/cli.py::simulate_takeoff_pdf and docs/module-b-phase4-plan.md §4a).
+dev-simulate-takeoff-pdf:
+	$(COMPOSE) exec backend python -m app.cli simulate-takeoff-pdf
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve
