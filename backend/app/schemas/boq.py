@@ -77,6 +77,8 @@ class BoqImportColumnMappingIn(BaseModel):
     uom_column: str | None = None
     quantity_column: str | None = None
     parent_column: str | None = None
+    rate_column: str | None = None
+    amount_column: str | None = None
     header_row: int = 1
 
 

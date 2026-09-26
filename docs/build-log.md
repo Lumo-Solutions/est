@@ -84,7 +84,65 @@ phase that isn't `unit-green`.
 
 ## Phase 2: D2, client BOQ export (generated) and win/loss
 
-**Status:** not started
+**Status:** built, unit-green (269 unit + 112 integration + 18 API = 399 passed; merged to master)
+
+- Branch: `feat/d2-export` (from `master`).
+- Migration: `0020_boq_import_retention_winloss` -- `boq_import_batches`
+  (retains the original `.xlsx` in S3, plus its column mapping incl. the
+  two new `rate_column`/`amount_column` letters for D3), two nullable
+  columns on `boq_line_items` (`import_batch_id`, `source_row_number`),
+  `bid_settlements.outcome_competitor_vendor_ids`, and
+  `settlement_reason_codes` (tenant-configurable, seeded).
+- New code: `app/models/boq.py::BoqImportBatch`,
+  `app/models/settlement.py::SettlementReasonCode`, export/outcome
+  additions to `app/services/settlement.py` and
+  `app/api/v1/routes/settlement.py`, retention logic in
+  `app/services/boq_import.py::commit_import`, reason-code seed in
+  `app/cli.py`.
+- Test counts: unit 269 passed (was 264 -- +5 leak-scanner tests);
+  integration 112 passed (was 102 -- +10: 2 import-retention, 8 export/
+  outcome); API unchanged (18). Combined single run: 399 passed.
+- Dev simulation (`make dev-simulate-settlement`, extended): build →
+  submit → SoD → decide → **export** → **outcome**, against the real dev
+  stack. Output: `exported settlement-<project>-v2.xlsx (5063 bytes),
+  sha256=060f3756..., leak_scan=CLEAN` then
+  `recorded outcome: status=won our_price=13790.00`.
+- Assumptions / deviations:
+  - `BoqImportColumnMapping.rate_column`/`amount_column` are spreadsheet
+    column **letters** (e.g. `"F"`), unlike every other `*_column` field
+    on that dataclass, which is header **text** matched against the
+    parsed row -- deliberate, since these two exist only so D3 can later
+    compute an exact cell reference, never to parse a value.
+  - The original workbook is reused from the **existing**
+    `installtec-drawings` S3 bucket (`boq-imports/{project_id}/
+    {batch_id}.xlsx`), not a new bucket -- avoids a new env var/S3-identity
+    grant for what's conceptually the same category of project document.
+  - Export role is `estimator+` (the `approved` state gate is the real
+    protection; preparing the file once approved is ordinary estimating
+    work) -- the brief doesn't specify a role, flagged as a default pick.
+  - `record_outcome` accepts a settlement in `submitted` **or** `approved`
+    (per the brief's exact wording, not "approved only" like export).
+  - VAT is entirely opt-in per export call (`include_vat`/`vat_pct` on the
+    request, default `false`/`5.0`) -- not a persisted settlement field.
+- Known gaps (carried from the D2 plan, §8):
+  - No admin CRUD for `settlement_reason_codes` yet -- seed data only.
+  - D3 (writing into the retained original workbook) is a separate,
+    not-yet-built phase; nothing before this point can actually *use*
+    `source_object_key`/`source_row_number` yet, only record them.
+- Pre-existing bugs found and fixed while building this phase (caught by
+  the new tests, not by any code review): (1) `boq_import_batches`'
+  `item_no_column`/`description_column`/`uom_column`/`quantity_column`/
+  `parent_column` were first declared `String(8)`, sized for a column
+  *letter* like the two new rate/amount fields -- but those five actually
+  store header *text* ("Description" alone is 11 characters), so any real
+  header longer than 8 characters would have failed the INSERT outright.
+  Widened to `String(255)` in both the migration and the model before
+  this branch ever reached master. (2) `commit_import` initially stamped
+  `source_row_number` directly from `ParsedBoqRow.row_number`, which is
+  1-indexed relative to the *data* rows (row 1 = the first row after the
+  header), not the real spreadsheet row -- so a cell reference D3 builds
+  from it would have pointed one row too high. Fixed to add
+  `mapping.header_row` before storing.
 
 ## Phase 3: D3, export into the client's original workbook
 

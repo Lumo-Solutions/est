@@ -32,6 +32,14 @@ class BoqImportColumnMapping:
     uom_column: str | None = None
     quantity_column: str | None = None
     parent_column: str | None = None
+    # Module D2: the tender BOQ's rate/amount columns, by letter (e.g.
+    # "F"). Blank at import time -- never parsed as values -- purely
+    # recorded so a later settlement export can write into the exact
+    # original cell (app/services/boq_import.py::commit_import,
+    # app/models/boq.py::BoqImportBatch). None when the template has no
+    # such columns yet, or the caller doesn't know them.
+    rate_column: str | None = None
+    amount_column: str | None = None
     # 1-indexed row containing the column headers this mapping's *_column
     # values refer to (some real tender BOQ exports have a title/logo
     # block above the real header row). CSV always uses row 1 -- most
