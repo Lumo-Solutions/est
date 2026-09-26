@@ -16,23 +16,26 @@ import email.utils
 import io
 import secrets
 import smtplib
-from datetime import date
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from email.message import EmailMessage
 from uuid import UUID
 
 from openpyxl import load_workbook
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext, system_context
-from app.core.enums import RfqStatus
+from app.core.enums import QuotationExtractionMethod, QuotationLineItemStatus, QuotationStatus, RfqStatus
+from app.core.errors import ForbiddenError
 from app.db.session import session_scope
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier
 from app.models.prequal import Authority, CertificateType
 from app.models.procurement import ProcurementPackage, Rfq
+from app.models.quotation_ingestion import Quotation, QuotationLineItem
 from app.models.taxonomy import TradeNode
-from app.models.tenancy import Project, Tenant
+from app.models.tenancy import Project, ProjectMember, Tenant
 from app.models.vendors import Vendor, VendorContact, VendorTrade
 from app.procurement.content import RfqLineItem
 from app.procurement.inbound_address import build_reply_address
@@ -40,9 +43,11 @@ from app.procurement.pricing_sheet import build_pricing_workbook
 from app.schemas.boq import BoqLineItemCreate
 from app.schemas.procurement import ProcurementPackageCreate, RfqCreateRequest
 from app.schemas.prequal import PrequalificationDecision
+from app.schemas.settlement import SettlementDefaultsUpdate, SimulateRequest
 from app.schemas.vendors import VendorCreate
 from app.services import boq as boq_service
 from app.services import prequal as prequal_service
+from app.services import settlement as settlement_service
 from app.services import procurement as procurement_service
 from app.services import vendors as vendors_service
 
@@ -73,6 +78,17 @@ _DEFAULT_APPROVAL_TIERS = [
     (2, 50_000, 250_000, "procurement_head"),
     (3, 250_000, 1_000_000, "bd_director"),
     (4, 1_000_000, None, "managing_director"),
+]
+
+# Module D1: managing_director if sell_total > AED 2,000,000 OR
+# margin-on-sell < 8%, otherwise bd_director -- (seq, min_amount,
+# max_amount, max_margin_pct, required_role). See
+# docs/module-d1-plan.md §2a for why tier 2's min_amount is 2,000,000.01,
+# not 2,000,000.00 (route_tiers' bracket check is inclusive on both ends,
+# and the rule is a strict ">").
+_BID_SUBMISSION_APPROVAL_TIERS = [
+    (1, 0, 2_000_000.00, None, "bd_director"),
+    (2, 2_000_000.01, None, 8, "managing_director"),
 ]
 
 
@@ -141,6 +157,26 @@ async def seed(tenant_slug: str) -> None:
                     ApprovalPolicyTier(
                         tenant_id=tenant_id, policy_id=policy.id, seq=seq, min_amount=min_amount,
                         max_amount=max_amount, required_role=role,
+                    )
+                )
+
+        existing_bid_policy = await session.execute(
+            select(ApprovalPolicy).where(
+                ApprovalPolicy.tenant_id == tenant_id, ApprovalPolicy.entity_type == "bid_submission"
+            )
+        )
+        if existing_bid_policy.scalar_one_or_none() is None:
+            bid_policy = ApprovalPolicy(
+                tenant_id=tenant_id, entity_type="bid_submission", name="Default bid-settlement approval policy",
+                version=1, mode="highest_tier_only", is_active=True,
+            )
+            session.add(bid_policy)
+            await session.flush()
+            for seq, min_amount, max_amount, max_margin_pct, role in _BID_SUBMISSION_APPROVAL_TIERS:
+                session.add(
+                    ApprovalPolicyTier(
+                        tenant_id=tenant_id, policy_id=bid_policy.id, seq=seq, min_amount=min_amount,
+                        max_amount=max_amount, max_margin_pct=max_margin_pct, required_role=role,
                     )
                 )
 
@@ -229,6 +265,82 @@ async def _get_or_create_demo_rfq(session: AsyncSession, ctx: RequestContext, te
     # -- skip the real dispatch pipeline (SMTP/MFA/role gates) entirely,
     # since this tool is simulating the vendor's reply, not outbound
     # dispatch (already covered by Module C1's own tests).
+    if rfq.status == RfqStatus.DRAFT.value:
+        rfq.status = RfqStatus.SENT.value
+        await session.flush()
+
+    return rfq, package, boq_items, vendor
+
+
+_SIM_D1_PROJECT_CODE = "D1-SIM"
+_SIM_D1_PACKAGE_NAME = "D1 Simulation Package"
+_SIM_D1_VENDOR_NAME = "D1 Simulation Vendor"
+_SIM_D1_VENDOR_EMAIL = "quotes@d1sim-vendor.example"
+
+
+async def _get_or_create_d1_demo_rfq(session: AsyncSession, ctx: RequestContext, tenant_id: UUID):
+    """Same shape as _get_or_create_demo_rfq, but its own project/vendor
+    (D1-SIM, not C2-SIM) -- Module D1's simulation needs a single, always-
+    unaccepted-until-we-say-so QuotationLineItem to build a settlement from,
+    and the C2-SIM project accumulates whatever quotes earlier
+    `simulate-quotes` runs left behind (proposed/extraction_empty, not
+    reliably accepted), so reusing it here would make this simulation's
+    correctness depend on unrelated C2 simulation history."""
+    project = (
+        await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == _SIM_D1_PROJECT_CODE))
+    ).scalar_one_or_none()
+    if project is None:
+        project = Project(tenant_id=tenant_id, code=_SIM_D1_PROJECT_CODE, name="D1 Simulation Project")
+        session.add(project)
+        await session.flush()
+
+    trade = (
+        await session.execute(
+            select(TradeNode).where(TradeNode.tenant_id == tenant_id, TradeNode.code == _SIM_TRADE_CODE, TradeNode.parent_id.is_(None))
+        )
+    ).scalar_one_or_none()
+    if trade is None:
+        trade = TradeNode(tenant_id=tenant_id, parent_id=None, code=_SIM_TRADE_CODE, name="Earthworks", path="placeholder")
+        session.add(trade)
+        await session.flush()
+
+    vendor = (
+        await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _SIM_D1_VENDOR_NAME))
+    ).scalar_one_or_none()
+    if vendor is None:
+        vendor = await vendors_service.create_vendor(
+            session, ctx, VendorCreate(legal_name=_SIM_D1_VENDOR_NAME, primary_email=_SIM_D1_VENDOR_EMAIL)
+        )
+        vendor.status = "active"
+        session.add(VendorTrade(tenant_id=tenant_id, vendor_id=vendor.id, trade_node_id=trade.id))
+        await session.flush()
+        await prequal_service.decide_prequalification(
+            session, ctx, vendor.id,
+            PrequalificationDecision(status="approved", effective_from=date(2020, 1, 1), scope_trade_node_id=trade.id),
+        )
+
+    package = (
+        await session.execute(
+            select(ProcurementPackage).where(ProcurementPackage.tenant_id == tenant_id, ProcurementPackage.project_id == project.id, ProcurementPackage.name == _SIM_D1_PACKAGE_NAME)
+        )
+    ).scalar_one_or_none()
+    if package is None:
+        package = await procurement_service.create_package(
+            session, ctx, project.id, ProcurementPackageCreate(name=_SIM_D1_PACKAGE_NAME, trade_node_id=trade.id)
+        )
+        item = await boq_service.create_line_item(
+            session, ctx, project.id,
+            BoqLineItemCreate(item_no="1.0", description="Excavation to formation level", uom="m3", boq_quantity=250.0, trade_node_id=trade.id),
+        )
+        await procurement_service.add_items(session, ctx, package.id, [item.id])
+
+    boq_items = await procurement_service.list_package_boq_items(session, package.id)
+
+    rfq = (
+        await session.execute(select(Rfq).where(Rfq.tenant_id == tenant_id, Rfq.package_id == package.id, Rfq.vendor_id == vendor.id))
+    ).scalar_one_or_none()
+    if rfq is None:
+        [rfq] = await procurement_service.create_rfqs(session, ctx, package.id, RfqCreateRequest(vendor_ids=[vendor.id]))
     if rfq.status == RfqStatus.DRAFT.value:
         rfq.status = RfqStatus.SENT.value
         await session.flush()
@@ -407,6 +519,132 @@ async def simulate_quotes() -> None:
     print(f"enqueued poll_inbound_mailbox for RFQ {rfq_ref} (tenant slug {tenant.slug!r})")
 
 
+_SIM_LEAD_ESTIMATOR_ID = UUID("00000000-0000-0000-0000-0000000000d1")
+_SIM_BD_DIRECTOR_1_ID = UUID("00000000-0000-0000-0000-0000000000d2")
+_SIM_BD_DIRECTOR_2_ID = UUID("00000000-0000-0000-0000-0000000000d3")
+
+
+async def simulate_settlement() -> None:
+    """DEV ONLY: Module D1 end-to-end. Reuses the C2 simulation project
+    (creating it, and one accepted quotation line item for its single BOQ
+    item, if this is the first run) -- build a settlement draft, set
+    defaults, preview via simulate(), submit, then demonstrate segregation
+    of duties: the submitting bd_director is denied deciding their own
+    request, but a second bd_director can."""
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    lead_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_LEAD_ESTIMATOR_ID, sub="lead-estimator-1", roles=frozenset({"lead_estimator"})
+    )
+    bd1_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_1_ID, sub="bd-director-1", roles=frozenset({"bd_director"}), acr="silver"
+    )
+    bd2_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_2_ID, sub="bd-director-2", roles=frozenset({"bd_director"}), acr="silver"
+    )
+
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        rfq, package, boq_items, vendor = await _get_or_create_d1_demo_rfq(session, sys_ctx, tenant_id)
+        boq_item = boq_items[0]
+        project_id = rfq.project_id
+
+        # lead_estimator (unlike procurement_head+) isn't covered by
+        # app_can_see_project()'s role bypass -- needs real project_members
+        # membership to write project-scoped settlement tables.
+        existing_member = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == _SIM_LEAD_ESTIMATOR_ID)
+            )
+        ).scalar_one_or_none()
+        if existing_member is None:
+            session.add(ProjectMember(project_id=project_id, user_id=_SIM_LEAD_ESTIMATOR_ID, tenant_id=tenant_id))
+            await session.flush()
+
+        # Check for an ACCEPTED line item specifically -- not just any
+        # Quotation for this rfq/vendor -- so a rerun after an earlier
+        # accepted quote's version was superseded (or never accepted at
+        # all) still seeds one, rather than trusting a stale row.
+        existing = (
+            await session.execute(
+                select(QuotationLineItem)
+                .join(Quotation, Quotation.id == QuotationLineItem.quotation_id)
+                .where(
+                    Quotation.rfq_id == rfq.id, Quotation.vendor_id == vendor.id,
+                    QuotationLineItem.boq_line_item_id == boq_item.id,
+                    QuotationLineItem.status == QuotationLineItemStatus.ACCEPTED.value,
+                )
+            )
+        ).scalars().first()
+        if existing is None:
+            next_version_no = (
+                await session.execute(select(func.max(Quotation.version_no)).where(Quotation.rfq_id == rfq.id, Quotation.vendor_id == vendor.id))
+            ).scalar_one() or 0
+            was_current = (
+                await session.execute(select(Quotation).where(Quotation.rfq_id == rfq.id, Quotation.vendor_id == vendor.id, Quotation.is_current.is_(True)))
+            ).scalar_one_or_none()
+            if was_current is not None:
+                was_current.is_current = False
+                await session.flush()
+            quotation = Quotation(
+                tenant_id=tenant_id, rfq_id=rfq.id, vendor_id=vendor.id, package_id=package.id, project_id=project_id,
+                extraction_method=QuotationExtractionMethod.DETERMINISTIC_XLSX.value, version_no=next_version_no + 1,
+                is_current=True, currency="AED", vat_inclusive=True, submitted_at=datetime.now(timezone.utc),
+                status=QuotationStatus.PROPOSED.value,
+            )
+            session.add(quotation)
+            await session.flush()
+            session.add(
+                QuotationLineItem(
+                    tenant_id=tenant_id, quotation_id=quotation.id, project_id=project_id, boq_line_item_id=boq_item.id,
+                    unit_price=Decimal("45.50"), quantity=Decimal(str(boq_item.boq_quantity)), confidence=Decimal("1.0"),
+                    source="deterministic", status=QuotationLineItemStatus.ACCEPTED.value,
+                    accepted_by=_SIM_BD_DIRECTOR_1_ID, accepted_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.flush()
+            print(f"seeded an accepted quotation line item for BOQ item {boq_item.item_no} at AED 45.50/{boq_item.uom}")
+        else:
+            print("reusing an existing accepted quotation line item")
+
+    async with session_scope(lead_ctx) as session:
+        settlement = await settlement_service.build_settlement_draft(session, lead_ctx, project_id)
+        settlement_id = settlement.id
+        print(f"built settlement draft v{settlement.version_no} ({settlement_id})")
+
+    async with session_scope(lead_ctx) as session:
+        await settlement_service.set_defaults(
+            session, lead_ctx, settlement_id,
+            SettlementDefaultsUpdate(default_plant_pct=2, default_overhead_pct=5, default_volatility_pct=3, default_markup_pct=10),
+        )
+        print("set project defaults: plant=2% overhead=5% volatility=3% markup=10%")
+
+    async with session_scope(lead_ctx) as session:
+        preview = await settlement_service.simulate(session, lead_ctx, settlement_id, SimulateRequest())
+        print(
+            f"simulate preview: tender_total={preview.tender_total} margin_on_sell_pct={preview.margin_on_sell_pct} "
+            f"required_role={preview.required_role} unresolved_lines={len(preview.unresolved_line_ids)}"
+        )
+
+    async with session_scope(bd1_ctx) as session:
+        settlement = await settlement_service.submit_settlement(session, bd1_ctx, settlement_id)
+        print(f"submitted: status={settlement.status} tender_total={settlement.tender_total} approval_request_id={settlement.approval_request_id}")
+
+    async with session_scope(bd1_ctx) as session:
+        try:
+            await settlement_service.decide_settlement(session, bd1_ctx, settlement_id, approve=True, note="self-approval attempt")
+            print("UNEXPECTED: the submitter was allowed to decide their own request")
+        except ForbiddenError as exc:
+            print(f"segregation of duties confirmed: submitter denied ({exc.detail})")
+
+    async with session_scope(bd2_ctx) as session:
+        settlement = await settlement_service.decide_settlement(
+            session, bd2_ctx, settlement_id, approve=True, note="approved by a different bd_director"
+        )
+        print(f"decided by a different bd_director: status={settlement.status}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -416,12 +654,18 @@ def main() -> None:
         "simulate-quotes",
         help="DEV ONLY: send simulated vendor quote replies into GreenMail and trigger an IMAP poll",
     )
+    subparsers.add_parser(
+        "simulate-settlement",
+        help="DEV ONLY: build/submit a Module D1 bid settlement and demonstrate segregation of duties",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
         asyncio.run(seed(args.tenant))
     elif args.command == "simulate-quotes":
         asyncio.run(simulate_quotes())
+    elif args.command == "simulate-settlement":
+        asyncio.run(simulate_settlement())
 
 
 if __name__ == "__main__":

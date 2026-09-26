@@ -33,19 +33,51 @@ async def _active_policy(session: AsyncSession, entity_type: str) -> tuple[Appro
     return policy, list(tiers_result.scalars().all())
 
 
-def route_tiers(tiers: list[ApprovalPolicyTier], amount: float, mode: str) -> list[ApprovalPolicyTier]:
+def _tier_matches(tier: ApprovalPolicyTier, amount: float, margin_pct: float | None) -> bool:
+    bracket_match = float(tier.min_amount) <= amount and (tier.max_amount is None or amount <= float(tier.max_amount))
+    # Escalates regardless of amount when the tier defines a margin floor
+    # and the caller is below it (strictly less-than) -- e.g. Module D1's
+    # bid_submission policy: managing_director if margin-on-sell < 8%, no
+    # matter how small the deal. NULL max_margin_pct (every tier before
+    # this feature existed) makes this clause always false, so amount-only
+    # routing is unchanged for every pre-existing policy.
+    margin_match = tier.max_margin_pct is not None and margin_pct is not None and margin_pct < float(tier.max_margin_pct)
+    return bracket_match or margin_match
+
+
+def route_tiers(
+    tiers: list[ApprovalPolicyTier], amount: float, mode: str, margin_pct: float | None = None
+) -> list[ApprovalPolicyTier]:
     """sequential_up_to_tier: every tier whose min_amount <= amount, in
     order (e.g. a 300k request needs lead_estimator AND procurement_head).
-    highest_tier_only: just the single tier that actually brackets amount."""
-    matching = [t for t in tiers if float(t.min_amount) <= amount and (t.max_amount is None or amount <= float(t.max_amount))]
+    highest_tier_only: just the single tier that actually brackets amount,
+    or is escalated to by margin_pct (see _tier_matches) -- the highest-seq
+    tier wins when more than one matches, so any escalation reason
+    correctly promotes to the more senior tier."""
     if mode == "highest_tier_only":
+        matching = [t for t in tiers if _tier_matches(t, amount, margin_pct)]
         return matching[-1:] if matching else []
     return [t for t in tiers if float(t.min_amount) <= amount]
 
 
+async def preview_required_role(
+    session: AsyncSession, entity_type: str, amount: float, margin_pct: float | None = None
+) -> str | None:
+    """Read-only preview of which role create_request() would route to for
+    this entity_type/amount/margin_pct, without creating anything -- used by
+    Module D1's settlement simulate() to show live routing. Returns None if
+    there's no active policy or no tier matches."""
+    try:
+        policy, tiers = await _active_policy(session, entity_type)
+    except NotFoundError:
+        return None
+    routed = route_tiers(tiers, amount, policy.mode, margin_pct=margin_pct)
+    return routed[-1].required_role if routed else None
+
+
 async def create_request(session: AsyncSession, ctx: RequestContext, data: ApprovalRequestCreate) -> ApprovalRequest:
     policy, tiers = await _active_policy(session, data.entity_type)
-    routed = route_tiers(tiers, data.amount, policy.mode)
+    routed = route_tiers(tiers, data.amount, policy.mode, margin_pct=data.margin_pct)
     if not routed:
         raise ConflictError(f"No approval tier matches amount {data.amount} for policy {policy.name}")
 
@@ -104,6 +136,15 @@ async def decide(
     request, steps = await get_request(session, request_id)
     if request.status != "pending":
         raise ConflictError(f"Approval request is already {request.status}")
+
+    # Segregation of duties: whoever created this request (called
+    # create_request -- typically by submitting the thing being approved)
+    # can never also decide it, regardless of role. Pre-existing gap in
+    # this generic engine, found and fixed under Module D1 -- covers every
+    # entity_type that uses it (cost_rate_change included), not just
+    # bid_submission. See docs/build-log.md's Phase 1 section.
+    if request.requested_by == ctx.user_id:
+        raise ForbiddenError("The requester cannot decide their own approval request")
 
     current_step = next((s for s in steps if s.seq == request.current_seq), None)
     if current_step is None or current_step.status != "pending":

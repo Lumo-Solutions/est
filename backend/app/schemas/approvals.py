@@ -14,6 +14,10 @@ class ApprovalRequestCreate(BaseModel):
     entity_id: UUID
     amount: float
     currency: str = "AED"
+    # Optional second routing signal for a policy tier with max_margin_pct
+    # set (e.g. bid_submission) -- see app/services/approvals.py::route_tiers.
+    # Ignored by every tier that doesn't define max_margin_pct.
+    margin_pct: float | None = None
     payload_snapshot: dict | None = None
 
 

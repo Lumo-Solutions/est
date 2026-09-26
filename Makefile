@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -87,6 +87,11 @@ dev-token:
 # docs/procurement-quotation-ingestion.md for what each scenario exercises.
 dev-simulate-quotes:
 	$(COMPOSE) exec backend python -m app.cli simulate-quotes
+
+# Module D1 end-to-end against the real dev stack -- see
+# app/cli.py::simulate_settlement and docs/module-d1-plan.md.
+dev-simulate-settlement:
+	$(COMPOSE) exec backend python -m app.cli simulate-settlement
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve

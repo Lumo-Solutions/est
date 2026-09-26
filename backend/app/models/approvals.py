@@ -33,6 +33,11 @@ class ApprovalPolicyTier(TenantEntity):
     seq: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     min_amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
     max_amount: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # Set only by policies that need margin-based escalation regardless of
+    # deal size (Module D1's bid_submission policy) -- NULL for every other
+    # tier, which keeps route_tiers()'s old amount-only matching exactly as
+    # it was. See app/services/approvals.py::route_tiers.
+    max_margin_pct: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     required_role: Mapped[str] = mapped_column(String(32), nullable=False)
     quorum: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
     sla_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
