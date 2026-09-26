@@ -28,7 +28,9 @@ from app.core.enums import (
     SettlementCostSource,
 )
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
-from app.models.boq import BoqLineItem
+from app.boq.original_export import RejectedOriginalError, write_settled_rates
+from app.integrations.s3 import get_object_bytes
+from app.models.boq import BoqImportBatch, BoqLineItem
 from app.models.quotation_ingestion import Quotation, QuotationLineItem
 from app.models.settlement import (
     BidSettlement,
@@ -838,3 +840,128 @@ async def record_outcome(
         payload={"outcome": data.outcome, "reason_codes": data.reason_codes, "our_price": str(settlement.outcome_our_price)},
     )
     return settlement
+
+
+# --------------------------------------------------------------------------
+# Module D3: export into the client's original workbook
+# --------------------------------------------------------------------------
+
+_LEAK_CHECK_FIELDS = ("direct_unit_cost", "cost_source", "fx_rate", "source_note")
+
+
+def _leak_denylist(lines: list[BidSettlementLineItem]) -> list[str]:
+    """Runtime safety net, not the authoritative check (that's the
+    dedicated scanner in tests/unit/test_settlement_export_leak.py,
+    exercised against every export path) -- D3 only ever writes two float
+    values per line, so this should never actually fire; it exists in
+    case a future change to write_settled_rates ever serializes more than
+    that."""
+    values: list[str] = []
+    for line in lines:
+        for field_name in _LEAK_CHECK_FIELDS:
+            value = getattr(line, field_name)
+            if value is not None and str(value).strip():
+                values.append(str(value))
+    return values
+
+
+async def _get_single_eligible_batch(session: AsyncSession, settlement: BidSettlement, lines: list[BidSettlementLineItem]):
+    """§3 of docs/module-d3-plan.md: every line must trace to the same
+    single import batch, that batch must have retained the original
+    workbook, and must know its rate column. Any failure is a clear,
+    named 409 -- the generated export (D2) always remains available
+    regardless."""
+    boq_items = await _boq_items_by_id(session, [line.boq_line_item_id for line in lines])
+    batch_ids = {boq_items[line.boq_line_item_id].import_batch_id for line in lines}
+    if len(batch_ids) != 1 or None in batch_ids:
+        raise ConflictError(
+            "This settlement's BOQ lines don't all trace to a single import batch -- original-workbook export "
+            "isn't available; use the generated export instead."
+        )
+    (batch_id,) = batch_ids
+    batch = (await session.execute(select(BoqImportBatch).where(BoqImportBatch.id == batch_id))).scalar_one_or_none()
+    if batch is None or batch.source_object_key is None:
+        raise ConflictError(
+            "This settlement's BOQ import didn't retain the original workbook -- use the generated export instead."
+        )
+    if batch.rate_column is None:
+        raise ConflictError(
+            "This settlement's BOQ import didn't record a rate column -- use the generated export instead."
+        )
+    return batch, boq_items
+
+
+async def _run_original_export(
+    session: AsyncSession, settlement: BidSettlement, lines: list[BidSettlementLineItem]
+):
+    """Shared by preview and the real export -- always a real write
+    attempt (in memory), never partially implemented, so the preview's
+    report is never optimistic about what the real export would do."""
+    batch, boq_items = await _get_single_eligible_batch(session, settlement, lines)
+    original_bytes = await get_object_bytes(batch.source_object_key)
+
+    writes = [
+        (boq_items[line.boq_line_item_id].source_row_number, float(line.unit_sell_rate), float(line.line_amount))
+        for line in lines
+        if boq_items[line.boq_line_item_id].import_batch_id == batch.id
+        and boq_items[line.boq_line_item_id].source_row_number is not None
+    ]
+    try:
+        output_bytes, report = write_settled_rates(
+            original_bytes, sheet_name=batch.sheet_name, rate_column=batch.rate_column,
+            amount_column=batch.amount_column, writes=writes,
+        )
+    except RejectedOriginalError as exc:
+        raise ConflictError(str(exc)) from exc
+
+    return batch, output_bytes, report
+
+
+async def preview_original_export(session: AsyncSession, ctx: RequestContext, settlement_id: UUID) -> dict:
+    _require_role(ctx, _LINE_ROLES, "Previewing an original-workbook export")
+    settlement = await _get_settlement(session, settlement_id)
+    if settlement.status != BidSettlementStatus.APPROVED.value:
+        raise ConflictError(f"Bid settlement is {settlement.status}, not approved -- export is only available once approved")
+    lines = await list_settlement_lines(session, settlement.id)
+
+    _batch, _output_bytes, report = await _run_original_export(session, settlement, lines)
+    leaked = [m for m in _leak_denylist(lines) if m.encode() in _output_bytes]
+    if leaked:  # pragma: no cover -- defense in depth, see _leak_denylist's docstring
+        raise ConflictError("Internal safety check failed: the generated file appears to contain non-price data.")
+    return {"ok": report.ok, "lost_features": report.lost_features, "unexpected_cell_changes": report.unexpected_cell_changes}
+
+
+async def export_original_settlement(
+    session: AsyncSession, ctx: RequestContext, settlement_id: UUID, *, accept_loss: bool
+) -> tuple[bytes, str, str]:
+    _require_role(ctx, _LINE_ROLES, "Exporting a settlement into its original workbook")
+    settlement = await _get_settlement(session, settlement_id)
+    if settlement.status != BidSettlementStatus.APPROVED.value:
+        raise ConflictError(f"Bid settlement is {settlement.status}, not approved -- export is only available once approved")
+    lines = await list_settlement_lines(session, settlement.id)
+
+    batch, output_bytes, report = await _run_original_export(session, settlement, lines)
+    leaked = [m for m in _leak_denylist(lines) if m.encode() in output_bytes]
+    if leaked:  # pragma: no cover -- defense in depth, see _leak_denylist's docstring
+        raise ConflictError("Internal safety check failed: the generated file appears to contain non-price data.")
+
+    if not report.ok and not accept_loss:
+        raise ConflictError(
+            "Writing into the original workbook would lose or change: " + ", ".join(report.lost_features) +
+            " -- retry with accept_loss=true to proceed anyway, or use the generated export instead.",
+            lost_features=report.lost_features,
+        )
+
+    sha256 = hashlib.sha256(output_bytes).hexdigest()
+    filename = f"settlement-{settlement.project_id}-v{settlement.version_no}-original.xlsx"
+
+    await audit.record(
+        session, ctx, action=AuditAction.EXPORT, entity_type="bid_settlement", entity_id=settlement.id,
+        project_id=settlement.project_id,
+        payload={
+            "version_no": settlement.version_no, "sha256": sha256, "export_kind": "original",
+            "import_batch_id": str(batch.id), "fidelity_ok": report.ok, "lost_features": report.lost_features,
+            "accepted_loss": accept_loss if not report.ok else None,
+        },
+    )
+    return output_bytes, sha256, filename

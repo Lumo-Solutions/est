@@ -55,13 +55,22 @@ async def commit_import(
     batch_id = uuid4()
     source_object_key: str | None = None
     source_sha256: str | None = None
+    sheet_name: str | None = None
     if filename.lower().endswith(".xlsx"):
         source_object_key = f"boq-imports/{project_id}/{batch_id}.xlsx"
         source_sha256 = await put_object_streaming(source_object_key, data, _XLSX_CONTENT_TYPE)
+        # Module D3 needs to know which sheet to write settled rates back
+        # into for a multi-sheet workbook -- same file already in memory,
+        # no extra S3 round trip.
+        import io
+
+        from openpyxl import load_workbook
+
+        sheet_name = load_workbook(io.BytesIO(data), read_only=True).active.title
 
     batch = BoqImportBatch(
         id=batch_id, tenant_id=ctx.tenant_id, project_id=project_id, source_filename=filename,
-        source_object_key=source_object_key, source_sha256=source_sha256,
+        source_object_key=source_object_key, source_sha256=source_sha256, sheet_name=sheet_name,
         header_row=mapping.header_row, item_no_column=mapping.item_no_column,
         description_column=mapping.description_column, uom_column=mapping.uom_column,
         quantity_column=mapping.quantity_column, parent_column=mapping.parent_column,
