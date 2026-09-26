@@ -282,3 +282,32 @@ WRITE_ROLES_MODULE_A = {
     Role.MANAGING_DIRECTOR,
 }
 ALL_ROLES = set(Role)
+
+
+class BidSettlementStatus(StrEnum):
+    """See docs/module-d1-plan.md §5a. draft is the only mutable state; a
+    rejected settlement is never reopened -- the only way forward is a new
+    version (build_settlement_draft). won/lost belong to Module D2's
+    outcome-capture, but the values exist now so this enum needs no later
+    change."""
+
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    WON = "won"
+    LOST = "lost"
+
+
+class SettlementCostSource(StrEnum):
+    """Where a bid_settlement_line_items row's direct_unit_cost came from
+    -- see docs/module-d1-plan.md §2b."""
+
+    QUOTATION_LINE = "quotation_line"
+    COST_LIBRARY_RATE = "cost_library_rate"
+    MANUAL = "manual"
+
+
+class SettlementOutcome(StrEnum):
+    WON = "won"
+    LOST = "lost"
