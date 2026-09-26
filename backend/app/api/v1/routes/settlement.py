@@ -20,6 +20,8 @@ from app.schemas.settlement import (
     LineCostUpdate,
     OriginalExportRequest,
     OutcomeRequest,
+    ReasonCodeCreate,
+    ReasonCodeUpdate,
     ScenarioCreate,
     SettlementDefaultsUpdate,
     SettlementReasonCodeOut,
@@ -216,10 +218,36 @@ async def record_outcome_endpoint(
 
 @router.get("/settlement-reason-codes", response_model=list[SettlementReasonCodeOut])
 async def list_reason_codes_endpoint(
-    ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+    include_inactive: bool = False,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
 ) -> list[SettlementReasonCodeOut]:
-    codes = await settlement_service.list_reason_codes(session, ctx)
+    # include_inactive=false (default) is the win/loss-form's own use --
+    # only ever-usable codes; the admin reason-codes screen passes true to
+    # manage the full list, including ones it has deactivated.
+    codes = await settlement_service.list_reason_codes(session, ctx, include_inactive=include_inactive)
     return [SettlementReasonCodeOut.model_validate(c) for c in codes]
+
+
+@router.post("/settlement-reason-codes", response_model=SettlementReasonCodeOut, status_code=201)
+async def create_reason_code_endpoint(
+    data: ReasonCodeCreate,
+    ctx: RequestContext = Depends(require_roles(*_HEADER_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> SettlementReasonCodeOut:
+    row = await settlement_service.create_reason_code(session, ctx, data.code, data.label)
+    return SettlementReasonCodeOut.model_validate(row)
+
+
+@router.patch("/settlement-reason-codes/{reason_code_id}", response_model=SettlementReasonCodeOut)
+async def update_reason_code_endpoint(
+    reason_code_id: UUID,
+    data: ReasonCodeUpdate,
+    ctx: RequestContext = Depends(require_roles(*_HEADER_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> SettlementReasonCodeOut:
+    row = await settlement_service.update_reason_code(session, ctx, reason_code_id, label=data.label, is_active=data.is_active)
+    return SettlementReasonCodeOut.model_validate(row)
 
 
 @router.post("/bid-settlements/{settlement_id}/export-original/preview", response_model=FidelityReportOut)

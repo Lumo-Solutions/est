@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
@@ -49,3 +49,57 @@ class ApprovalRequestOut(ORMModel):
 class ApprovalDecision(BaseModel):
     approve: bool
     note: str | None = None
+
+
+# --------------------------------------------------------------------------
+# Phase 8f: admin CRUD for the policy tables app/services/approvals.py's
+# _active_policy()/route_tiers() already read live -- these were
+# previously DB-configurable in name only (no API existed to view or
+# change them; only app/cli.py's dev-seed ever wrote a row). See
+# docs/module-frontend-phase8f-plan.md.
+# --------------------------------------------------------------------------
+
+
+class ApprovalPolicyTierIn(BaseModel):
+    seq: int
+    min_amount: float = 0
+    max_amount: float | None = None
+    max_margin_pct: float | None = None
+    required_role: str
+    quorum: int = 1
+    sla_hours: int | None = None
+    requires_mfa: bool = True
+
+
+class ApprovalPolicyTierOut(ORMModel):
+    id: UUID
+    policy_id: UUID
+    seq: int
+    min_amount: float
+    max_amount: float | None
+    max_margin_pct: float | None
+    required_role: str
+    quorum: int
+    sla_hours: int | None
+    requires_mfa: bool
+
+
+class ApprovalPolicyCreate(BaseModel):
+    entity_type: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=255)
+    mode: str = "sequential_up_to_tier"
+    tiers: list[ApprovalPolicyTierIn] = Field(min_length=1)
+
+
+class ApprovalPolicyOut(ORMModel):
+    id: UUID
+    entity_type: str
+    name: str
+    version: int
+    mode: str
+    is_active: bool
+    tiers: list[ApprovalPolicyTierOut] = []
+
+
+class ApprovalPolicySetActive(BaseModel):
+    is_active: bool

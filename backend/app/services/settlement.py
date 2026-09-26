@@ -783,13 +783,43 @@ async def export_settlement(
 _OUTCOME_ROLES = ("bd_director", "managing_director")
 
 
-async def list_reason_codes(session: AsyncSession, ctx: RequestContext) -> list[SettlementReasonCode]:
-    result = await session.execute(
-        select(SettlementReasonCode)
-        .where(SettlementReasonCode.tenant_id == ctx.tenant_id, SettlementReasonCode.is_active.is_(True))
-        .order_by(SettlementReasonCode.code)
-    )
+async def list_reason_codes(
+    session: AsyncSession, ctx: RequestContext, *, include_inactive: bool = False
+) -> list[SettlementReasonCode]:
+    stmt = select(SettlementReasonCode).where(SettlementReasonCode.tenant_id == ctx.tenant_id)
+    if not include_inactive:
+        stmt = stmt.where(SettlementReasonCode.is_active.is_(True))
+    result = await session.execute(stmt.order_by(SettlementReasonCode.code))
     return list(result.scalars().all())
+
+
+async def create_reason_code(session: AsyncSession, ctx: RequestContext, code: str, label: str) -> SettlementReasonCode:
+    _require_role(ctx, _HEADER_ROLES, "Creating a settlement reason code")
+    row = SettlementReasonCode(tenant_id=ctx.tenant_id, code=code, label=label)
+    session.add(row)
+    await session.flush()
+    await audit.record(session, ctx, action=AuditAction.CREATE, entity_type="settlement_reason_code", entity_id=row.id, payload={"code": code})
+    return row
+
+
+async def update_reason_code(
+    session: AsyncSession, ctx: RequestContext, reason_code_id: UUID, *, label: str | None = None, is_active: bool | None = None
+) -> SettlementReasonCode:
+    _require_role(ctx, _HEADER_ROLES, "Updating a settlement reason code")
+    result = await session.execute(select(SettlementReasonCode).where(SettlementReasonCode.id == reason_code_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(f"Reason code {reason_code_id} not found")
+    if label is not None:
+        row.label = label
+    if is_active is not None:
+        row.is_active = is_active
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="settlement_reason_code", entity_id=row.id,
+        payload={"label": label, "is_active": is_active},
+    )
+    return row
 
 
 async def record_outcome(
