@@ -61,7 +61,15 @@ class OidcClient:
         params = {
             "client_id": self._settings.keycloak_client_id,
             "response_type": "code",
-            "scope": "openid profile email",
+            # "profile"/"email" aren't defined as client scopes in this realm
+            # (deploy/keycloak/realm-installtec.json) and every claim this app
+            # actually reads (sub/tenant_id/roles/acr) comes from the custom
+            # "installtec-claims" default scope regardless of what's
+            # requested here -- found while dev-verifying Phase 8a's login
+            # redirect: Keycloak rejected the old "openid profile email" with
+            # invalid_scope, meaning a real browser login had never
+            # completed successfully before this fix.
+            "scope": "openid",
             "redirect_uri": redirect_uri,
             "state": state,
             "nonce": nonce,
