@@ -16,6 +16,7 @@ app/services/quotation_ingestion.py::promote_quotation_version.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 from datetime import datetime, timezone
@@ -298,3 +299,96 @@ async def test_promote_quotation_version_requires_review_role_and_is_audited(rls
     ).one()
     assert audit_row[0] == "update"
     assert audit_row[1] == ph_ctx.sub
+
+
+# --------------------------------------------------------------------------
+# 4. concurrent replies for the same (rfq, vendor) never collide on version_no
+# --------------------------------------------------------------------------
+
+
+async def test_concurrent_replies_get_distinct_version_numbers(app_engine, monkeypatch):
+    """Two concurrent replies for the same (rfq, vendor) -- e.g. two PDF
+    attachments from different emails, each routed to extract_quotation_task
+    and landing on two different vLLM worker forks at once -- is exactly
+    what hit uq_quotations_rfq_vendor_version live during
+    `make dev-simulate-quotes` (see docs/c2-verification-report.md's Round
+    2). _create_quotation_version's pg_advisory_xact_lock must serialize the
+    two callers so they land on distinct version_no values instead of both
+    computing the same MAX(version_no) and colliding.
+
+    Deliberately does NOT use the shared `rls_session` fixture: that fixture
+    wraps the whole test in one transaction, and pg_advisory_xact_lock is
+    reentrant within a single transaction -- a second lock call on the same
+    connection/transaction would never block, so the race couldn't happen at
+    all. This test instead opens two independent AsyncSession/transactions
+    (mirroring two separate worker processes, each with its own DB
+    connection) and runs them concurrently via asyncio.gather; Postgres
+    itself serializes them on the advisory lock, which is real network I/O
+    from asyncpg's point of view, so the event loop can genuinely interleave
+    them.
+
+    A plain asyncio.gather() of the two branches isn't enough by itself,
+    though: against a fast local connection, one branch can simply run
+    start-to-finish before the other's first await is even scheduled, so the
+    two never actually overlap and the test passes "by luck" whether or not
+    the lock is there (confirmed by hand -- removing the lock without this
+    delay still passed). The monkeypatch below sleeps briefly right after
+    the MAX(version_no) read inside _create_quotation_version -- after the
+    point a missing lock would let both callers read the same value, before
+    either has inserted -- to force real overlap when nothing serializes
+    them. It costs nothing when the lock IS present: the second caller is
+    then still blocked earlier, at pg_advisory_xact_lock, and doesn't reach
+    this query at all until the first caller's whole transaction (sleep
+    included) has already committed.
+
+    To confirm this test actually exercises the lock: comment out the
+    `pg_advisory_xact_lock` line in _create_quotation_version and rerun --
+    it fails with a raw asyncpg.exceptions.UniqueViolationError on
+    uq_quotations_rfq_vendor_version (confirmed manually; see
+    docs/c2-verification-report.md's Round 3 note).
+    """
+    from app.workers.tasks.quotation_ingestion import _create_quotation_version
+
+    async with AsyncSession(app_engine, expire_on_commit=False) as setup_session, setup_session.begin():
+        tenant_id, rfq, _boq_item = await _seed_tenant_project_rfq_with_boq(setup_session)
+
+    original_execute = AsyncSession.execute
+
+    async def _delay_after_max_version_read(self, statement, *args, **kwargs):
+        result = await original_execute(self, statement, *args, **kwargs)
+        compiled = str(statement).lower()
+        if "max(" in compiled and "version_no" in compiled:
+            await asyncio.sleep(0.3)
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", _delay_after_max_version_read)
+
+    async def _run_one() -> int:
+        async with AsyncSession(app_engine, expire_on_commit=False) as session, session.begin():
+            await _system_ctx(session, tenant_id)
+            inbound_email = await _seed_inbound_email(session, tenant_id=tenant_id, rfq_id=rfq.id)
+            quotation = await _create_quotation_version(
+                session, rfq=rfq, inbound_email=inbound_email, attachment=None,
+                extraction_method=QuotationExtractionMethod.DETERMINISTIC_XLSX.value,
+                currency="AED", vat_inclusive=True, status=QuotationStatus.PROPOSED.value, line_item_count=1,
+            )
+            return quotation.version_no
+
+    version_numbers = await asyncio.gather(_run_one(), _run_one())
+    assert sorted(version_numbers) == [1, 2]  # no collision, no IntegrityError from either branch
+
+    async with AsyncSession(app_engine, expire_on_commit=False) as check_session, check_session.begin():
+        await _system_ctx(check_session, tenant_id)
+        rows = (
+            await check_session.execute(
+                select(Quotation.version_no, Quotation.is_current)
+                .where(Quotation.rfq_id == rfq.id, Quotation.vendor_id == rfq.vendor_id)
+                .order_by(Quotation.version_no)
+            )
+        ).all()
+        assert [r[0] for r in rows] == [1, 2]
+        # Whichever branch's transaction commits first becomes v1/current;
+        # the second sees it (no accepted line item yet) and safely
+        # supersedes it -- deterministic regardless of which branch wins
+        # the lock race.
+        assert [r[1] for r in rows] == [False, True]

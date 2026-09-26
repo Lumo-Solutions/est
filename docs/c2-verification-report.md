@@ -230,6 +230,55 @@ confirmed a second promote of the same (already-current) quotation returns
 409 Conflict (`ConflictError`), then promoted v4 back to restore the
 natural end state before writing this report.
 
+---
+
+# Round 3: automated test for the version-number race
+
+Round 2 fixed the concurrency race (`pg_advisory_xact_lock` in
+`_create_quotation_version`) but left it unverified by any automated test --
+"reproducing real worker-process concurrency deterministically in a single
+test session would need a second live connection/session, out of proportion
+to this fix." Added
+`tests/integration/test_quotation_versioning.py::test_concurrent_replies_get_distinct_version_numbers`,
+which does exactly that: two independent `AsyncSession`/transactions (not
+the shared `rls_session` fixture, which is a single transaction and can't
+exercise a lock that's reentrant within one transaction) run
+`_create_quotation_version` concurrently via `asyncio.gather` for the same
+(rfq, vendor), with a short forced delay right after each caller's
+`MAX(version_no)` read so the two genuinely overlap instead of one just
+finishing before the other starts (confirmed necessary: a first attempt
+without that delay passed even with the lock removed, by luck of
+scheduling).
+
+**Confirmed the test actually exercises the lock**, per the request: with
+`pg_advisory_xact_lock` temporarily commented out in
+`_create_quotation_version`, the new test reliably failed --
+
+```
+sqlalchemy.exc.IntegrityError: (sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError)
+duplicate key value violates unique constraint "uq_quotations_rfq_vendor_version"
+```
+
+-- then the lock was restored (`git diff` confirmed the file byte-identical
+to before) and the full suite rerun clean:
+
+```
+make test-integration  (via targeted docker run, same image/network as the Makefile target)
+88 passed, 3 warnings in 39.89s
+```
+
+(87 -> 88: the one new test. Ran the new test three times in a row with the
+lock restored, no flakes.)
+
+Also added a "Module C2's PDF/photo extraction path is only verified
+against mock-vllm" item to `docs/deploy-deltas.md`'s production hardening
+checklist: every `dev-simulate-quotes` run and every automated test above
+has run against `ai-service/mock-vllm`, never a real vision-language model,
+so none of this report's extraction-accuracy claims generalize to real
+vendor quotes. Before production: run `make dev-simulate-quotes` plus 5-10
+realistic synthetic sample vendor quotes against `vllm-gpu` and record
+extraction accuracy.
+
 ## Commit log, final (this round's commits included)
 
 ```
