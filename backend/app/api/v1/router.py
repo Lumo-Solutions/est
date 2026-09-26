@@ -15,6 +15,7 @@ from app.api.v1.routes import (
     quotation_ingestion,
     settlement,
     taxonomy,
+    typology,
     vendors,
 )
 
@@ -32,3 +33,4 @@ api_router.include_router(boq.router)
 api_router.include_router(procurement.router)
 api_router.include_router(quotation_ingestion.router)
 api_router.include_router(settlement.router)
+api_router.include_router(typology.router)

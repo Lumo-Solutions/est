@@ -115,6 +115,89 @@ def index_dxf(data: bytes) -> list[DxfLayoutInfo]:
     return layouts
 
 
+def _convert_geometric_entity(entity, handle: str | None) -> GeometricEntity | None:
+    """Shared by index_dxf_geometry()'s main per-layout loop and its INSERT
+    branch's block-content walk below (Module B Phase 4c) -- same LINE/
+    LWPOLYLINE/POLYLINE/ARC handling either way, just fed a different
+    entity source (the real layout vs. one INSERT's virtual_entities()).
+    `handle` is None for a virtual entity (ezdxf: "these entities ... have
+    no handle") -- fine here since virtual entities are only ever used to
+    compute a signature, never persisted as their own DrawingEntity row."""
+    dxftype = entity.dxftype()
+    if dxftype == "LINE":
+        start = (entity.dxf.start.x, entity.dxf.start.y)
+        end = (entity.dxf.end.x, entity.dxf.end.y)
+        return GeometricEntity("line", entity.dxf.layer, handle, [start, end])
+    if dxftype == "LWPOLYLINE":
+        points = [(float(p[0]), float(p[1]), float(p[2])) for p in entity.get_points("xyb")]
+        verts = [(x, y) for x, y, _ in points]
+        bulges = [b for _, _, b in points]
+        if len(verts) >= 2:
+            return GeometricEntity("lwpolyline", entity.dxf.layer, handle, verts, closed=bool(entity.closed), bulges=bulges)
+        return None
+    if dxftype == "POLYLINE":
+        verts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+        bulges = [float(getattr(v.dxf, "bulge", 0.0)) for v in entity.vertices]
+        if len(verts) >= 2:
+            return GeometricEntity("lwpolyline", entity.dxf.layer, handle, verts, closed=bool(entity.is_closed), bulges=bulges)
+        return None
+    if dxftype == "ARC":
+        center = (entity.dxf.center.x, entity.dxf.center.y)
+        return GeometricEntity(
+            "arc", entity.dxf.layer, handle, [], center=center, radius=entity.dxf.radius,
+            start_angle_deg=entity.dxf.start_angle, end_angle_deg=entity.dxf.end_angle,
+        )
+    if dxftype == "CIRCLE":
+        center = (entity.dxf.center.x, entity.dxf.center.y)
+        return GeometricEntity(
+            "arc", entity.dxf.layer, handle, [], center=center, radius=entity.dxf.radius,
+            start_angle_deg=0.0, end_angle_deg=360.0,
+        )
+    return None
+
+
+def _block_signature_attributes(block_name: str, doc) -> dict[str, str]:
+    """Module B Phase 4c: computed from the block DEFINITION's own local
+    (untransformed) geometry -- doc.blocks[block_name] -- not from any one
+    INSERT's placed/rotated/scaled content. Deliberately not using ezdxf's
+    Insert.virtual_entities() (the per-instance, world-transformed
+    content): a bounding-box aspect ratio computed from *rotated* geometry
+    is not rotation-invariant (a 10x5 rectangle rotated 90 degrees has a
+    5x10 axis-aligned bbox), which would wrongly split two placements of
+    the identical block at different rotations into separate typology
+    groups -- the plan doc's own "differing only by placement (position/
+    rotation) still match" requirement. Computing from the block's own
+    local frame instead sidesteps that entirely: every instance sharing a
+    block_name gets the identical signature regardless of its own
+    placement, by construction (this does mean a *non-uniformly-scaled*
+    instance of the same block_name is no longer caught as a signature
+    outlier -- an accepted simplification for a first bounded
+    implementation; block_name-across-different-uploaded-drawings name
+    collisions are still caught, since ezdxf itself disallows duplicate
+    block names within one document, so a same-name-different-geometry
+    conflict can only arise from two separate files). Only LINE/
+    LWPOLYLINE/POLYLINE/ARC/CIRCLE sub-entities contribute (matching
+    _convert_geometric_entity's own coverage). Returns {} (no signature --
+    app.takeoff.typology::group_dxf_instances_by_block skips these) for a
+    block with no convertible content (e.g. purely text/attribute
+    definitions) or an unresolvable name."""
+    from app.takeoff.typology import signature_from_entities
+
+    try:
+        block = doc.blocks[block_name]
+    except KeyError:
+        return {}
+    sub_entities = [g for e in block if (g := _convert_geometric_entity(e, None)) is not None]
+    if not sub_entities:
+        return {}
+    sig = signature_from_entities(sub_entities)
+    return {
+        "__sig_bbox_aspect_ratio": repr(sig.bbox_aspect_ratio),
+        "__sig_entity_count": str(sig.entity_count),
+        "__sig_total_edge_length": repr(sig.total_edge_length),
+    }
+
+
 def index_dxf_geometry(data: bytes) -> dict[str, list[GeometricEntity]]:
     """Harvests LINE, LWPOLYLINE/POLYLINE, ARC, and INSERT (as a point node
     -- its insertion point plus any ATTRIB values, for manhole/chamber and
@@ -134,51 +217,34 @@ def index_dxf_geometry(data: bytes) -> dict[str, list[GeometricEntity]]:
     """
     doc = _read_dxf_document(data)
     result: dict[str, list[GeometricEntity]] = {}
+    # Signature computed once per distinct block_name (from the block
+    # DEFINITION, not per placement) and reused for every INSERT
+    # referencing it, across every layout -- see _block_signature_attributes.
+    block_signature_cache: dict[str, dict[str, str]] = {}
 
     for layout in doc.layouts:
         geoms: list[GeometricEntity] = []
         for entity in layout:
             dxftype = entity.dxftype()
-            if dxftype == "LINE":
-                start = (entity.dxf.start.x, entity.dxf.start.y)
-                end = (entity.dxf.end.x, entity.dxf.end.y)
-                geoms.append(GeometricEntity("line", entity.dxf.layer, entity.dxf.handle, [start, end]))
-            elif dxftype == "LWPOLYLINE":
-                # get_points() returns numpy floats -- cast to plain float
-                # so the vertex list is JSON-serializable when persisted to
-                # the geometry JSONB column.
-                points = [(float(p[0]), float(p[1]), float(p[2])) for p in entity.get_points("xyb")]
-                verts = [(x, y) for x, y, _ in points]
-                bulges = [b for _, _, b in points]
-                if len(verts) >= 2:
-                    geoms.append(
-                        GeometricEntity(
-                            "lwpolyline", entity.dxf.layer, entity.dxf.handle, verts,
-                            closed=bool(entity.closed), bulges=bulges,
-                        )
-                    )
-            elif dxftype == "POLYLINE":
-                verts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
-                bulges = [float(getattr(v.dxf, "bulge", 0.0)) for v in entity.vertices]
-                if len(verts) >= 2:
-                    geoms.append(
-                        GeometricEntity(
-                            "lwpolyline", entity.dxf.layer, entity.dxf.handle, verts,
-                            closed=bool(entity.is_closed), bulges=bulges,
-                        )
-                    )
-            elif dxftype == "ARC":
-                center = (entity.dxf.center.x, entity.dxf.center.y)
-                geoms.append(
-                    GeometricEntity(
-                        "arc", entity.dxf.layer, entity.dxf.handle, [],
-                        center=center, radius=entity.dxf.radius,
-                        start_angle_deg=entity.dxf.start_angle, end_angle_deg=entity.dxf.end_angle,
-                    )
-                )
+            if dxftype in ("LINE", "LWPOLYLINE", "POLYLINE", "ARC"):
+                # get_points() (LWPOLYLINE) returns numpy floats internally --
+                # _convert_geometric_entity casts to plain float so the
+                # vertex list stays JSON-serializable for the geometry
+                # JSONB column.
+                converted = _convert_geometric_entity(entity, entity.dxf.handle)
+                if converted is not None:
+                    geoms.append(converted)
             elif dxftype == "INSERT":
                 point = (entity.dxf.insert.x, entity.dxf.insert.y)
                 attrs = {a.dxf.tag: a.dxf.text for a in getattr(entity, "attribs", [])}
+                # Module B Phase 4c: the block's own geometric signature
+                # (see _block_signature_attributes for why this is
+                # computed from the block definition, not this instance's
+                # own placement/rotation/scale).
+                block_name = entity.dxf.name
+                if block_name not in block_signature_cache:
+                    block_signature_cache[block_name] = _block_signature_attributes(block_name, doc)
+                attrs.update(block_signature_cache[block_name])
                 geoms.append(
                     GeometricEntity(
                         "insert_node", entity.dxf.layer, entity.dxf.handle, [point],
