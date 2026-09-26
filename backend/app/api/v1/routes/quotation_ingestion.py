@@ -160,6 +160,14 @@ async def reject_line_item_endpoint(
     return QuotationLineItemOut.model_validate(row)
 
 
+@router.get("/quotations/{quotation_id}/exclusion-flags", response_model=list[QuotationExclusionFlagOut])
+async def list_exclusion_flags_endpoint(
+    quotation_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[QuotationExclusionFlagOut]:
+    rows = await quotation_service.list_exclusion_flags(session, quotation_id)
+    return [QuotationExclusionFlagOut.model_validate(r) for r in rows]
+
+
 @router.post("/quotation-exclusion-flags/{flag_id}/acknowledge", response_model=QuotationExclusionFlagOut)
 async def acknowledge_exclusion_flag_endpoint(
     flag_id: UUID,

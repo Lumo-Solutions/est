@@ -371,3 +371,10 @@ async def test_extract_quotation_body_wires_subtotal_unit_and_citation_verificat
     ).scalar_one()
     assert flag.source_location == "row1"
     assert flag.citation_verified is True  # the citation is a verbatim substring of source_text
+
+    # Phase 8d: list_exclusion_flags() -- the read the bid-leveling
+    # screen's exclusion-flag/citation panel needs; no such listing
+    # existed anywhere before (only acknowledge, which needs a
+    # caller-supplied flag_id).
+    listed = await quotation_service.list_exclusion_flags(rls_session, quotation.id)
+    assert [f.id for f in listed] == [flag.id]
