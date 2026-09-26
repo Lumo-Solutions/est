@@ -6,15 +6,18 @@ import { RequireAuth } from './auth/RequireAuth'
 import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
+import { ExportPage } from './pages/ExportPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
 import { QuarantineQueuePage } from './pages/QuarantineQueuePage'
 import { QuoteReviewPage } from './pages/QuoteReviewPage'
+import { SettlementPage } from './pages/SettlementPage'
 import { SheetIndexPage } from './pages/SheetIndexPage'
 import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 import { TypologyPage } from './pages/TypologyPage'
+import { WinLossPage } from './pages/WinLossPage'
 
 const queryClient = new QueryClient()
 
@@ -39,15 +42,9 @@ function AppRoutes() {
         <Route path="/projects/:projectId/procurement/quarantine" element={<QuarantineQueuePage />} />
         <Route path="/projects/:projectId/procurement/quotes" element={<QuoteReviewPage />} />
         <Route path="/projects/:projectId/procurement/bid-leveling" element={<BidLevelingPage />} />
-        <Route
-          path="/projects/:projectId/settlement"
-          element={<PlaceholderPage title="Settlement cockpit" phase="8e" />}
-        />
-        <Route path="/projects/:projectId/export" element={<PlaceholderPage title="Export" phase="8e" />} />
-        <Route
-          path="/projects/:projectId/win-loss"
-          element={<PlaceholderPage title="Win / loss capture" phase="8e" />}
-        />
+        <Route path="/projects/:projectId/settlement" element={<SettlementPage />} />
+        <Route path="/projects/:projectId/export" element={<ExportPage />} />
+        <Route path="/projects/:projectId/win-loss" element={<WinLossPage />} />
         <Route path="/admin" element={<PlaceholderPage title="Admin" phase="8f" />} />
         <Route path="/audit" element={<PlaceholderPage title="Audit viewer" phase="8f" />} />
       </Route>

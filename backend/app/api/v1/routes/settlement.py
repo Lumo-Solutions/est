@@ -61,6 +61,14 @@ async def build_settlement_draft_endpoint(
     return _to_out(settlement, lines, trade_overrides)
 
 
+@router.get("/projects/{project_id}/bid-settlements", response_model=list[BidSettlementOut])
+async def list_settlements_endpoint(
+    project_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[BidSettlementOut]:
+    settlements = await settlement_service.list_settlements(session, project_id)
+    return [BidSettlementOut.model_validate(s) for s in settlements]
+
+
 @router.get("/bid-settlements/{settlement_id}", response_model=BidSettlementOut)
 async def get_settlement_endpoint(
     settlement_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)

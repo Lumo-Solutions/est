@@ -450,6 +450,22 @@ async def test_rejected_settlement_allows_a_new_version(rls_session):
     await rls_session.refresh(rejected)
     assert rejected.is_current is False
 
+    # Phase 8e: list_settlements() -- the settlement screen's version/
+    # win-loss history browser needs this; no such listing existed
+    # anywhere before (only build [creates] and get-by-id [needs an
+    # already-known id]).
+    listed = await settlement_service.list_settlements(rls_session, project_id)
+    assert [s.version_no for s in listed] == [1, 2]
+    assert [s.is_current for s in listed] == [False, True]
+
+
+async def test_list_settlements_invisible_to_non_member(rls_session):
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+
+    non_member_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=uuid.uuid4())
+    await set_rls_context(rls_session, non_member_ctx)
+    assert await settlement_service.list_settlements(rls_session, project_id) == []
+
 
 async def test_save_and_list_scenarios(rls_session):
     tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
