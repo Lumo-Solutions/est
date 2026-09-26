@@ -237,3 +237,18 @@ class SettlementReasonCodeOut(ORMModel):
     code: str
     label: str
     is_active: bool
+
+
+# --------------------------------------------------------------------------
+# Module D3: export into the client's original workbook
+# --------------------------------------------------------------------------
+
+
+class OriginalExportRequest(BaseModel):
+    accept_loss: bool = False
+
+
+class FidelityReportOut(BaseModel):
+    ok: bool
+    lost_features: list[str] = Field(default_factory=list)
+    unexpected_cell_changes: list[str] = Field(default_factory=list)

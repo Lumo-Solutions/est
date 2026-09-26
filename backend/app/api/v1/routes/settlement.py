@@ -15,8 +15,10 @@ from app.schemas.settlement import (
     BidSettlementScenarioOut,
     BidSettlementTradeOverrideOut,
     ExportRequest,
+    FidelityReportOut,
     FxRateSet,
     LineCostUpdate,
+    OriginalExportRequest,
     OutcomeRequest,
     ScenarioCreate,
     SettlementDefaultsUpdate,
@@ -210,3 +212,29 @@ async def list_reason_codes_endpoint(
 ) -> list[SettlementReasonCodeOut]:
     codes = await settlement_service.list_reason_codes(session, ctx)
     return [SettlementReasonCodeOut.model_validate(c) for c in codes]
+
+
+@router.post("/bid-settlements/{settlement_id}/export-original/preview", response_model=FidelityReportOut)
+async def preview_original_export_endpoint(
+    settlement_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_LINE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> FidelityReportOut:
+    report = await settlement_service.preview_original_export(session, ctx, settlement_id)
+    return FidelityReportOut(**report)
+
+
+@router.post("/bid-settlements/{settlement_id}/export-original")
+async def export_original_endpoint(
+    settlement_id: UUID,
+    data: OriginalExportRequest = OriginalExportRequest(),
+    ctx: RequestContext = Depends(require_roles(*_LINE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    file_bytes, sha256, filename = await settlement_service.export_original_settlement(
+        session, ctx, settlement_id, accept_loss=data.accept_loss
+    )
+    return Response(
+        content=file_bytes, media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "X-File-SHA256": sha256},
+    )

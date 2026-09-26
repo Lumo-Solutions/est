@@ -146,7 +146,64 @@ phase that isn't `unit-green`.
 
 ## Phase 3: D3, export into the client's original workbook
 
-**Status:** not started
+**Status:** built, unit-green (281 unit + 116 integration + 18 API = 415 passed; merged to master)
+
+- Branch: `feat/d3-original-export` (from `master`). No new migration --
+  D2's schema already had everything this needed.
+- New code: `app/boq/original_export.py` (pure logic: reject macro/
+  encrypted, write the rate/amount cells, build the fidelity report by
+  diffing the original's and output's raw zip members -- observed, not
+  predicted), `preview_original_export`/`export_original_settlement` in
+  `app/services/settlement.py`, two new endpoints
+  (`/export-original/preview`, `/export-original`).
+- Small fix folded in: `commit_import` (D2) never actually populated
+  `boq_import_batches.sheet_name` -- fixed before D3 needed it (no
+  migration; existing batches keep `sheet_name = NULL` like everything
+  else D2 couldn't backfill).
+- Test counts: unit 281 (was 269 -- +12: rejection, writing/fidelity,
+  four feature-loss categories via a real before/after zip diff, extended
+  conditional-formatting detection, a clean-workbook control); integration
+  116 (was 112 -- +4: happy path, lossy-blocked-then-accepted-and-audited,
+  ineligible-no-batch, denied role). Combined: 415.
+- Dev simulation: extended `_get_or_create_d1_demo_rfq` to go through the
+  **real** `commit_import` path (a synthetic workbook with a merged title
+  cell) instead of creating the BOQ item directly, so a real
+  `boq_import_batches` row -- and a real SeaweedFS round trip for the
+  retained file -- exists for `make dev-simulate-settlement` to exercise.
+  Full chain verified against the real dev stack: build → submit → SoD →
+  decide → generated export (clean) → **original-workbook export**
+  (`fidelity preview: ok=True lost_features=[]`, then the file itself) →
+  outcome. Two bugs hit live during this run (both fixed, both now
+  covered by regression coverage -- see below).
+- Assumptions / deviations:
+  - Feature-loss detection is **observed** (before/after raw zip diff on
+    the actual file), not predicted from openpyxl's documented
+    limitations -- deliberate per the plan (§6b), and validated by
+    injecting real zip members into synthetic fixtures and confirming
+    openpyxl actually drops them on its own save (it does, for every
+    category tested).
+  - Extended (`x14`-namespaced) conditional formatting/data validation is
+    detected via a substring match on the worksheet XML, not a full
+    parse -- a deliberately blunt, conservative instrument (some false
+    positives possible, no false negatives expected for this marker).
+  - Eligibility is all-or-nothing per settlement: if even one line traces
+    to a different import batch (or none), original-workbook export is
+    refused entirely for the *whole* settlement, not attempted line-by-
+    line -- "the client's original workbook" is singular by construction.
+- Known gaps: none carried forward from this phase specifically (D3 was
+  the last piece the D2 groundwork was waiting on).
+- Pre-existing bugs found and fixed while building this phase:
+  1. (Caught by a test, before merge) `_run_original_export` read
+     `line.source_row_number` off `BidSettlementLineItem` -- but that
+     column lives on `BoqLineItem`, not the settlement line at all;
+     `BidSettlementLineItem` has no such attribute. Fixed to look it up
+     via the already-loaded `boq_items` map.
+  2. (Hit live during the dev-stack run, before merge) the CLI's D1-SIM
+     workbook fixture put a merged title in row 1 but the import mapping
+     didn't set `header_row=2`, so the parser tried to read the title row
+     as headers and both real rows failed validation. Fixed in the CLI
+     fixture only -- not a bug in `commit_import`/`parse_boq_file`
+     themselves, which handle `header_row` correctly when told about it.
 
 ## Phase 4: Module B, remaining takeoff features
 

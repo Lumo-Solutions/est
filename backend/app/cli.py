@@ -21,7 +21,7 @@ from decimal import Decimal
 from email.message import EmailMessage
 from uuid import UUID
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +46,9 @@ from app.schemas.procurement import ProcurementPackageCreate, RfqCreateRequest
 from app.schemas.prequal import PrequalificationDecision
 from app.schemas.settlement import SettlementDefaultsUpdate, SimulateRequest
 from app.schemas.vendors import VendorCreate
+from app.boq.import_parser import BoqImportColumnMapping
 from app.services import boq as boq_service
+from app.services import boq_import as boq_import_service
 from app.services import prequal as prequal_service
 from app.services import settlement as settlement_service
 from app.services import procurement as procurement_service
@@ -347,9 +349,28 @@ async def _get_or_create_d1_demo_rfq(session: AsyncSession, ctx: RequestContext,
         package = await procurement_service.create_package(
             session, ctx, project.id, ProcurementPackageCreate(name=_SIM_D1_PACKAGE_NAME, trade_node_id=trade.id)
         )
-        item = await boq_service.create_line_item(
-            session, ctx, project.id,
-            BoqLineItemCreate(item_no="1.0", description="Excavation to formation level", uom="m3", boq_quantity=250.0, trade_node_id=trade.id),
+        # Module D3: goes through the real BOQ import path (not
+        # boq_service.create_line_item directly) so a real
+        # boq_import_batches row exists -- otherwise there'd be nothing
+        # for `export-original` to demonstrate against. A merged title
+        # cell exercises D3's "merged ranges must survive" fidelity check
+        # for free.
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "BOQ"
+        ws.merge_cells("A1:F1")
+        ws["A1"] = "D1 Simulation Tender BOQ"
+        ws.append(["Item No", "Description", "Unit", "Qty", "Rate", "Amount"])
+        ws.append(["1", "Excavation to formation level", "m3", 250, None, None])
+        buf = io.BytesIO()
+        wb.save(buf)
+        [item] = await boq_import_service.commit_import(
+            session, ctx, project.id, buf.getvalue(), "d1-sim-tender.xlsx",
+            BoqImportColumnMapping(
+                item_no_column="Item No", description_column="Description", uom_column="Unit",
+                quantity_column="Qty", rate_column="E", amount_column="F",
+                header_row=2,  # row 1 is the merged title "D1 Simulation Tender BOQ"
+            ),
         )
         await procurement_service.add_items(session, ctx, package.id, [item.id])
 
@@ -674,6 +695,18 @@ async def simulate_settlement() -> None:
         leak_markers = ["45.50", "quotation_line"]
         leaked = [m for m in leak_markers if m.encode() in file_bytes]
         print(f"exported {filename} ({len(file_bytes)} bytes), sha256={sha256}, leak_scan={'CLEAN' if not leaked else leaked}")
+
+    # Module D3: export into the retained original workbook -- must run
+    # before outcome (below), since export-original also requires
+    # status=approved, and recording an outcome moves it to won/lost.
+    async with session_scope(lead_ctx) as session:
+        report = await settlement_service.preview_original_export(session, lead_ctx, settlement_id)
+        print(f"original-export fidelity preview: ok={report['ok']} lost_features={report['lost_features']}")
+
+        original_bytes, original_sha256, original_filename = await settlement_service.export_original_settlement(
+            session, lead_ctx, settlement_id, accept_loss=not report["ok"]
+        )
+        print(f"exported original {original_filename} ({len(original_bytes)} bytes), sha256={original_sha256}")
 
     async with session_scope(bd2_ctx) as session:
         won = await settlement_service.record_outcome(
