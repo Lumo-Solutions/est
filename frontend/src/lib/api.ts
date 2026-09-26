@@ -118,6 +118,42 @@ export const api = {
   delete: <T>(path: string, signal?: AbortSignal) => request<T>(path, { method: 'DELETE', signal }),
 }
 
+function filenameFromContentDisposition(header: string | null, fallback: string): string {
+  const match = header?.match(/filename="?([^"]+)"?/)
+  return match ? match[1] : fallback
+}
+
+/** For endpoints that return a raw file (xlsx export) instead of JSON --
+ * e.g. POST /bid-settlements/{id}/export -- bypasses the JSON-only
+ * `request()` above. Triggers a real browser download via a temporary
+ * object URL. */
+export async function downloadFile(path: string, body: unknown, fallbackFilename: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', [CSRF_HEADER_NAME]: readCookie(CSRF_COOKIE_NAME) },
+    body: JSON.stringify(body ?? {}),
+    credentials: 'same-origin',
+  })
+
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    const payload = contentType.includes('json') ? await response.json() : undefined
+    const problem: ProblemDetails = payload ?? { type: 'about:blank', title: response.statusText, status: response.status }
+    const error = new ApiError(response.status, problem)
+    if (error.isStepUpRequired) window.location.href = stepUpUrl()
+    throw error
+  }
+
+  const blob = await response.blob()
+  const filename = filenameFromContentDisposition(response.headers.get('content-disposition'), fallbackFilename)
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 export async function logout(): Promise<void> {
   try {
     await fetch(`${API_BASE}/auth/logout`, {

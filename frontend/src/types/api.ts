@@ -512,3 +512,186 @@ export interface AttachInboundEmailRequest {
   rfq_id: string
   reason: string
 }
+
+// Mirrors backend/app/schemas/settlement.py.
+export interface SimulateLineOverride {
+  plant_pct?: number | null
+  overhead_pct?: number | null
+  volatility_pct?: number | null
+  markup_pct?: number | null
+}
+
+export interface SimulateRequest {
+  default_plant_pct?: number | null
+  default_overhead_pct?: number | null
+  default_volatility_pct?: number | null
+  default_markup_pct?: number | null
+  trade_overrides?: Record<string, SimulateLineOverride>
+  line_overrides?: Record<string, SimulateLineOverride>
+}
+
+export interface SimulateLineResult {
+  boq_line_item_id: string
+  resolved: boolean
+  quantity: number
+  direct_unit_cost: number | null
+  plant_pct: number
+  overhead_pct: number
+  volatility_pct: number
+  markup_pct: number
+  base: number
+  plant: number
+  overhead: number
+  volatility: number
+  markup: number
+  model_sell: number
+  unit_sell_rate: number | null
+  line_amount: number | null
+}
+
+export interface SimulateResult {
+  lines: SimulateLineResult[]
+  unresolved_line_ids: string[]
+  direct_cost_total: number
+  plant_total: number
+  overhead_total: number
+  volatility_total: number
+  markup_total: number
+  exact_model_total: number
+  tender_total: number
+  rounding_difference: number
+  margin_on_sell_pct: number | null
+  required_role: string | null
+}
+
+export interface ScenarioCreate {
+  label: string
+  inputs: SimulateRequest
+}
+
+export interface BidSettlementScenarioOut {
+  id: string
+  label: string
+  inputs: SimulateRequest
+  result: SimulateResult
+  created_by: string | null
+  created_at: string
+}
+
+export interface BidSettlementTradeOverrideOut {
+  id: string
+  trade_node_id: string
+  plant_pct: number | null
+  overhead_pct: number | null
+  volatility_pct: number | null
+  markup_pct: number | null
+}
+
+export interface BidSettlementLineItemOut {
+  id: string
+  boq_line_item_id: string
+  quantity: number
+  quantity_at_build: number
+  direct_unit_cost: number | null
+  source_currency: string
+  cost_source: string
+  source_quotation_line_item_id: string | null
+  source_cost_item_rate_id: string | null
+  source_rate_as_of_date: string | null
+  source_set_by: string | null
+  source_set_at: string | null
+  source_note: string | null
+  fx_rate: number | null
+  fx_rate_date: string | null
+  plant_pct_override: number | null
+  overhead_pct_override: number | null
+  volatility_pct_override: number | null
+  markup_pct_override: number | null
+  unit_sell_rate: number | null
+  line_amount: number | null
+  line_note: string | null
+}
+
+export interface BidSettlementOut {
+  id: string
+  project_id: string
+  version_no: number
+  is_current: boolean
+  status: string
+  currency: string
+  default_plant_pct: number
+  default_overhead_pct: number
+  default_volatility_pct: number
+  default_markup_pct: number
+  direct_cost_total: number | null
+  plant_total: number | null
+  overhead_total: number | null
+  volatility_total: number | null
+  markup_total: number | null
+  tender_total: number | null
+  rounding_difference: number | null
+  margin_on_sell_pct: number | null
+  approval_request_id: string | null
+  quantities_refreshed_at: string | null
+  submitted_at: string | null
+  submitted_by: string | null
+  decided_at: string | null
+  decided_by: string | null
+  outcome: 'won' | 'lost' | null
+  outcome_our_price: number | null
+  outcome_winning_price: number | null
+  outcome_competitor_names: string[]
+  outcome_competitor_vendor_ids: string[]
+  outcome_reason_codes: string[]
+  outcome_recorded_by: string | null
+  outcome_recorded_at: string | null
+  outcome_note: string | null
+  notes: string | null
+  lines: BidSettlementLineItemOut[]
+  trade_overrides: BidSettlementTradeOverrideOut[]
+}
+
+export interface SettlementDefaultsUpdate {
+  currency?: string | null
+  default_plant_pct?: number | null
+  default_overhead_pct?: number | null
+  default_volatility_pct?: number | null
+  default_markup_pct?: number | null
+}
+
+export interface OutcomeRequest {
+  outcome: 'won' | 'lost'
+  our_price?: number | null
+  winning_price?: number | null
+  competitor_names?: string[]
+  competitor_vendor_ids?: string[]
+  reason_codes?: string[]
+  note?: string | null
+}
+
+export interface SettlementReasonCodeOut {
+  id: string
+  code: string
+  label: string
+  is_active: boolean
+}
+
+export interface ExportRequest {
+  include_vat?: boolean
+  vat_pct?: number
+}
+
+export interface OriginalExportRequest {
+  accept_loss?: boolean
+}
+
+export interface FidelityReportOut {
+  ok: boolean
+  lost_features: string[]
+  unexpected_cell_changes: string[]
+}
+
+export interface ApprovalDecision {
+  approve: boolean
+  note?: string | null
+}
