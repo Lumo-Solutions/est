@@ -363,6 +363,15 @@ async def reject_line_item(session: AsyncSession, ctx: RequestContext, line_item
     return line_item
 
 
+async def list_exclusion_flags(session: AsyncSession, quotation_id: UUID) -> list[QuotationExclusionFlag]:
+    result = await session.execute(
+        select(QuotationExclusionFlag)
+        .where(QuotationExclusionFlag.quotation_id == quotation_id)
+        .order_by(QuotationExclusionFlag.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def acknowledge_exclusion_flag(session: AsyncSession, ctx: RequestContext, flag_id: UUID) -> QuotationExclusionFlag:
     _require_review_authority(ctx)
     result = await session.execute(select(QuotationExclusionFlag).where(QuotationExclusionFlag.id == flag_id))
