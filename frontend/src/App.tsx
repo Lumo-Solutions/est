@@ -3,11 +3,14 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
+import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
+import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
 import { SheetIndexPage } from './pages/SheetIndexPage'
 import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
+import { TypologyPage } from './pages/TypologyPage'
 
 const queryClient = new QueryClient()
 
@@ -25,18 +28,9 @@ function AppRoutes() {
           path="/projects/:projectId/drawings/:drawingId/sheets/:sheetIndex"
           element={<TakeoffViewerPage />}
         />
-        <Route
-          path="/projects/:projectId/typology"
-          element={<PlaceholderPage title="Typology cluster review" phase="8c" />}
-        />
-        <Route
-          path="/projects/:projectId/boq/import"
-          element={<PlaceholderPage title="BOQ import wizard" phase="8c" />}
-        />
-        <Route
-          path="/projects/:projectId/boq"
-          element={<PlaceholderPage title="BOQ reconciliation" phase="8c" />}
-        />
+        <Route path="/projects/:projectId/typology" element={<TypologyPage />} />
+        <Route path="/projects/:projectId/boq/import" element={<BoqImportWizardPage />} />
+        <Route path="/projects/:projectId/boq" element={<BoqReconciliationPage />} />
         <Route
           path="/projects/:projectId/procurement/packages"
           element={<PlaceholderPage title="Packages and RFQs" phase="8d" />}
