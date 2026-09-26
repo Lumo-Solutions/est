@@ -44,6 +44,17 @@ class BoqLineItem(TenantEntity):
         UUID(as_uuid=True), ForeignKey("trade_nodes.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Module D2: which import batch produced this row (NULL for rows
+    # created outside a file import, or from an import predating this
+    # column -- "backfill is not possible for existing imports", per the
+    # brief) and its 1-indexed row in that batch's original workbook.
+    # ON DELETE SET NULL -- deleting a batch record must never cascade
+    # into real BOQ data. See BoqImportBatch below.
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("boq_import_batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Linked measurements live in BoqLineItemMeasurement (many-to-one,
     # migration 0013 -- one BOQ line can aggregate several measurements,
     # e.g. a pipe run's length summed across several sheets). Reconciliation
@@ -155,3 +166,39 @@ class BoqTolerance(TenantEntity):
         UUID(as_uuid=True), ForeignKey("trade_nodes.id", ondelete="CASCADE"), nullable=True
     )
     tolerance_pct: Mapped[float] = mapped_column(Numeric(6, 3), nullable=False)
+
+
+class BoqImportBatch(TenantEntity):
+    """Module D2: one row per committed BOQ import (app/services/
+    boq_import.py::commit_import). For an .xlsx import, the raw workbook
+    is retained in S3 (source_object_key) so a later settlement export
+    can write settled rates back into the exact original file (D3);
+    source_object_key stays NULL for a .csv import or any import that
+    predates this column -- "backfill is not possible for existing
+    imports" (the build brief). rate_column/amount_column mirror
+    app/boq/import_parser.py::BoqImportColumnMapping -- almost always
+    blank at import time, recorded purely for D3 to know which cell to
+    write into later (boq_line_items.source_row_number, on each row this
+    batch created, supplies the row half of that cell reference)."""
+
+    __tablename__ = "boq_import_batches"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sheet_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    header_row: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # header TEXT (matched by app/boq/import_parser.py), not a column
+    # letter -- can be long, unlike rate_column/amount_column below.
+    item_no_column: Mapped[str] = mapped_column(String(255), nullable=False)
+    description_column: Mapped[str] = mapped_column(String(255), nullable=False)
+    uom_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    quantity_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rate_column: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    amount_column: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    imported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
