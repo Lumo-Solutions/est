@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -103,6 +103,28 @@ dev-simulate-takeoff-pdf:
 # against a real 2-sheet synthetic PDF (see app/cli.py::simulate_typology_pdf).
 dev-simulate-typology-pdf:
 	$(COMPOSE) exec backend python -m app.cli simulate-typology-pdf
+
+# Module B/C Phase 5 end to end -- suggestion ranking + RAG re-ranking.
+# Degrades gracefully (prints which path it's exercising) if the ONNX
+# model isn't provisioned -- see `make download-embedding-model`.
+dev-simulate-semantic-matching:
+	$(COMPOSE) exec backend python -m app.cli simulate-semantic-matching
+
+# DEV ONLY -- provisions the ONNX embedding model into the `onnxmodels`
+# named volume the real backend/celery-worker containers read from
+# ($ONNX_MODEL_DIR=/models). Requires network access (downloads from
+# HuggingFace) -- not run by `make up`, an explicit opt-in step, same
+# posture as bootstrap-keycloak. Module B/C Phase 5 -- see
+# docs/deploy-deltas.md's "Populating the ONNX embedding model volume"
+# and docs/module-b-c-phase5-plan.md §1. For an air-gapped target, run
+# ai-service/embeddings/download_model.py on a separate machine with
+# network access instead and copy its output into that machine's own
+# equivalent of this volume.
+download-embedding-model:
+	pip install --quiet "optimum[onnxruntime]" huggingface_hub
+	python ai-service/embeddings/download_model.py --target-dir /tmp/onnx-model-export
+	docker run --rm -v deploy_onnxmodels:/models -v /tmp/onnx-model-export:/src alpine cp -r /src/. /models/BAAI_bge-small-en-v1.5/
+	rm -rf /tmp/onnx-model-export
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve

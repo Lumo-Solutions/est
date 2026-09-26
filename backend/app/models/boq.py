@@ -3,12 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import TenantEntity
-from app.db.types import Ltree
+from app.db.types import DEFAULT_EMBEDDING_DIM, Ltree
 
 
 class BoqLineItem(TenantEntity):
@@ -54,6 +55,14 @@ class BoqLineItem(TenantEntity):
         UUID(as_uuid=True), ForeignKey("boq_import_batches.id", ondelete="SET NULL"), nullable=True, index=True
     )
     source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Module B/C Phase 5: embeds f"{item_no} {description}" (same text
+    # shape app.procurement.quotation_matching._candidate_text() already
+    # fuzzy-matches against). NULL when the ONNX model wasn't provisioned
+    # at write time (app.integrations.embeddings::embed_best_effort) --
+    # suggestion queries treat a NULL embedding as "no semantic signal",
+    # never an error.
+    description_embedding: Mapped[list[float] | None] = mapped_column(Vector(DEFAULT_EMBEDDING_DIM), nullable=True)
 
     # Linked measurements live in BoqLineItemMeasurement (many-to-one,
     # migration 0013 -- one BOQ line can aggregate several measurements,

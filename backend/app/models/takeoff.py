@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     ForeignKey,
@@ -24,7 +25,7 @@ from app.core.enums import (
     ScaleSource,
 )
 from app.db.base import TenantEntity
-from app.db.types import EmbeddingVector
+from app.db.types import DEFAULT_EMBEDDING_DIM, EmbeddingVector
 
 
 class Drawing(TenantEntity):
@@ -150,6 +151,11 @@ class DrawingMeasurement(TenantEntity):
     bbox_min_y: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     bbox_max_x: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     bbox_max_y: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    # Module B/C Phase 5: embeds a synthesized descriptor (this row has no
+    # free-text description of its own -- see app.services.takeoff::
+    # build_measurement_descriptor). NULL under the same degradation
+    # contract as BoqLineItem.description_embedding.
+    descriptor_embedding: Mapped[list[float] | None] = mapped_column(Vector(DEFAULT_EMBEDDING_DIM), nullable=True)
 
     # The active override, if any (migration 0023) -- see DrawingMeasurementOverride.
     # Same 1:1-via-separate-table-with-a-looser-write-policy pattern as

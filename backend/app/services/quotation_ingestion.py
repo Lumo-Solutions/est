@@ -316,6 +316,14 @@ async def _get_line_item(session: AsyncSession, line_item_id: UUID) -> Quotation
     return row
 
 
+async def get_line_item(session: AsyncSession, line_item_id: UUID) -> QuotationLineItem:
+    """Public alias of _get_line_item -- Module B/C Phase 5's suggestion
+    endpoint needs a read-only fetch with no review-authority check
+    (unlike accept_line_item/reject_line_item, both request-authorized
+    actions), so it calls this rather than a private, module-internal name."""
+    return await _get_line_item(session, line_item_id)
+
+
 async def accept_line_item(session: AsyncSession, ctx: RequestContext, line_item_id: UUID) -> QuotationLineItem:
     _require_review_authority(ctx)
     line_item = await _get_line_item(session, line_item_id)

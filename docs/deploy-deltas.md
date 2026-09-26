@@ -80,10 +80,17 @@ if they're missing (covers a realm that was imported before this fix). See
 
 `OnnxEmbedder` (`backend/app/integrations/embeddings.py`) looks for the
 model at `$ONNX_MODEL_DIR/<embedding_model with "/" replaced by "_">`, e.g.
-`/models/BAAI_bge-small-en-v1.5` for the default `EMBEDDING_MODEL`. Populate
-it with `ai-service/embeddings/download_model.py` **on a separate machine
-with network access** (it needs `optimum[onnxruntime]` + `huggingface_hub`,
-which are intentionally not part of the backend image):
+`/models/BAAI_bge-small-en-v1.5` for the default `EMBEDDING_MODEL`. On a
+machine with network access to both HuggingFace and this stack's own
+Docker daemon, `make download-embedding-model` does the whole thing (export
++ copy into the `onnxmodels` volume) in one step -- not run by `make up`,
+same explicit-opt-in posture as `bootstrap-keycloak`.
+
+For an air-gapped target (no network access on the machine running the
+stack), do the export step on a **separate** machine with network access
+instead, using `ai-service/embeddings/download_model.py` directly (it needs
+`optimum[onnxruntime]` + `huggingface_hub`, which are intentionally not
+part of the backend image):
 
 ```bash
 pip install "optimum[onnxruntime]" huggingface_hub
@@ -91,7 +98,7 @@ python ai-service/embeddings/download_model.py --target-dir ./BAAI_bge-small-en-
 ```
 
 Then copy that directory's contents into the `onnxmodels` volume (or, for
-an air-gapped target, into wherever that volume's underlying storage lives)
+the air-gapped target, into wherever that volume's underlying storage lives)
 so the result is `<volume>/BAAI_bge-small-en-v1.5/{model.onnx,tokenizer.json,...}`.
 `download_model.py`'s own default `--target-dir` (when omitted) now matches
 this layout — it previously computed just the HuggingFace repo basename
@@ -101,7 +108,11 @@ If the model is missing, `OnnxEmbedder.embed()` raises a `FileNotFoundError`
 naming the exact expected path rather than crashing the worker opaquely;
 `app/workers/tasks/takeoff.py::_embed_drawing_body` catches it, records the
 message on the extraction job row, and re-raises so Celery still marks the
-task failed.
+task failed. Module B/C Phase 5's own semantic-matching write paths use
+`app.integrations.embeddings::embed_best_effort` instead, which catches
+this same `FileNotFoundError` and degrades to leaving the embedding column
+NULL rather than failing the request -- see
+`docs/module-b-c-phase5-plan.md` §2.
 
 ## Role separation (RLS correctness)
 

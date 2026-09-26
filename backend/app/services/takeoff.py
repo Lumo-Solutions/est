@@ -107,7 +107,14 @@ async def recompute_sheet_measurements(session: AsyncSession, sheet: DrawingShee
     scale recalibration or re-extraction is exactly the kind of change
     that can make a prior manual override's number stale too, so this is
     a deliberate choice, not an oversight -- an estimator re-overrides
-    after a recompute rather than a stale number surviving it silently."""
+    after a recompute rather than a stale number surviving it silently.
+
+    Module B/C Phase 5: also computes and embeds each measurement's
+    synthesized descriptor (app.services.semantic_matching::
+    build_measurement_descriptor), batched into one embed_best_effort()
+    call for the whole sheet, not one call per measurement -- degrades to
+    leaving descriptor_embedding NULL when the ONNX model isn't
+    provisioned (see that function's own docstring)."""
     if not get_settings().takeoff_persist_geometry:
         return
 
@@ -139,22 +146,50 @@ async def recompute_sheet_measurements(session: AsyncSession, sheet: DrawingShee
         )
     ).scalars().all()
 
+    new_measurements: list[DrawingMeasurement] = []
     for extractor in get_registry().values():
         if not extractor.supports(sheet):
             continue
         for m in extractor.extract(sheet, entities):
             layers = {entities_by_handle[h].layer for h in m.source_entity_ids if h in entities_by_handle and entities_by_handle[h].layer}
             bbox = _union_bbox(entities_by_handle, m.source_entity_ids)
-            session.add(
-                DrawingMeasurement(
-                    tenant_id=sheet.tenant_id, drawing_id=sheet.drawing_id, sheet_id=sheet.id,
-                    project_id=sheet.project_id, capability=extractor.capability, kind=m.kind, value=m.value,
-                    unit=m.unit, confidence=m.confidence, source_entity_ids=m.source_entity_ids,
-                    extractor_metadata=m.metadata, trade_node_id=_resolve_trade_node_id(layers, trade_rules),
-                    bbox_min_x=bbox[0] if bbox else None, bbox_min_y=bbox[1] if bbox else None,
-                    bbox_max_x=bbox[2] if bbox else None, bbox_max_y=bbox[3] if bbox else None,
-                )
+            trade_node_id = _resolve_trade_node_id(layers, trade_rules)
+            measurement = DrawingMeasurement(
+                tenant_id=sheet.tenant_id, drawing_id=sheet.drawing_id, sheet_id=sheet.id,
+                project_id=sheet.project_id, capability=extractor.capability, kind=m.kind, value=m.value,
+                unit=m.unit, confidence=m.confidence, source_entity_ids=m.source_entity_ids,
+                extractor_metadata=m.metadata, trade_node_id=trade_node_id,
+                bbox_min_x=bbox[0] if bbox else None, bbox_min_y=bbox[1] if bbox else None,
+                bbox_max_x=bbox[2] if bbox else None, bbox_max_y=bbox[3] if bbox else None,
             )
+            session.add(measurement)
+            new_measurements.append(measurement)
+
+    if new_measurements:
+        from app.integrations.embeddings import embed_best_effort
+        from app.services.semantic_matching import build_measurement_descriptor
+
+        trade_ids = {m.trade_node_id for m in new_measurements if m.trade_node_id is not None}
+        trade_names: dict[UUID, str] = {}
+        if trade_ids:
+            from app.models.taxonomy import TradeNode
+
+            trade_rows = (await session.execute(select(TradeNode).where(TradeNode.id.in_(trade_ids)))).scalars().all()
+            trade_names = {r.id: r.name for r in trade_rows}
+
+        descriptors = [
+            build_measurement_descriptor(
+                capability=m.capability, kind=m.kind,
+                layer=(m.extractor_metadata or {}).get("layer"),
+                trade_name=trade_names.get(m.trade_node_id) if m.trade_node_id else None,
+            )
+            for m in new_measurements
+        ]
+        embeddings = embed_best_effort(descriptors)
+        if embeddings is not None:
+            for measurement, embedding in zip(new_measurements, embeddings, strict=True):
+                measurement.descriptor_embedding = embedding
+
     await session.flush()
 
 
