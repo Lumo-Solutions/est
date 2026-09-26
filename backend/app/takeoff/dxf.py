@@ -185,6 +185,28 @@ def index_dxf_geometry(data: bytes) -> dict[str, list[GeometricEntity]]:
                         block_name=entity.dxf.name, attributes=attrs,
                     )
                 )
+            elif dxftype == "DIMENSION":
+                # Module B Phase 4a scale cross-check (see takeoff/scale.py::
+                # dimension_cross_check_signals): only meaningful when the
+                # drafter typed an explicit real-world length override --
+                # the default "<>" auto-text's displayed value already
+                # depends on the dimension style's own scale factor, which
+                # is deliberately not resolved here (see scale.py's module
+                # docstring). defpoint2/defpoint3 are the two points the
+                # dimension actually measures between (linear/aligned
+                # dimensions only -- other dimension subtypes don't define
+                # them and are skipped, `getattr` default keeps this
+                # tolerant of that).
+                text = getattr(entity.dxf, "text", "") or ""
+                p2 = getattr(entity.dxf, "defpoint2", None)
+                p3 = getattr(entity.dxf, "defpoint3", None)
+                if text and text != "<>" and p2 is not None and p3 is not None:
+                    geoms.append(
+                        GeometricEntity(
+                            "dimension", entity.dxf.layer, entity.dxf.handle,
+                            [(p2.x, p2.y), (p3.x, p3.y)], attributes={"stated_length": text},
+                        )
+                    )
         result[layout.name] = geoms
 
     return result

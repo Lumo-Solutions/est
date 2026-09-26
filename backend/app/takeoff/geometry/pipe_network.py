@@ -27,7 +27,7 @@ from app.takeoff.geometry.base import Measurement
 from app.takeoff.geometry.config import DEFAULT_GEOMETRY_CONFIG, PipeNetworkConfig
 from app.takeoff.geometry.entities import GeometricEntity, Point
 from app.takeoff.geometry.geometry_math import distance, polyline_length
-from app.takeoff.geometry.units import meters_per_unit
+from app.takeoff.geometry.units import sheet_scale_factor
 
 
 @dataclass(slots=True)
@@ -85,7 +85,7 @@ class PipeNetworkTopologyExtractor:
 
     def extract(self, sheet: object, entities: list[GeometricEntity]) -> list[Measurement]:
         unit = getattr(sheet, "units", None) or "unitless"
-        factor = meters_per_unit(unit)
+        factor = sheet_scale_factor(unit, getattr(sheet, "scale_ratio", None))
         base_confidence = 0.7 if factor is not None else 0.25
         native_tolerance = self.config.snap_tolerance_m / factor if factor else self.config.snap_tolerance_m
 

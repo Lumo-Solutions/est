@@ -17,6 +17,9 @@ from app.schemas.drawings import (
     DrawingSheetOut,
     ExtractionJobOut,
     ManualScaleCalibration,
+    PdfLayerMappingRuleIn,
+    PdfLayerMappingRuleOut,
+    SheetScaleCalibrationOut,
     SheetSearchQuery,
     SheetSearchResult,
 )
@@ -94,6 +97,45 @@ async def set_manual_scale_endpoint(
         session, ctx, drawing_id, sheet_index, data.p1, data.p2, data.known_length_m
     )
     return DrawingSheetOut.model_validate(sheet)
+
+
+@router.get("/drawings/{drawing_id}/sheets/{sheet_index}/scale-calibrations", response_model=list[SheetScaleCalibrationOut])
+async def list_scale_calibrations_endpoint(
+    drawing_id: UUID, sheet_index: int, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[SheetScaleCalibrationOut]:
+    calibrations = await takeoff_service.list_scale_calibrations(session, drawing_id, sheet_index)
+    return [SheetScaleCalibrationOut.model_validate(c) for c in calibrations]
+
+
+@router.post("/drawings/{drawing_id}/sheets/{sheet_index}/scale-calibrations/{calibration_id}/revert", response_model=DrawingSheetOut)
+async def revert_scale_calibration_endpoint(
+    drawing_id: UUID, sheet_index: int, calibration_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> DrawingSheetOut:
+    sheet = await takeoff_service.revert_scale_calibration(session, ctx, drawing_id, sheet_index, calibration_id)
+    return DrawingSheetOut.model_validate(sheet)
+
+
+@router.put("/projects/{project_id}/pdf-layer-mapping-rules", response_model=list[PdfLayerMappingRuleOut])
+async def replace_pdf_layer_mapping_rules_endpoint(
+    project_id: UUID,
+    data: list[PdfLayerMappingRuleIn],
+    ctx: RequestContext = Depends(require_roles(*_UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> list[PdfLayerMappingRuleOut]:
+    rules = await takeoff_service.replace_pdf_layer_mapping_rules(
+        session, ctx, project_id, [r.model_dump() for r in data]
+    )
+    return [PdfLayerMappingRuleOut.model_validate(r) for r in rules]
+
+
+@router.get("/projects/{project_id}/pdf-layer-mapping-rules", response_model=list[PdfLayerMappingRuleOut])
+async def list_pdf_layer_mapping_rules_endpoint(
+    project_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[PdfLayerMappingRuleOut]:
+    rules = await takeoff_service.list_pdf_layer_mapping_rules(session, project_id)
+    return [PdfLayerMappingRuleOut.model_validate(r) for r in rules]
 
 
 @router.get("/drawings/{drawing_id}/measurements", response_model=list[DrawingMeasurementOut])

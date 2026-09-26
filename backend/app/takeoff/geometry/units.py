@@ -30,6 +30,10 @@ _METERS_PER_UNIT: dict[str, float] = {
     "in": 0.0254,
     "ft": 0.3048,
     "us_survey_ft": 1200.0 / 3937.0,
+    # PDF page-space points (1/72 in), exact under the same in=25.4mm
+    # definition above -- see sheet_scale_factor()'s docstring for why
+    # this one unit, alone, also needs the sheet's scale_ratio folded in.
+    "pt": 0.0254 / 72.0,
 }
 
 
@@ -47,3 +51,24 @@ def to_meters(value: float, unit: str) -> float | None:
 def to_native_units(value_m: float, unit: str) -> float | None:
     factor = meters_per_unit(unit)
     return None if factor is None else value_m / factor
+
+
+def sheet_scale_factor(unit: str | None, scale_ratio: float | None) -> float | None:
+    """Combined native-unit-to-metres factor for one sheet's geometry,
+    folding in the sheet's paper-scale ratio when (and only when) the
+    geometry's own native unit is itself paper-space ("pt", PDF page
+    points -- Module B Phase 4a). DXF geometry is modelled true-to-real-
+    world-scale via its own $INSUNITS already (see this module's
+    docstring) -- multiplying by scale_ratio there too would double-scale
+    a DXF drawing whose title block also happens to state a print scale,
+    a real ambiguity this deliberately avoids rather than guesses through."""
+    base = meters_per_unit(unit) if unit else None
+    if base is None:
+        return None
+    if unit == "pt" and scale_ratio:
+        # scale_ratio round-trips through a Numeric(12, 6) column, so a
+        # value freshly read back from the DB (e.g. a reverted calibration
+        # -- app.services.takeoff::revert_scale_calibration) arrives as a
+        # Decimal, not a float; `float * Decimal` raises TypeError.
+        return base * float(scale_ratio)
+    return base

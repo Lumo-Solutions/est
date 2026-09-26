@@ -42,7 +42,7 @@ from app.takeoff.geometry.base import Measurement
 from app.takeoff.geometry.config import DEFAULT_GEOMETRY_CONFIG, TrenchConfig
 from app.takeoff.geometry.entities import GeometricEntity
 from app.takeoff.geometry.geometry_math import composite_trench_volume
-from app.takeoff.geometry.units import meters_per_unit
+from app.takeoff.geometry.units import sheet_scale_factor
 
 
 class TrenchPrismoidalVolumeExtractor:
@@ -57,7 +57,7 @@ class TrenchPrismoidalVolumeExtractor:
 
     def extract(self, sheet: object, entities: list[GeometricEntity]) -> list[Measurement]:
         unit = getattr(sheet, "units", None) or "unitless"
-        factor = meters_per_unit(unit)
+        factor = sheet_scale_factor(unit, getattr(sheet, "scale_ratio", None))
         # Lowest baseline confidence of the four extractors: depends on an
         # unvalidated drawing convention on top of a layer-name heuristic.
         confidence = 0.6 if factor is not None else 0.2

@@ -39,6 +39,7 @@ class DrawingSheetOut(ORMModel):
     scale_ratio: float | None
     scale_source: str | None
     scale_confidence: float | None
+    scale_disagreement: bool
     extraction_status: str | None
 
 
@@ -84,3 +85,40 @@ class SheetSearchResult(BaseModel):
     chunk_type: str
     content: str
     distance: float
+
+
+# --------------------------------------------------------------------------
+# Module B Phase 4a
+# --------------------------------------------------------------------------
+
+
+class PdfLayerMappingRuleIn(BaseModel):
+    target_layer: str
+    stroke_color: str | None = None
+    min_line_width: float | None = None
+    max_line_width: float | None = None
+    dash_pattern: str | None = None
+    ocg_name_contains: str | None = None
+    priority: int = 0
+
+
+class PdfLayerMappingRuleOut(ORMModel):
+    id: UUID
+    project_id: UUID
+    target_layer: str
+    stroke_color: str | None
+    min_line_width: float | None
+    max_line_width: float | None
+    dash_pattern: str | None
+    ocg_name_contains: str | None
+    priority: int
+
+
+class SheetScaleCalibrationOut(ORMModel):
+    id: UUID
+    ratio: float | None
+    source: str
+    confidence: float
+    set_by: UUID | None
+    set_at: datetime
+    note: str | None

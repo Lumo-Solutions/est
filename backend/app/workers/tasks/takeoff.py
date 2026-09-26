@@ -20,15 +20,45 @@ from app.core.config import get_settings
 from app.core.enums import DrawingKind, DrawingStatus, ExtractionJobStatus, ExtractionJobType
 from app.integrations.embeddings import get_embedder
 from app.integrations.s3 import get_object_bytes
-from app.models.takeoff import Drawing, DrawingEntity, DrawingMeasurement, DrawingSheet, ExtractionJob, SheetChunk
+from app.models.takeoff import Drawing, DrawingEntity, DrawingSheet, ExtractionJob, PdfLayerMappingRule, SheetChunk
+from app.services import takeoff as takeoff_service
 from app.takeoff import dxf as dxf_mod
 from app.takeoff import pdf as pdf_mod
 from app.takeoff.chunking import build_sheet_chunks
 from app.takeoff.geometry.entities import GeometricEntity
-from app.takeoff.scale import parse_scale_text
+from app.takeoff.pdf import PdfLayerRule
+from app.takeoff.scale import (
+    PositionedText,
+    ScaleSignal,
+    dimension_cross_check_signals,
+    estimate_scale,
+    parse_scale_text,
+    scale_bar_signal,
+)
 from app.takeoff.titleblock import extract_title_block
 from app.workers.base import build_worker_context, run_async, with_worker_session
 from app.workers.celery_app import celery_app
+
+
+def _geometry_drawing_entity(
+    *, tenant_id: UUID, sheet_id: UUID, project_id: UUID, source: str, g: GeometricEntity
+) -> DrawingEntity:
+    """Shared by the DXF and PDF branches of _index_sheets_body -- same
+    GeometricEntity shape either way (see app.takeoff.geometry.entities'
+    module docstring)."""
+    bbox = _geometry_bbox(g)
+    return DrawingEntity(
+        tenant_id=tenant_id, sheet_id=sheet_id, project_id=project_id, source=source, entity_type=g.entity_type,
+        layer=g.layer, block_name=g.block_name, handle=g.handle,
+        bbox_min_x=bbox[0] if bbox else None, bbox_min_y=bbox[1] if bbox else None,
+        bbox_max_x=bbox[2] if bbox else None, bbox_max_y=bbox[3] if bbox else None,
+        geometry={
+            "vertices": g.vertices, "closed": g.closed, "bulges": g.bulges or None,
+            "center": g.center, "radius": g.radius,
+            "start_angle_deg": g.start_angle_deg, "end_angle_deg": g.end_angle_deg,
+        },
+        attributes=g.attributes or None,
+    )
 
 
 def _geometry_bbox(g: GeometricEntity) -> tuple[float, float, float, float] | None:
@@ -127,36 +157,59 @@ async def _index_sheets_body(session: AsyncSession, drawing_id: str, task_id: st
                         )
                     )
                 for g in geometry_by_layout.get(layout.layout_name, []):
-                    bbox = _geometry_bbox(g)
                     session.add(
-                        DrawingEntity(
+                        _geometry_drawing_entity(
                             tenant_id=drawing.tenant_id, sheet_id=sheet.id, project_id=drawing.project_id,
-                            source="dxf", entity_type=g.entity_type, layer=g.layer, block_name=g.block_name,
-                            handle=g.handle,
-                            bbox_min_x=bbox[0] if bbox else None, bbox_min_y=bbox[1] if bbox else None,
-                            bbox_max_x=bbox[2] if bbox else None, bbox_max_y=bbox[3] if bbox else None,
-                            geometry={
-                                "vertices": g.vertices, "closed": g.closed, "bulges": g.bulges or None,
-                                "center": g.center, "radius": g.radius,
-                                "start_angle_deg": g.start_angle_deg, "end_angle_deg": g.end_angle_deg,
-                            },
-                            attributes=g.attributes or None,
+                            source="dxf", g=g,
                         )
                     )
             drawing.sheet_count = len(layouts)
         else:
             pages = pdf_mod.index_pdf(data)
+            settings = get_settings()
+            geometry_by_page: dict[str, list[GeometricEntity]] = {}
+            if settings.takeoff_persist_geometry:
+                rules_rows = (
+                    await session.execute(
+                        select(PdfLayerMappingRule)
+                        .where(PdfLayerMappingRule.project_id == drawing.project_id)
+                        .order_by(PdfLayerMappingRule.priority)
+                    )
+                ).scalars().all()
+                rules = [
+                    PdfLayerRule(
+                        target_layer=r.target_layer, stroke_color=r.stroke_color,
+                        min_line_width=r.min_line_width, max_line_width=r.max_line_width,
+                        dash_pattern=r.dash_pattern, ocg_name_contains=r.ocg_name_contains, priority=r.priority,
+                    )
+                    for r in rules_rows
+                ]
+                geometry_by_page = pdf_mod.index_pdf_geometry(data, rules)
+
             for page in pages:
+                page_label = f"page-{page.index + 1}"
                 sheet = DrawingSheet(
                     tenant_id=drawing.tenant_id, drawing_id=drawing.id, project_id=drawing.project_id,
-                    sheet_index=page.index, source_name=f"page-{page.index + 1}",
-                    width_pt=page.width_pt, height_pt=page.height_pt, is_raster=page.is_raster,
+                    sheet_index=page.index, source_name=page_label,
+                    width_pt=page.width_pt, height_pt=page.height_pt,
+                    # PDF geometry (app.takeoff.pdf::index_pdf_geometry) is
+                    # in page points -- "pt" is the unit units.py/
+                    # sheet_scale_factor() know to also fold the sheet's
+                    # scale_ratio into (Module B Phase 4a).
+                    units="pt", is_raster=page.is_raster,
                     raw_text=page.raw_text, text_char_count=len(page.raw_text),
                     title_block=None,
                 )
                 session.add(sheet)
                 await session.flush()
                 sheet_ids.append(str(sheet.id))
+                for g in geometry_by_page.get(page_label, []):
+                    session.add(
+                        _geometry_drawing_entity(
+                            tenant_id=drawing.tenant_id, sheet_id=sheet.id, project_id=drawing.project_id,
+                            source="pdf", g=g,
+                        )
+                    )
             drawing.sheet_count = len(pages)
             if any(p.is_raster for p in pages):
                 drawing.kind = DrawingKind.SCANNED_PDF.value if all(p.is_raster for p in pages) else drawing.kind
@@ -235,9 +288,47 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
             from app.takeoff.scale import disambiguate_via_vlm
 
             scale_result = await disambiguate_via_vlm(result.scale_text, result.discipline)
-        sheet.scale_ratio = scale_result.ratio
-        sheet.scale_source = scale_result.source
-        sheet.scale_confidence = scale_result.confidence
+
+        # Module B Phase 4a: fuse the annotation-text signal above with
+        # whatever else is available from this sheet's persisted geometry
+        # (dimension cross-check, scale-bar detection) and a units-based
+        # fallback -- see app/takeoff/scale.py::estimate_scale. Only
+        # possible when TAKEOFF_PERSIST_GEOMETRY actually persisted
+        # entities for this sheet; degrades gracefully to the annotation
+        # signal alone otherwise (exactly today's pre-4a behaviour).
+        signals = [ScaleSignal(scale_result.ratio, scale_result.source, scale_result.confidence)]
+        entity_rows = (
+            await session.execute(
+                select(DrawingEntity).where(
+                    DrawingEntity.sheet_id == sheet.id, DrawingEntity.entity_type.in_(("line", "dimension"))
+                )
+            )
+        ).scalars().all()
+        if entity_rows:
+            entities = [takeoff_service.row_to_geometric_entity(r) for r in entity_rows]
+            signals.extend(dimension_cross_check_signals(entities))
+            text_rows = (
+                await session.execute(
+                    select(DrawingEntity).where(
+                        DrawingEntity.sheet_id == sheet.id, DrawingEntity.text_value.is_not(None),
+                        DrawingEntity.bbox_min_x.is_not(None),
+                    )
+                )
+            ).scalars().all()
+            texts = [PositionedText(r.text_value, float(r.bbox_min_x), float(r.bbox_min_y)) for r in text_rows]
+            bar_signal = scale_bar_signal(entities, texts)
+            if bar_signal is not None:
+                signals.append(bar_signal)
+        if sheet.units and sheet.units != "pt":
+            units_ratio, units_confidence = dxf_mod.derive_scale_from_units(sheet.units)
+            signals.append(ScaleSignal(units_ratio, "units_fallback", units_confidence))
+
+        estimate = estimate_scale(signals)
+        sheet.scale_disagreement = estimate.disagreement
+        await takeoff_service.record_scale_calibration(
+            session, sheet, ratio=estimate.ratio, source=estimate.source, confidence=estimate.confidence,
+            set_by=None, note="auto-detected (multi-signal fusion)",
+        )
 
         await session.flush()
         await _finish_job(session, job, ok=True, error=None, started_at=t0)
@@ -318,29 +409,6 @@ def embed_drawing(self, drawing_id: str, tenant_id: str) -> None:
 # extract_geometry_measurements (Phase 2b)
 # ---------------------------------------------------------------------------
 
-# Entity types that carry a `geometry` payload (see index_dxf_geometry());
-# excludes "text"/"mtext"/"attrib"/"dimension", which never do.
-_GEOMETRIC_ENTITY_TYPES = ("line", "lwpolyline", "arc", "insert_node")
-
-
-def _row_to_geometric_entity(row: DrawingEntity) -> GeometricEntity:
-    geometry = row.geometry or {}
-    return GeometricEntity(
-        entity_type=row.entity_type,
-        layer=row.layer,
-        handle=row.handle,
-        vertices=[tuple(v) for v in (geometry.get("vertices") or [])],
-        closed=bool(geometry.get("closed", False)),
-        bulges=list(geometry.get("bulges") or []),
-        block_name=row.block_name,
-        attributes=dict(row.attributes or {}),
-        center=tuple(geometry["center"]) if geometry.get("center") else None,
-        radius=geometry.get("radius"),
-        start_angle_deg=geometry.get("start_angle_deg"),
-        end_angle_deg=geometry.get("end_angle_deg"),
-    )
-
-
 async def _extract_geometry_measurements_body(session: AsyncSession, drawing_id: str, task_id: str) -> None:
     t0 = time.monotonic()
     drawing = (await session.execute(select(Drawing).where(Drawing.id == UUID(drawing_id)))).scalar_one()
@@ -352,40 +420,14 @@ async def _extract_geometry_measurements_body(session: AsyncSession, drawing_id:
 
     try:
         if get_settings().takeoff_persist_geometry:
-            # Imported here (not at module load) so importing this module
-            # never has the side effect of populating the geometry
-            # registry -- only actually running this task does.
-            from app.takeoff.geometry.base import get_registry
-            from app.takeoff.geometry import stubs as _geometry_stubs  # noqa: F401 -- registers extractors
-
-            registry = get_registry()
             sheets = (await session.execute(select(DrawingSheet).where(DrawingSheet.drawing_id == drawing.id))).scalars().all()
-
             for sheet in sheets:
-                rows = (
-                    await session.execute(
-                        select(DrawingEntity).where(
-                            DrawingEntity.sheet_id == sheet.id,
-                            DrawingEntity.entity_type.in_(_GEOMETRIC_ENTITY_TYPES),
-                        )
-                    )
-                ).scalars().all()
-                if not rows:
-                    continue
-                entities = [_row_to_geometric_entity(r) for r in rows]
-
-                for extractor in registry.values():
-                    if not extractor.supports(sheet):
-                        continue
-                    for m in extractor.extract(sheet, entities):
-                        session.add(
-                            DrawingMeasurement(
-                                tenant_id=drawing.tenant_id, drawing_id=drawing.id, sheet_id=sheet.id,
-                                project_id=drawing.project_id, capability=extractor.capability, kind=m.kind,
-                                value=m.value, unit=m.unit, confidence=m.confidence,
-                                source_entity_ids=m.source_entity_ids, extractor_metadata=m.metadata,
-                            )
-                        )
+                # recompute_sheet_measurements() gates on the same
+                # TAKEOFF_PERSIST_GEOMETRY flag itself and is a no-op for a
+                # sheet with no persisted geometry entities -- shared with
+                # takeoff_service.set_manual_scale's post-calibration
+                # recompute (Module B Phase 4a), see its docstring.
+                await takeoff_service.recompute_sheet_measurements(session, sheet)
         await session.flush()
         await _finish_job(session, job, ok=True, error=None, started_at=t0)
     except Exception as exc:  # noqa: BLE001
