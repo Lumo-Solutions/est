@@ -165,3 +165,58 @@ def test_index_dxf_geometry_harvests_dimension_with_explicit_text() -> None:
     assert len(dimensions) == 1  # the auto-text one is skipped
     assert dimensions[0].attributes["stated_length"] == "5.000"
     assert dimensions[0].vertices == [(0.0, 0.0), (10.0, 0.0)]
+
+
+def test_index_dxf_geometry_computes_insert_signature_from_block_content() -> None:
+    """Module B Phase 4c: the signature comes from the block DEFINITION's
+    own local (untransformed) geometry -- not the insertion point, and not
+    any one instance's placed/rotated content -- so two placements of the
+    same 10x5 rectangle block at different positions/rotations get
+    IDENTICAL signatures, and a different-shaped block does not. See
+    app.takeoff.typology::group_dxf_instances_by_block, the consumer."""
+    doc = ezdxf.new(setup=True)
+    msp = doc.modelspace()
+
+    villa_a = doc.blocks.new(name="VILLA_A")
+    villa_a.add_lwpolyline([(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)], close=True)  # perimeter 30, aspect 2.0
+
+    villa_b = doc.blocks.new(name="VILLA_B")
+    villa_b.add_lwpolyline([(0.0, 0.0), (20.0, 0.0), (20.0, 5.0), (0.0, 5.0)], close=True)  # perimeter 50, aspect 4.0
+
+    msp.add_blockref("VILLA_A", (0.0, 0.0))
+    msp.add_blockref("VILLA_A", (100.0, 0.0), dxfattribs={"rotation": 90.0})  # same block, rotated placement
+    msp.add_blockref("VILLA_B", (200.0, 0.0))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "fixture.dxf"
+        doc.saveas(path)
+        data = path.read_bytes()
+
+    geoms = index_dxf_geometry(data)["Model"]
+    inserts = {g.vertices[0]: g for g in geoms if g.entity_type == "insert_node"}
+    a1 = inserts[(0.0, 0.0)]
+    a2 = inserts[(100.0, 0.0)]
+    b1 = inserts[(200.0, 0.0)]
+
+    for node in (a1, a2, b1):
+        assert node.attributes["__sig_entity_count"] == "1"
+
+    assert float(a1.attributes["__sig_bbox_aspect_ratio"]) == pytest.approx(2.0)
+    assert float(a1.attributes["__sig_total_edge_length"]) == pytest.approx(30.0)
+    # Rotated placement: the signature comes from the block DEFINITION's
+    # own local (untransformed) geometry, not this instance's own
+    # placement -- so a rotated placement's signature is IDENTICAL to an
+    # unrotated one of the same block, not just similar. A signature
+    # computed from this instance's own rotated/world-transformed content
+    # instead would have given a 5x10 (aspect 0.5) bbox here, wrongly
+    # splitting these two into separate typology groups below.
+    assert a2.attributes == a1.attributes
+    assert float(b1.attributes["__sig_bbox_aspect_ratio"]) == pytest.approx(4.0)
+    assert float(b1.attributes["__sig_total_edge_length"]) == pytest.approx(50.0)
+
+    from app.takeoff.typology import group_dxf_instances_by_block
+
+    groups = group_dxf_instances_by_block([a1, a2, b1], tolerance_pct=2.0)
+    assert len(groups) == 1  # VILLA_B has only one placement -- not a repeating typology yet
+    assert groups[0].key == "VILLA_A"
+    assert {e.handle for e in groups[0].entities} == {a1.handle, a2.handle}
