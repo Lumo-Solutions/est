@@ -488,3 +488,104 @@ pages, not just the schema layer.
   pages).
 - Raw UUID text inputs for "Tenant ID"/"RFQ ID" on `QuarantineQueuePage`
   (paste-a-UUID-by-hand instead of a picker) — P2 polish, Phase 4.
+
+## Phase 2 — pages 12-14 (SettlementPage, ExportPage, WinLossPage)
+
+### UI-P2-018 (P1, fixed) — SettlementPage's "Build (new) settlement draft" and "Submit for approval" had no client-side role gate; an unauthorized role saw fully-enabled, silently-failing buttons
+- **Page(s):** `SettlementPage.tsx`
+- **Role:** estimator (build), estimator/lead_estimator/procurement_head (submit)
+- **What was found:** same recurring pattern as UI-P2-007/008/015 —
+  `backend/app/api/v1/routes/settlement.py`'s `_HEADER_ROLES`
+  (lead_estimator/procurement_head/bd_director/managing_director; NOT
+  estimator) gates build/rebuild, and `_SUBMIT_ROLES`
+  (bd_director/managing_director only) gates submit, but neither button
+  checked the logged-in user's role client-side, and `buildDraft`/`submit`
+  had no error display either.
+- **Deliberately NOT touched:** Approve/Reject's role eligibility beyond
+  the existing SoD (submitter) check — `app/services/approvals.py::decide`
+  authorizes against the *specific routed approval tier's* `required_role`
+  (dynamic, margin-threshold-driven — see `SimulateResult.required_role`),
+  which `BidSettlementOut` doesn't currently expose for an already-
+  submitted request. Hardcoding a static role list here risks hiding a
+  legitimate Approve button from an eligible approver, or the reverse — SoD
+  (which IS a static, correct check) is untouched and still works. Logging
+  this as a P2 UX gap for Phase 3/4: expose the routed tier's
+  `required_role` on `BidSettlementOut` so `SubmitApprove` can show/hide
+  correctly instead of relying purely on the server 403ing.
+- **Fix:** `hasRole` gates added mirroring `_HEADER_ROLES`/`_SUBMIT_ROLES`
+  exactly, plus error display on `buildDraft`/`submit`/`decide`, plus an
+  `isError` branch on the settlement fetch itself (was previously silently
+  swallowed like the pre-UI-P2-001-fix pages).
+- **Regression test:** `settlement-winloss-roles.spec.ts` — two tests,
+  both confirmed live: estimator1 doesn't see "Build (new) settlement
+  draft" (server 403 also confirmed via a direct `POST
+  /projects/{id}/bid-settlements`), and estimator1 doesn't see "Submit for
+  approval" on an actual draft. `make test-unit`/existing
+  `settlement.spec.ts` (real MFA step-up + SoD approve/reject flow, from
+  Phase 0) untouched and still green — confirmed by re-reading it, not
+  re-run mocked.
+- **Escalation note:** none needed — this is the routine role-gate/error-
+  display pattern already established on 4 other pages, not a SoD/step-up/
+  money-math bug. The one thing that WAS SoD/policy-adjacent (Approve's
+  dynamic role eligibility, above) was deliberately left alone rather than
+  guessed at.
+
+### UI-P2-019 (P1, fixed) — WinLossPage's record-outcome form had no client-side role gate; any role could fill out and submit it
+- **Page(s):** `WinLossPage.tsx`
+- **Role:** estimator/lead_estimator/procurement_head
+- **What was found:** `_OUTCOME_ROLES` (bd_director/managing_director
+  only) gates `POST .../outcome` server-side, but the full form (outcome,
+  prices, reason codes, note, submit button) rendered unconditionally for
+  any role once a settlement existed with no outcome yet recorded — at
+  least this one already had `recordOutcome.isError` display (unlike the
+  other pages in this pattern), so the failure wasn't silent, but the form
+  itself was misleadingly presented as usable.
+- **Fix:** added a `canRecordOutcome` gate (mirrors `_OUTCOME_ROLES`); an
+  unauthorized role now sees "No outcome recorded yet. Only bd_director/
+  managing_director can record it." instead of the form. The existing
+  outcome-already-recorded read-only view (for any role) is unchanged.
+- **Regression test:** `settlement-winloss-roles.spec.ts` — confirmed live
+  against D1-SIM's actual current settlement (outcome still null): bd1
+  sees the "Record outcome" button, lead1 (added as a project member via
+  `ensureProjectMember`) sees the explanatory message instead.
+
+### UI-P2-020 (P2, not fixed, deferred to Phase 4) — Settlement export filenames use the project's raw UUID, not its human-readable code
+- **Page(s):** `ExportPage.tsx` (client) / `backend/app/services/settlement.py`
+  (`export_settlement`/`export_original_settlement`, lines ~766/993)
+- Checked per the brief's "downloads... have sensible filenames" item.
+  `downloadFile()` (`frontend/src/lib/api.ts`) correctly reads the
+  server's real `Content-Disposition` header (its hardcoded
+  `fallbackFilename` argument is only a never-hit safety net, confirmed by
+  reading the route — this is NOT the bug it initially looked like). The
+  actual filename the server generates is
+  `settlement-{project_id}-v{version_no}.xlsx`, e.g.
+  `settlement-a1b2c3d4-e5f6-...-v3.xlsx` — technically unique and correct,
+  but an estimator with several downloaded files in one folder can't tell
+  projects apart by filename alone. P2 polish (the file is otherwise
+  entirely correct and usable) — Phase 4 fix: use the project's `code`
+  (e.g. `D1-SIM`) instead of its id, which needs the project row already
+  in scope at both call sites (both already load the project internally to
+  build the workbook, so this is likely a one-line change per site, not
+  investigated further here to stay in scope).
+
+### Confirmed correct, not fixed — ExportPage has no missing role gate
+`_LINE_ROLES` (estimator + all four other roles) covers every real role, so
+"any role can export" is correct behavior, not a gap — confirmed by reading
+the route.
+
+### Confirmed live — ExportPage correctly refuses to export a non-approved settlement, with a clear message
+Attempted a real download via `settlement-winloss-roles.spec.ts` against
+D1-SIM's actual current settlement (status `draft` at the time). The
+"Download generated .xlsx" button stayed clickable (not hidden/disabled)
+but produced no download — `export_settlement` correctly 403s with "Bid
+settlement is draft, not approved -- export is only available once
+approved", which `ExportPage.tsx` shows under the button via
+`exportGenerated.isError`. This is acceptable UX for a genuinely
+conditional (state-based, not role-based) restriction, unlike the role-gate
+bugs found elsewhere — not fixed, not a gap. The regression test also
+covers the actual successful-download path (real `Content-Disposition`
+filename, see UI-P2-020) but that half only runs when D1-SIM happens to be
+in `approved` state (it skips with a clear reason otherwise, same pattern
+as UI-P2-018's tests) — verify by running the full suite through a
+completed `settlement.spec.ts` approval first if this needs re-confirming
+end to end.

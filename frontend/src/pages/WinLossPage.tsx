@@ -1,10 +1,16 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useReasonCodes, useRecordOutcome } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
+import { Role } from '../lib/roles'
+
+// Mirrors backend/app/api/v1/routes/settlement.py's _OUTCOME_ROLES.
+const RECORD_OUTCOME_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
 export function WinLossPage() {
   const { projectId } = useParams()
+  const { hasRole } = useAuth()
   const { current, isLoading } = useCurrentSettlement(projectId)
   const { data: reasonCodes } = useReasonCodes()
   const recordOutcome = useRecordOutcome(projectId, current?.id)
@@ -17,6 +23,7 @@ export function WinLossPage() {
 
   if (isLoading) return <p className="p-6 text-slate-500">Loading...</p>
   if (!current) return <p className="p-6 text-sm text-slate-500">No settlement yet for this project.</p>
+  const canRecordOutcome = hasRole(...RECORD_OUTCOME_ROLES)
 
   if (current.outcome) {
     return (
@@ -30,6 +37,17 @@ export function WinLossPage() {
           <p>Reason codes: {current.outcome_reason_codes.join(', ') || '--'}</p>
           {current.outcome_note && <p>Note: {current.outcome_note}</p>}
         </div>
+      </div>
+    )
+  }
+
+  if (!canRecordOutcome) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
+        <p className="mt-4 text-sm text-slate-500">
+          No outcome recorded yet. Only bd_director/managing_director can record it.
+        </p>
       </div>
     )
   }

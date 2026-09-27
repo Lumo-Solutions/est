@@ -12,7 +12,19 @@ import {
 } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
 import { formatMarginPct } from '../lib/format'
+import { Role } from '../lib/roles'
 import type { BidSettlementOut, SimulateRequest, SimulateResult } from '../types/api'
+
+// Mirrors backend/app/api/v1/routes/settlement.py's _HEADER_ROLES/_SUBMIT_ROLES:
+// building/rebuilding a draft is lead_estimator/procurement_head/bd_director/
+// managing_director (notably not estimator); submitting for approval is
+// bd_director/managing_director only. Deciding (approve/reject) is NOT a
+// static role list -- app/services/approvals.py::decide checks the specific
+// routed approval tier's required_role, which BidSettlementOut doesn't
+// currently expose -- so that stays ungated here beyond the SoD check below
+// (server still enforces it correctly either way; see docs/ui-qa/issues.md).
+const BUILD_DRAFT_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+const SUBMIT_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
 const SLIDERS: { key: keyof Pick<SimulateRequest, 'default_plant_pct' | 'default_overhead_pct' | 'default_volatility_pct' | 'default_markup_pct'>; label: string }[] = [
   { key: 'default_plant_pct', label: 'Plant %' },
@@ -145,21 +157,25 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
 }
 
 function SubmitApprove({ projectId, settlement }: { projectId: string; settlement: BidSettlementOut }) {
-  const { user } = useAuth()
+  const { user, hasRole } = useAuth()
   const submit = useSubmitSettlement(projectId, settlement.id)
   const decide = useDecideSettlement(projectId, settlement.id)
   const isSubmitter = user?.sub === settlement.submitted_by
 
   if (settlement.status === 'draft') {
+    if (!hasRole(...SUBMIT_ROLES)) return null
     return (
-      <button
-        type="button"
-        onClick={() => submit.mutate()}
-        disabled={submit.isPending}
-        className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
-        Submit for approval
-      </button>
+      <div className="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={() => submit.mutate()}
+          disabled={submit.isPending}
+          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+        >
+          Submit for approval
+        </button>
+        {submit.isError && <p className="text-xs text-red-600">{submit.error.message}</p>}
+      </div>
     )
   }
 
@@ -201,6 +217,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           </button>
           {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
         </div>
+        {decide.isError && <p className="text-xs text-red-600">{decide.error.message}</p>}
       </div>
     )
   }
@@ -221,15 +238,17 @@ const REBUILDABLE_STATUSES = new Set(['approved', 'rejected', 'won', 'lost'])
 
 export function SettlementPage() {
   const { projectId } = useParams()
-  const { current, isLoading } = useCurrentSettlement(projectId)
+  const { hasRole } = useAuth()
+  const { current, isLoading, isError, error } = useCurrentSettlement(projectId)
   const buildDraft = useBuildSettlementDraft(projectId)
   const refreshQuantities = useRefreshQuantities(projectId, current?.id)
-  const canBuildNewDraft = !current || REBUILDABLE_STATUSES.has(current.status)
+  const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
 
   return (
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Settlement cockpit</h1>
       {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
+      {isError && <p className="mt-4 text-red-600">{error.message}</p>}
       {!isLoading && canBuildNewDraft && (
         <button
           type="button"
@@ -240,6 +259,7 @@ export function SettlementPage() {
           {current ? 'Build new settlement draft' : 'Build settlement draft'}
         </button>
       )}
+      {buildDraft.isError && <p className="mt-2 text-sm text-red-600">{buildDraft.error.message}</p>}
       {current && projectId && (
         <div className="mt-4">
           <div className="flex items-center justify-between">
