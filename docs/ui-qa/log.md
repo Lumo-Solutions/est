@@ -138,7 +138,40 @@ a clean start) — this is why Phase 1's new settlement-status coverage
 uses its own QA-DEMO project instead of building on D1-SIM.
 
 ## Phase 2: functional QA
-Not started.
+**Status: in progress — blocked this run before any page was tested.**
+
+Branch `phase-2-functional-qa` created off `master`.
+
+Environment notes from resuming this session (Docker Desktop was not
+running when the session started):
+- Restarted Docker Desktop; all `docker compose` containers came back up
+  except `installtec_caddy_dev`, which had exited (code 255) shortly
+  after the daemon restart (likely started before backend/frontend were
+  healthy — not root-caused further since a plain `docker start` fixed
+  it and it has stayed up since). Worth a health/depends_on check if it
+  recurs.
+- The interactive Playwright MCP browser (used for live click-through QA,
+  as opposed to the `npm run e2e:real-backend` test suite) had never
+  actually been pointed at `https://localhost:8443` before in this
+  project's QA history — Phase 0/1's "confirmed live" evidence came from
+  running real Playwright *test files* (whose own `playwright.*.config.ts`
+  already sets `ignoreHTTPSErrors: true`), not from interactive MCP
+  browsing. Doing that for the first time hit `ERR_CERT_AUTHORITY_INVALID`
+  against caddy-dev's self-signed cert, exactly the case brief section 0.5
+  anticipates. Fixed by adding a project-scoped `.mcp.json`
+  (`3113dc1`, branch `phase-2-functional-qa`) that overrides the global
+  `playwright` MCP server entry with `--ignore-https-errors`. **This
+  requires an MCP reconnect (new session) to take effect** — the
+  already-running MCP process for a given session can't pick up new args.
+  The Chrome extension (`claude-in-chrome`) was also tried as a fallback
+  and is not connected/installed on this machine, so Playwright MCP
+  (fixed as above) is the path forward for live browser QA here.
+
+Net effect: no page has been walked through live yet. The next run of
+this phase (fresh session, so the `.mcp.json` fix is live) should confirm
+`browser_navigate` to `https://localhost:8443/api/v1/auth/login` no
+longer errors, then proceed through the coverage matrix. Nothing in
+`docs/ui-qa/issues.md` yet — it doesn't exist until real findings land.
 
 ## Phase 3: gap-fill
 Not started.
