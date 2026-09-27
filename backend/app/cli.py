@@ -17,7 +17,7 @@ import io
 import secrets
 import smtplib
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from email.message import EmailMessage
 from uuid import UUID
@@ -44,7 +44,7 @@ from app.procurement.inbound_address import build_reply_address
 from app.procurement.pricing_sheet import build_pricing_workbook
 from app.schemas.boq import BoqLineItemCreate
 from app.schemas.procurement import ProcurementPackageCreate, RfqCreateRequest
-from app.schemas.prequal import PrequalificationDecision
+from app.schemas.prequal import PrequalificationDecision, VendorCertificateCreate
 from app.schemas.settlement import SettlementDefaultsUpdate, SimulateRequest
 from app.schemas.vendors import VendorCreate
 from app.boq.import_parser import BoqImportColumnMapping
@@ -1703,12 +1703,265 @@ async def simulate_e2e() -> None:
     print("run `make dev-clean-demo-data` to remove everything this created.")
 
 
+# --------------------------------------------------------------------------
+# docs/ui-qa-brief.md Phase 1: manual-QA-only demo data covering statuses/
+# capabilities no simulate-* command above happens to leave behind --
+# rejected + lost-outcome settlements, a vendor duplicate-candidate pair,
+# and vendor certificates spanning expired/expiring-soon/valid (for Phase
+# 3's future prequal UI). Its own dedicated project/vendors, never D1-SIM's
+# -- D1-SIM is reused across many simulate-settlement runs and already has
+# a documented non-idempotency gap (docs/ui-qa/log.md's Phase 0 note), so
+# building on top of it here would risk the same "unresolved cost" failure
+# rather than a clean, predictable result.
+# --------------------------------------------------------------------------
+
+_QA_PROJECT_CODE = "QA-DEMO"
+_QA_PACKAGE_NAME = "QA Demo Package"
+_QA_VENDOR_NAME = "QA Demo Anchor Vendor LLC"
+_QA_VENDOR_EMAIL = "quotes@qademo-vendor.example"
+_QA_DUP_VENDOR_A_NAME = "Al Falah Electromechanical LLC"
+_QA_DUP_VENDOR_B_NAME = "Al Falah Electro-Mechanical L.L.C."
+_QA_DUP_TRADE_LICENSE = "TL-QA-DUPLICATE-1001"
+_QA_CERT_VENDOR_NAME = "QA Demo Certificate Vendor LLC"
+_QA_PLAIN_VENDOR_NAMES = ["Gulf Precision MEP Services LLC", "Sahara Aggregates & Ready-Mix FZE"]
+
+
+async def _get_or_create_qa_demo_rfq(session: AsyncSession, ctx: RequestContext, tenant_id: UUID):
+    """Same shape as _get_or_create_d1_demo_rfq, its own project/vendor
+    (QA-DEMO) so seed_qa_demo_data's extra settlement-status coverage never
+    touches D1-SIM's own fixture."""
+    project = (
+        await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == _QA_PROJECT_CODE))
+    ).scalar_one_or_none()
+    if project is None:
+        project = Project(tenant_id=tenant_id, code=_QA_PROJECT_CODE, name="QA Demo Project")
+        session.add(project)
+        await session.flush()
+
+    trade = (
+        await session.execute(
+            select(TradeNode).where(TradeNode.tenant_id == tenant_id, TradeNode.code == _SIM_TRADE_CODE, TradeNode.parent_id.is_(None))
+        )
+    ).scalar_one_or_none()
+    if trade is None:
+        trade = TradeNode(tenant_id=tenant_id, parent_id=None, code=_SIM_TRADE_CODE, name="Earthworks", path="placeholder")
+        session.add(trade)
+        await session.flush()
+
+    vendor = (
+        await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _QA_VENDOR_NAME))
+    ).scalar_one_or_none()
+    if vendor is None:
+        vendor = await vendors_service.create_vendor(
+            session, ctx, VendorCreate(legal_name=_QA_VENDOR_NAME, primary_email=_QA_VENDOR_EMAIL)
+        )
+        vendor.status = "active"
+        session.add(VendorTrade(tenant_id=tenant_id, vendor_id=vendor.id, trade_node_id=trade.id))
+        await session.flush()
+        await prequal_service.decide_prequalification(
+            session, ctx, vendor.id,
+            PrequalificationDecision(status="approved", effective_from=date(2020, 1, 1), scope_trade_node_id=trade.id),
+        )
+
+    package = (
+        await session.execute(
+            select(ProcurementPackage).where(ProcurementPackage.tenant_id == tenant_id, ProcurementPackage.project_id == project.id, ProcurementPackage.name == _QA_PACKAGE_NAME)
+        )
+    ).scalar_one_or_none()
+    if package is None:
+        package = await procurement_service.create_package(
+            session, ctx, project.id, ProcurementPackageCreate(name=_QA_PACKAGE_NAME, trade_node_id=trade.id)
+        )
+        item = await boq_service.create_line_item(
+            session, ctx, project.id,
+            BoqLineItemCreate(item_no="1", description="QA demo excavation item", uom="m3", boq_quantity=100.0),
+        )
+        await procurement_service.add_items(session, ctx, package.id, [item.id])
+
+    boq_items = await procurement_service.list_package_boq_items(session, package.id)
+
+    rfq = (
+        await session.execute(select(Rfq).where(Rfq.tenant_id == tenant_id, Rfq.package_id == package.id, Rfq.vendor_id == vendor.id))
+    ).scalar_one_or_none()
+    if rfq is None:
+        [rfq] = await procurement_service.create_rfqs(session, ctx, package.id, RfqCreateRequest(vendor_ids=[vendor.id]))
+    if rfq.status == RfqStatus.DRAFT.value:
+        rfq.status = RfqStatus.SENT.value
+        await session.flush()
+
+    return rfq, package, boq_items, vendor
+
+
+async def _ensure_qa_accepted_quote(session: AsyncSession, tenant_id: UUID, rfq: Rfq, package: ProcurementPackage, boq_item, vendor: Vendor) -> None:
+    project_id = rfq.project_id
+    existing = (
+        await session.execute(
+            select(QuotationLineItem)
+            .join(Quotation, Quotation.id == QuotationLineItem.quotation_id)
+            .where(
+                Quotation.rfq_id == rfq.id, Quotation.vendor_id == vendor.id,
+                QuotationLineItem.boq_line_item_id == boq_item.id,
+                QuotationLineItem.status == QuotationLineItemStatus.ACCEPTED.value,
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        return
+    quotation = Quotation(
+        tenant_id=tenant_id, rfq_id=rfq.id, vendor_id=vendor.id, package_id=package.id, project_id=project_id,
+        extraction_method=QuotationExtractionMethod.DETERMINISTIC_XLSX.value, version_no=1, is_current=True,
+        currency="AED", vat_inclusive=True, submitted_at=datetime.now(timezone.utc), status=QuotationStatus.PROPOSED.value,
+    )
+    session.add(quotation)
+    await session.flush()
+    session.add(
+        QuotationLineItem(
+            tenant_id=tenant_id, quotation_id=quotation.id, project_id=project_id, boq_line_item_id=boq_item.id,
+            unit_price=Decimal("38.00"), quantity=Decimal(str(boq_item.boq_quantity)), confidence=Decimal("1.0"),
+            source="deterministic", status=QuotationLineItemStatus.ACCEPTED.value,
+            accepted_by=_SIM_BD_DIRECTOR_1_ID, accepted_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.flush()
+
+
+async def _build_and_decide_qa_settlement(
+    project_id: UUID, lead_ctx: RequestContext, bd1_ctx: RequestContext, bd2_ctx: RequestContext, *, approve: bool, note: str
+):
+    async with session_scope(lead_ctx) as session:
+        settlement = await settlement_service.build_settlement_draft(session, lead_ctx, project_id)
+        settlement_id = settlement.id
+        await settlement_service.set_defaults(
+            session, lead_ctx, settlement_id,
+            SettlementDefaultsUpdate(default_plant_pct=2, default_overhead_pct=5, default_volatility_pct=3, default_markup_pct=10),
+        )
+    async with session_scope(bd1_ctx) as session:
+        await settlement_service.submit_settlement(session, bd1_ctx, settlement_id)
+    async with session_scope(bd2_ctx) as session:
+        settlement = await settlement_service.decide_settlement(session, bd2_ctx, settlement_id, approve=approve, note=note)
+    return settlement
+
+
+async def seed_qa_demo_data() -> None:
+    """DEV ONLY: adds manual-QA-only demo data docs/ui-qa-brief.md's Phase
+    1 calls for -- a rejected settlement, a lost-outcome settlement, a
+    vendor duplicate-candidate pair, and a vendor with certificates
+    spanning expired/expiring-soon/valid. Every row this creates is
+    removed by `make dev-clean-demo-data` alongside E2E-SIM."""
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    lead_ctx = RequestContext(tenant_id=tenant_id, user_id=_SIM_LEAD_ESTIMATOR_ID, sub="lead-estimator-1", roles=frozenset({"lead_estimator"}))
+    bd1_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_1_ID, sub="bd-director-1", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
+    )
+    bd2_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_2_ID, sub="bd-director-2", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
+    )
+
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        rfq, package, boq_items, vendor = await _get_or_create_qa_demo_rfq(session, sys_ctx, tenant_id)
+        project_id = rfq.project_id
+        boq_item = boq_items[0]
+        for user_id in (_SIM_LEAD_ESTIMATOR_ID, _SIM_BD_DIRECTOR_1_ID, _SIM_BD_DIRECTOR_2_ID):
+            existing_member = (
+                await session.execute(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
+            ).scalar_one_or_none()
+            if existing_member is None:
+                session.add(ProjectMember(tenant_id=tenant_id, project_id=project_id, user_id=user_id))
+        await session.flush()
+        await _ensure_qa_accepted_quote(session, tenant_id, rfq, package, boq_item, vendor)
+
+    settlement_a = await _build_and_decide_qa_settlement(
+        project_id, lead_ctx, bd1_ctx, bd2_ctx, approve=False, note="QA demo: rejected for status coverage"
+    )
+    print(f"settlement A ({settlement_a.id}): status={settlement_a.status}")
+
+    settlement_b = await _build_and_decide_qa_settlement(
+        project_id, lead_ctx, bd1_ctx, bd2_ctx, approve=True, note="QA demo: approved, then recorded lost"
+    )
+    async with session_scope(bd2_ctx) as session:
+        from app.schemas.settlement import OutcomeRequest
+
+        settlement_b = await settlement_service.record_outcome(
+            session, bd2_ctx, settlement_b.id,
+            OutcomeRequest(outcome="lost", our_price=Decimal("3800.00"), winning_price=Decimal("3600.00"), reason_codes=["price"], note="QA demo: lost on price"),
+        )
+    print(f"settlement B ({settlement_b.id}): status={settlement_b.status} outcome={settlement_b.outcome}")
+
+    async with session_scope(sys_ctx) as session:
+        existing_dup_a = (
+            await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _QA_DUP_VENDOR_A_NAME))
+        ).scalar_one_or_none()
+        if existing_dup_a is None:
+            await vendors_service.create_vendor(
+                session, sys_ctx, VendorCreate(legal_name=_QA_DUP_VENDOR_A_NAME, trade_license_no=_QA_DUP_TRADE_LICENSE, emirate="Dubai")
+            )
+            dup_b = await vendors_service.create_vendor(
+                session, sys_ctx,
+                VendorCreate(legal_name=_QA_DUP_VENDOR_B_NAME, trade_license_no=_QA_DUP_TRADE_LICENSE, emirate="Dubai"),
+                force=True,
+            )
+            print(f"seeded a vendor duplicate-candidate pair ({dup_b.legal_name!r} vs {_QA_DUP_VENDOR_A_NAME!r}) -- create_vendor's own duplicate-scan populates vendor_duplicate_candidates")
+        else:
+            print("vendor duplicate-candidate pair already seeded, skipping.")
+
+        existing_cert_vendor = (
+            await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _QA_CERT_VENDOR_NAME))
+        ).scalar_one_or_none()
+        if existing_cert_vendor is None:
+            cert_vendor = await vendors_service.create_vendor(session, sys_ctx, VendorCreate(legal_name=_QA_CERT_VENDOR_NAME, emirate="Dubai"))
+            cert_vendor.status = "active"
+            await session.flush()
+            cert_type = (
+                await session.execute(select(CertificateType).where(CertificateType.tenant_id == tenant_id, CertificateType.code == "TRADE_LICENSE"))
+            ).scalar_one_or_none()
+            if cert_type is None:
+                print("no 'TRADE_LICENSE' certificate type found -- run `make seed` first; skipping certificate seeding.")
+            else:
+                today = date.today()
+                for label, issue_offset_days, expiry_offset_days, verify in (
+                    ("expired", -700, -30, False),
+                    ("expiring soon", -335, 10, False),
+                    ("valid", -60, 300, True),
+                ):
+                    cert = await prequal_service.add_certificate(
+                        session, sys_ctx,
+                        VendorCertificateCreate(
+                            vendor_id=cert_vendor.id, certificate_type_id=cert_type.id,
+                            certificate_no=f"QA-CERT-{label.replace(' ', '-').upper()}",
+                            issue_date=today + timedelta(days=issue_offset_days),
+                            expiry_date=today + timedelta(days=expiry_offset_days),
+                        ),
+                    )
+                    if verify:
+                        await prequal_service.verify_certificate(session, sys_ctx, cert.id)
+                print(f"seeded 3 certificates ({_QA_CERT_VENDOR_NAME}): expired, expiring-soon (10d), valid+verified")
+        else:
+            print("QA demo certificate vendor already seeded, skipping.")
+
+        for name in _QA_PLAIN_VENDOR_NAMES:
+            existing_plain = (
+                await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == name))
+            ).scalar_one_or_none()
+            if existing_plain is None:
+                plain_vendor = await vendors_service.create_vendor(session, sys_ctx, VendorCreate(legal_name=name, emirate="Abu Dhabi"))
+                plain_vendor.status = "active"
+                await session.flush()
+
+    print("QA demo data seeded. Run `make dev-clean-demo-data` to remove it (alongside E2E-SIM).")
+
+
 async def clean_demo_data() -> None:
     """DEV ONLY: deletes the E2E-SIM project (cascades to every
     project-scoped table: drawings, BOQ, procurement, quotations,
-    settlements) plus its dedicated vendor. Never touches any other
-    simulate-*'s own fixtures (C2-SIM, D1-SIM, or anything from `make
-    seed`).
+    settlements) plus its dedicated vendor, and (from `seed-qa-demo-data`)
+    the QA-DEMO project plus its own dedicated/duplicate/certificate
+    vendors. Never touches any other simulate-*'s own fixtures (C2-SIM,
+    D1-SIM, or anything from `make seed`).
 
     Known, deliberate limitation: the simulated vendor reply's
     inbound_emails/quotation_attachments rows are NOT deleted -- found
@@ -1767,6 +2020,24 @@ async def clean_demo_data() -> None:
         else:
             print(f"no vendor named {_E2E_VENDOR_NAME!r} found.")
 
+        qa_project = (
+            await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == _QA_PROJECT_CODE))
+        ).scalar_one_or_none()
+        if qa_project is not None:
+            await session.delete(qa_project)
+            await session.flush()
+            print(f"deleted project {_QA_PROJECT_CODE} ({qa_project.id}) -- cascaded to every project-scoped table")
+        else:
+            print(f"no project with code {_QA_PROJECT_CODE!r} found -- nothing to clean.")
+
+        qa_vendor_names = [_QA_VENDOR_NAME, _QA_DUP_VENDOR_A_NAME, _QA_DUP_VENDOR_B_NAME, _QA_CERT_VENDOR_NAME, *_QA_PLAIN_VENDOR_NAMES]
+        for name in qa_vendor_names:
+            qa_vendor = (await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == name))).scalar_one_or_none()
+            if qa_vendor is not None:
+                await session.delete(qa_vendor)
+                await session.flush()
+                print(f"deleted vendor {name!r} ({qa_vendor.id})")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
@@ -1802,8 +2073,12 @@ def main() -> None:
         help="DEV ONLY: the full Phase 9 lifecycle (DXF+PDF takeoff -> BOQ import -> reconcile -> procurement -> a real simulated quote -> accept -> bid-level -> settle+approve by a different user -> export both ways -> win/loss) against a dedicated, cleanable project",
     )
     subparsers.add_parser(
+        "seed-qa-demo-data",
+        help="DEV ONLY: adds manual-QA-only demo data (rejected + lost-outcome settlements, a vendor duplicate pair, expired/expiring/valid certificates) on a dedicated QA-DEMO project, cleaned by clean-demo-data",
+    )
+    subparsers.add_parser(
         "clean-demo-data",
-        help="DEV ONLY: deletes only the E2E-SIM project/vendor simulate-e2e creates -- never touches any other simulate-*'s own fixtures",
+        help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
     )
 
     args = parser.parse_args()
@@ -1823,6 +2098,8 @@ def main() -> None:
         asyncio.run(simulate_module_e_schema())
     elif args.command == "simulate-e2e":
         asyncio.run(simulate_e2e())
+    elif args.command == "seed-qa-demo-data":
+        asyncio.run(seed_qa_demo_data())
     elif args.command == "clean-demo-data":
         asyncio.run(clean_demo_data())
 

@@ -127,7 +127,14 @@ dev-simulate-module-e-schema:
 dev-simulate-e2e:
 	$(COMPOSE) exec backend python -m app.cli simulate-e2e
 
-# Deletes only what `make dev-simulate-e2e` created above.
+# docs/ui-qa-brief.md Phase 1: manual-QA-only demo data on its own QA-DEMO
+# project -- a rejected settlement, a lost-outcome settlement, a vendor
+# duplicate-candidate pair, and a vendor with expired/expiring-soon/valid
+# certificates. Cleaned by `make dev-clean-demo-data` alongside E2E-SIM.
+dev-seed-qa-demo-data:
+	$(COMPOSE) exec backend python -m app.cli seed-qa-demo-data
+
+# Deletes what `make dev-simulate-e2e` and `make dev-seed-qa-demo-data` created above.
 dev-clean-demo-data:
 	$(COMPOSE) exec backend python -m app.cli clean-demo-data
 
