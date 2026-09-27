@@ -11,6 +11,7 @@ import {
   useSubmitSettlement,
 } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
+import { formatMarginPct } from '../lib/format'
 import type { BidSettlementOut, SimulateRequest, SimulateResult } from '../types/api'
 
 const SLIDERS: { key: keyof Pick<SimulateRequest, 'default_plant_pct' | 'default_overhead_pct' | 'default_volatility_pct' | 'default_markup_pct'>; label: string }[] = [
@@ -83,7 +84,15 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
             {result.overhead_total.toFixed(2)} + volatility {result.volatility_total.toFixed(2)} + markup{' '}
             {result.markup_total.toFixed(2)}
           </p>
-          {result.margin_on_sell_pct != null && <p className="text-xs text-slate-500">Margin on sell: {result.margin_on_sell_pct.toFixed(2)}%</p>}
+          {result.margin_on_sell_pct != null && (
+            // 3dp, not 2 -- this is the exact value app/services/approvals.py
+            // routes on (Decimal end to end, no rounding to the 2dp a
+            // sell-total display would use), so a value like 7.995% that
+            // escalates to managing_director must not be shown as a
+            // rounded "8.00%" that looks like it should stay at
+            // bd_director. See docs/build-log.md's Phase 10 section.
+            <p className="text-xs text-slate-500">Margin on sell: {formatMarginPct(result.margin_on_sell_pct)}%</p>
+          )}
           {result.required_role && (
             <p className="mt-1 text-xs font-medium text-amber-700">Requires approval by: {result.required_role}</p>
           )}
@@ -154,30 +163,44 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
     )
   }
 
-  if (settlement.status === 'pending_approval') {
+  // BidSettlementStatus.SUBMITTED (backend/app/core/enums.py) is the
+  // string "submitted", not "pending_approval" -- this never matched, so
+  // the Approve/Reject controls never rendered for any submitted
+  // settlement, for anyone. Pre-existing bug, found while writing a real
+  // (non-mocked) Playwright test for the submit -> approve flow -- see
+  // docs/build-log.md's Phase 10 section.
+  if (settlement.status === 'submitted') {
     return (
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          disabled={isSubmitter || decide.isPending}
-          title={isSubmitter ? 'Segregation of duties: the submitter cannot decide their own request' : ''}
-          onClick={() => decide.mutate({ approve: true })}
-          className="rounded bg-green-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-        >
-          Approve
-        </button>
-        <button
-          type="button"
-          disabled={isSubmitter || decide.isPending}
-          onClick={() => {
-            const note = window.prompt('Rejection note?')
-            if (note) decide.mutate({ approve: false, note })
-          }}
-          className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
-        >
-          Reject
-        </button>
-        {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
+      <div className="flex flex-col items-end gap-1">
+        {settlement.margin_on_sell_pct != null && (
+          // Same 3dp precision as the cockpit's live simulation -- this is
+          // the value that actually routed this request, so the approver
+          // must see it exactly, not rounded to 2dp.
+          <span className="text-xs text-slate-500">Margin on sell: {formatMarginPct(settlement.margin_on_sell_pct)}%</span>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={isSubmitter || decide.isPending}
+            title={isSubmitter ? 'Segregation of duties: the submitter cannot decide their own request' : ''}
+            onClick={() => decide.mutate({ approve: true })}
+            className="rounded bg-green-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            disabled={isSubmitter || decide.isPending}
+            onClick={() => {
+              const note = window.prompt('Rejection note?')
+              if (note) decide.mutate({ approve: false, note })
+            }}
+            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
+          >
+            Reject
+          </button>
+          {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
+        </div>
       </div>
     )
   }
@@ -185,24 +208,36 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
   return <p className="text-sm text-slate-500">Status: {settlement.status}</p>
 }
 
+// app/services/settlement.py::build_settlement_draft can always be called
+// again -- it just starts version N+1 and demotes whatever was current
+// before it, whatever that one's status was (draft.py's docstring: "a
+// rejected settlement is never reopened -- the only way forward is a new
+// version"). Gating the button on `!current` alone made that documented
+// recovery path unreachable from the UI once a project had ever had ONE
+// settlement, for its entire remaining lifetime -- these are the statuses
+// nothing else in this component still lets you act on, so building fresh
+// is the only next step.
+const REBUILDABLE_STATUSES = new Set(['approved', 'rejected', 'won', 'lost'])
+
 export function SettlementPage() {
   const { projectId } = useParams()
   const { current, isLoading } = useCurrentSettlement(projectId)
   const buildDraft = useBuildSettlementDraft(projectId)
   const refreshQuantities = useRefreshQuantities(projectId, current?.id)
+  const canBuildNewDraft = !current || REBUILDABLE_STATUSES.has(current.status)
 
   return (
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Settlement cockpit</h1>
       {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
-      {!isLoading && !current && (
+      {!isLoading && canBuildNewDraft && (
         <button
           type="button"
           onClick={() => buildDraft.mutate()}
           disabled={buildDraft.isPending}
           className="mt-4 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
         >
-          Build settlement draft
+          {current ? 'Build new settlement draft' : 'Build settlement draft'}
         </button>
       )}
       {current && projectId && (
