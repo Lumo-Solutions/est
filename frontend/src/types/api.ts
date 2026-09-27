@@ -695,3 +695,156 @@ export interface ApprovalDecision {
   approve: boolean
   note?: string | null
 }
+
+// Mirrors backend/app/schemas/taxonomy.py.
+export interface TradeNodeCreate {
+  parent_id?: string | null
+  code: string
+  name: string
+  sort_order?: number
+  attributes?: Record<string, unknown> | null
+}
+
+export interface TradeNodeUpdate {
+  name?: string | null
+  sort_order?: number | null
+  is_active?: boolean | null
+  attributes?: Record<string, unknown> | null
+}
+
+export interface TradeNodeOut {
+  id: string
+  parent_id: string | null
+  code: string
+  name: string
+  level: number
+  path: string
+  sort_order: number
+  is_active: boolean
+  attributes: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+// Mirrors backend/app/schemas/boq.py's tolerance types.
+export interface BoqToleranceSet {
+  trade_node_id?: string | null
+  tolerance_pct: number
+}
+
+export interface BoqToleranceOut {
+  id: string
+  project_id: string
+  trade_node_id: string | null
+  tolerance_pct: number
+  created_at: string
+  updated_at: string
+}
+
+// Mirrors backend/app/schemas/drawings.py's layer-trade-mapping types.
+export interface DrawingLayerTradeMappingIn {
+  layer_pattern: string
+  trade_node_id: string
+}
+
+export interface DrawingLayerTradeMappingOut {
+  id: string
+  project_id: string
+  layer_pattern: string
+  trade_node_id: string
+}
+
+// Mirrors backend/app/schemas/vendors.py (fields needed for the admin
+// vendor-regions picker only, not the full duplicate-detection surface).
+export interface VendorOut {
+  id: string
+  legal_name: string
+  trading_name: string | null
+  status: string
+}
+
+export interface Page<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// Mirrors backend/app/schemas/approvals.py.
+export interface ApprovalPolicyTierIn {
+  seq: number
+  min_amount?: number
+  max_amount?: number | null
+  max_margin_pct?: number | null
+  required_role: string
+  quorum?: number
+  sla_hours?: number | null
+  requires_mfa?: boolean
+}
+
+export interface ApprovalPolicyTierOut {
+  id: string
+  policy_id: string
+  seq: number
+  min_amount: number
+  max_amount: number | null
+  max_margin_pct: number | null
+  required_role: string
+  quorum: number
+  sla_hours: number | null
+  requires_mfa: boolean
+}
+
+export interface ApprovalPolicyCreate {
+  entity_type: string
+  name: string
+  mode?: string
+  tiers: ApprovalPolicyTierIn[]
+}
+
+export interface ApprovalPolicyOut {
+  id: string
+  entity_type: string
+  name: string
+  version: number
+  mode: string
+  is_active: boolean
+  tiers: ApprovalPolicyTierOut[]
+}
+
+export interface ApprovalPolicySetActive {
+  is_active: boolean
+}
+
+export interface ReasonCodeCreate {
+  code: string
+  label: string
+}
+
+export interface ReasonCodeUpdate {
+  label?: string | null
+  is_active?: boolean | null
+}
+
+// Mirrors backend/app/schemas/audit.py.
+export interface AuditEventOut {
+  id: number
+  occurred_at: string
+  actor_sub: string | null
+  actor_roles: string[]
+  action: string
+  entity_type: string
+  entity_id: string | null
+  project_id: string | null
+  ip_address: string | null
+  seq: number
+  event_hash: string
+}
+
+export interface ChainVerifyResult {
+  tenant_id: string
+  date_from: string
+  date_to: string
+  ok: boolean
+  detail?: string | null
+}
