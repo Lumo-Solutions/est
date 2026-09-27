@@ -1,0 +1,62 @@
+import { useState } from 'react'
+import { useReplaceVendorServiceRegions, useVendorServiceRegions, useVendorsPage } from './api'
+
+const EMIRATES = ['Abu Dhabi', 'Dubai', 'Sharjah', 'Ajman', 'Umm Al Quwain', 'Ras Al Khaimah', 'Fujairah']
+
+export function VendorRegionsAdmin() {
+  const { data: vendorPage } = useVendorsPage(200)
+  const [vendorId, setVendorId] = useState('')
+  const { data: regions } = useVendorServiceRegions(vendorId || undefined)
+  const replace = useReplaceVendorServiceRegions(vendorId || undefined)
+  const [selected, setSelected] = useState<string[]>([])
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-slate-800">Vendor service regions</h2>
+      <select
+        value={vendorId}
+        onChange={(e) => {
+          setVendorId(e.target.value)
+          setSelected([])
+        }}
+        className="mt-2 rounded border border-slate-300 px-2 py-1 text-sm"
+      >
+        <option value="">-- Vendor --</option>
+        {(vendorPage?.items ?? []).map((v) => (
+          <option key={v.id} value={v.id}>{v.legal_name}</option>
+        ))}
+      </select>
+
+      {vendorId && regions && (
+        <div className="mt-2">
+          <div className="flex flex-wrap gap-2">
+            {EMIRATES.map((emirate) => {
+              const checked = (selected.length > 0 ? selected : regions).includes(emirate)
+              return (
+                <label key={emirate} className="flex items-center gap-1 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const base = selected.length > 0 ? selected : regions
+                      setSelected(e.target.checked ? [...base, emirate] : base.filter((r) => r !== emirate))
+                    }}
+                  />
+                  {emirate}
+                </label>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => replace.mutate(selected.length > 0 ? selected : regions)}
+            disabled={replace.isPending}
+            className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Save regions
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

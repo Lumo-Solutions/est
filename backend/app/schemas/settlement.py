@@ -239,6 +239,16 @@ class SettlementReasonCodeOut(ORMModel):
     is_active: bool
 
 
+class ReasonCodeCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=255)
+
+
+class ReasonCodeUpdate(BaseModel):
+    label: str | None = None
+    is_active: bool | None = None
+
+
 # --------------------------------------------------------------------------
 # Module D3: export into the client's original workbook
 # --------------------------------------------------------------------------

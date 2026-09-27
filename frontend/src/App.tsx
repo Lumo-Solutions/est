@@ -3,11 +3,12 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
+import { AdminPage } from './pages/AdminPage'
+import { AuditPage } from './pages/AuditPage'
 import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
 import { ExportPage } from './pages/ExportPage'
-import { PlaceholderPage } from './pages/PlaceholderPage'
 import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
@@ -45,8 +46,8 @@ function AppRoutes() {
         <Route path="/projects/:projectId/settlement" element={<SettlementPage />} />
         <Route path="/projects/:projectId/export" element={<ExportPage />} />
         <Route path="/projects/:projectId/win-loss" element={<WinLossPage />} />
-        <Route path="/admin" element={<PlaceholderPage title="Admin" phase="8f" />} />
-        <Route path="/audit" element={<PlaceholderPage title="Audit viewer" phase="8f" />} />
+        <Route path="/admin" element={<AdminPage />} />
+        <Route path="/audit" element={<AuditPage />} />
       </Route>
     </Routes>
   )

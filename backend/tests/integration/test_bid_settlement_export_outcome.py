@@ -273,3 +273,37 @@ async def test_outcome_accepts_a_seeded_reason_code(rls_session):
     assert lost.status == BidSettlementStatus.LOST.value
     assert lost.outcome_reason_codes == ["price"]
     assert lost.outcome_winning_price == Decimal("13000.00")
+
+
+# --------------------------------------------------------------------------
+# Phase 8f: admin CRUD for the reason-code list itself (previously
+# read-only -- only app/cli.py's dev-seed ever wrote a row).
+# --------------------------------------------------------------------------
+
+
+async def test_create_and_update_reason_code(rls_session):
+    tenant_id, _project_id, _settlement = await _approved_settlement(rls_session)
+    lead_ctx = _ctx(LEAD, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, lead_ctx)
+
+    created = await settlement_service.create_reason_code(rls_session, lead_ctx, "timeline", "Timeline")
+    assert created.is_active is True
+
+    # The win/loss form's own active-only listing excludes a deactivated
+    # code; the admin screen's include_inactive=True listing still sees it.
+    updated = await settlement_service.update_reason_code(rls_session, lead_ctx, created.id, is_active=False)
+    assert updated.is_active is False
+
+    active_only = await settlement_service.list_reason_codes(rls_session, lead_ctx)
+    assert "timeline" not in [c.code for c in active_only]
+    everything = await settlement_service.list_reason_codes(rls_session, lead_ctx, include_inactive=True)
+    assert "timeline" in [c.code for c in everything]
+
+
+async def test_create_reason_code_denies_estimator_role(rls_session):
+    tenant_id, _project_id, _settlement = await _approved_settlement(rls_session)
+    estimator_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, estimator_ctx)
+
+    with pytest.raises(ForbiddenError):
+        await settlement_service.create_reason_code(rls_session, estimator_ctx, "x", "X")

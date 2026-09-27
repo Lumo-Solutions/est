@@ -10,10 +10,89 @@ from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier, ApprovalRequest, ApprovalStep
-from app.schemas.approvals import ApprovalRequestCreate
+from app.schemas.approvals import ApprovalPolicyCreate, ApprovalRequestCreate
 from app.services import audit
 
 _ACR_RANK = {"bronze": 1, "silver": 2}
+
+
+async def list_policies(session: AsyncSession) -> list[tuple[ApprovalPolicy, list[ApprovalPolicyTier]]]:
+    """Every policy version (active or not) -- the admin screen needs to
+    see history, unlike _active_policy's live-routing lookup below, which
+    only ever wants the one currently in effect."""
+    result = await session.execute(select(ApprovalPolicy).order_by(ApprovalPolicy.entity_type, ApprovalPolicy.version))
+    policies = list(result.scalars().all())
+    out = []
+    for policy in policies:
+        tiers_result = await session.execute(
+            select(ApprovalPolicyTier).where(ApprovalPolicyTier.policy_id == policy.id).order_by(ApprovalPolicyTier.seq)
+        )
+        out.append((policy, list(tiers_result.scalars().all())))
+    return out
+
+
+async def create_policy(
+    session: AsyncSession, ctx: RequestContext, data: ApprovalPolicyCreate
+) -> tuple[ApprovalPolicy, list[ApprovalPolicyTier]]:
+    """New version for entity_type (max existing version + 1), created
+    active. Does NOT deactivate prior versions -- _active_policy() always
+    picks the highest-version active row for the entity_type, so an old
+    version left active is harmless (never selected) but still visible in
+    list_policies() for audit history; deactivate it explicitly via
+    set_policy_active() if you want it gone from the admin list's
+    "active" filter."""
+    if not ctx.has_role("managing_director"):
+        raise ForbiddenError("Only managing_director may create an approval policy")
+
+    existing = await session.execute(
+        select(ApprovalPolicy.version).where(ApprovalPolicy.entity_type == data.entity_type).order_by(ApprovalPolicy.version.desc())
+    )
+    next_version = (existing.scalars().first() or 0) + 1
+
+    policy = ApprovalPolicy(
+        tenant_id=ctx.tenant_id, entity_type=data.entity_type, name=data.name, version=next_version, mode=data.mode,
+    )
+    session.add(policy)
+    await session.flush()
+
+    tiers = [
+        ApprovalPolicyTier(
+            tenant_id=ctx.tenant_id, policy_id=policy.id, seq=t.seq, min_amount=t.min_amount, max_amount=t.max_amount,
+            max_margin_pct=t.max_margin_pct, required_role=t.required_role, quorum=t.quorum, sla_hours=t.sla_hours,
+            requires_mfa=t.requires_mfa,
+        )
+        for t in data.tiers
+    ]
+    session.add_all(tiers)
+    await session.flush()
+
+    await audit.record(
+        session, ctx, action=AuditAction.CREATE, entity_type="approval_policy", entity_id=policy.id,
+        payload={"entity_type": data.entity_type, "version": next_version},
+    )
+    return policy, tiers
+
+
+async def set_policy_active(
+    session: AsyncSession, ctx: RequestContext, policy_id: UUID, is_active: bool
+) -> tuple[ApprovalPolicy, list[ApprovalPolicyTier]]:
+    if not ctx.has_role("managing_director"):
+        raise ForbiddenError("Only managing_director may change an approval policy's active status")
+
+    result = await session.execute(select(ApprovalPolicy).where(ApprovalPolicy.id == policy_id))
+    policy = result.scalar_one_or_none()
+    if policy is None:
+        raise NotFoundError(f"Approval policy {policy_id} not found")
+    policy.is_active = is_active
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="approval_policy", entity_id=policy.id,
+        payload={"is_active": is_active},
+    )
+    tiers_result = await session.execute(
+        select(ApprovalPolicyTier).where(ApprovalPolicyTier.policy_id == policy.id).order_by(ApprovalPolicyTier.seq)
+    )
+    return policy, list(tiers_result.scalars().all())
 
 
 async def _active_policy(session: AsyncSession, entity_type: str) -> tuple[ApprovalPolicy, list[ApprovalPolicyTier]]:
