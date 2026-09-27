@@ -70,21 +70,24 @@ async function submitTotpCode(page: Page, fieldSelector: string, submit: () => P
 // lib/api.ts's ApiError.isStepUpRequired handling does a full
 // `window.location.href = stepUpUrl()` on a 403 urn:installtec:step-up-required
 // (app/core/errors.py::StepUpRequiredError, app/security/deps.py::require_mfa_step_up)
-// -- this completes the resulting re-authentication (acr_values=silver
-// forces a real password + OTP challenge even with an existing SSO
-// session, not just an OTP prompt) and waits for the browser to land back
-// on the original page. The username field isn't present on this "please
-// re-authenticate" page at all (Keycloak already knows who from the SSO
-// session), so this only fills password + otp, unlike loginViaKeycloak.
-export async function completeMfaStepUp(page: Page, password: string, totpSecret: string): Promise<void> {
-  // The browser's URL stays on Keycloak's /protocol/openid-connect/auth
-  // endpoint while it serves this form (the form's OWN action attribute
-  // points at /login-actions/authenticate, which is where submitting it
-  // goes, not where it's displayed) -- so this waits on the password
-  // field itself rather than a URL, which Playwright's own action-waiting
-  // on .fill() already does.
-  await page.locator('#password').fill(password)
-  await page.getByRole('button', { name: 'Sign In' }).click()
+// -- this completes the resulting re-authentication and waits for the
+// browser to land back on the original page.
+//
+// CORRECTED (fix/keycloak-step-up review item 3): an earlier version of
+// this helper filled a `#password` field first, on the assumption that
+// Keycloak's browser-stepup flow re-demanded the password too. Verified
+// live against the real dev stack that this is wrong -- Cookie already
+// reattached the existing bronze session, and Level 1's own
+// conditional-level-of-authentication (deploy/keycloak/bootstrap.sh) is
+// satisfied by that existing session well within its 28800s max-age, so a
+// step-up request (acr_values=silver) skips Level 1 (password+OTP)
+// entirely and goes straight to Level 2, which is OTP alone -- Keycloak's
+// page shows only a read-only username and a one-time-code field, no
+// password field at all. Filling one hung `.fill('#password')` forever
+// (no such element ever appears), timing out the whole test rather than
+// failing fast, since neither this config nor playwright.*.config.ts sets
+// an explicit actionTimeout.
+export async function completeMfaStepUp(page: Page, totpSecret: string): Promise<void> {
   const signIn = () => page.getByRole('button', { name: 'Sign In' }).click()
   await submitTotpCode(page, '#otp', signIn, totpSecret)
   await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
@@ -193,4 +196,52 @@ export async function resolveUnresolvedLines(page: Page, projectId: string): Pro
       throw new Error(`Failed to resolve settlement line ${line.id}: ${patch.status()} ${await patch.text()}`)
     }
   }
+}
+
+// Same build -> force-zero-defaults -> resolve -> submit sequence
+// settlement.spec.ts drives inline, factored out so
+// step-up-freshness.spec.ts (fix/keycloak-step-up) can put a FRESH D1-SIM
+// settlement into "pending approval" for each of its three scenarios
+// without repeating it three times. `page` must already be a logged-in
+// submitter (e.g. bd1) -- this does not log in itself, unlike loginViaKeycloak.
+export async function submitSettlementForApproval(page: Page, projectId: string): Promise<void> {
+  await page.goto(`/projects/${projectId}/settlement`)
+  const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
+  if (await buildButton.isVisible().catch(() => false)) {
+    await buildButton.click()
+  }
+  await page.getByRole('button', { name: 'Submit for approval' }).waitFor({ state: 'visible' })
+  await forceZeroDefaults(page, projectId)
+  await resolveUnresolvedLines(page, projectId)
+  await page.reload()
+  await page.getByRole('button', { name: 'Submit for approval' }).click()
+  await page.getByRole('button', { name: 'Approve' }).waitFor({ state: 'visible' })
+}
+
+// Clicks the settlement page's Approve button and reports which of the two
+// real outcomes lib/api.ts's isStepUpRequired handling actually produces:
+// a full-page redirect to Keycloak (`window.location.href = stepUpUrl()` on
+// a 403 urn:installtec:step-up-required -- "blocked") or the page updating
+// in place to show the approved banner ("approved"). Never mocks the
+// decision -- this is reading the real consequence of the real
+// has_recent_step_up check (app/security/deps.py) on whatever session state
+// `page` currently has.
+export async function attemptApprove(page: Page): Promise<'blocked' | 'approved'> {
+  await page.getByRole('button', { name: 'Approve' }).click()
+  const [blocked, approved] = await Promise.all([
+    page.waitForURL((url) => url.pathname.startsWith('/realms/'), { timeout: 15_000 }).then(
+      () => true,
+      () => false,
+    ),
+    page
+      .getByText(/^v\d+ -- approved -- /)
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(
+        () => true,
+        () => false,
+      ),
+  ])
+  if (blocked) return 'blocked'
+  if (approved) return 'approved'
+  throw new Error('Approve click neither redirected to step-up nor showed the approved banner within 15s')
 }

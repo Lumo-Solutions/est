@@ -288,6 +288,15 @@ services:
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-installtec-backend}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-installtec-backend}
+      # --- addition: fix/keycloak-step-up. Not otherwise wired to .env
+      # (Settings.step_up_max_age_s's Python default of 300 is fine for real
+      # use) -- exists here so deploy/keycloak/test-stepup-freshness.sh can
+      # override it for ONE `docker compose up -d backend` (env var wins
+      # over the value --env-file would otherwise supply) to prove
+      # has_recent_step_up's real-Keycloak behaviour on a short window,
+      # without editing this file or deploy/.env by hand. See that script
+      # and docs/keycloak-setup.md.
+      - STEP_UP_MAX_AGE_S=${STEP_UP_MAX_AGE_S:-300}
       - SESSION_SECRET=${SESSION_SECRET}
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN:-localhost}

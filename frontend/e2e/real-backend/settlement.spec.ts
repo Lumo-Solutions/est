@@ -82,7 +82,7 @@ test('settlement: build -> simulate -> submit -> approve as a different user', a
   const approveButton = mdPage.getByRole('button', { name: 'Approve' })
   await expect(approveButton).toBeEnabled()
   await approveButton.click()
-  await completeMfaStepUp(mdPage, 'Md1Pass!', DEMO_TOTP_SECRETS.md1)
+  await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
 
   await approveButton.click()
   await expect(mdPage.getByText(/^v\d+ -- approved -- /)).toBeVisible()

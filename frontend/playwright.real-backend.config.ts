@@ -13,6 +13,15 @@ import { defineConfig, devices } from '@playwright/test'
 // same cert once for a real Chrome profile.
 export default defineConfig({
   testDir: './e2e/real-backend',
+  // step-up-freshness.spec.ts (fix/keycloak-step-up) only proves anything
+  // once Keycloak's Level 2 loa-max-age and the backend's
+  // STEP_UP_MAX_AGE_S have both been lowered to a short test-only window --
+  // at this config's real 300s default its two "wait past max age" pauses
+  // alone take over ten minutes and still assert nothing that isn't
+  // already re-proven at a smaller scale in that setup. Run it via
+  // deploy/keycloak/test-stepup-freshness.sh (playwright.step-up-freshness.config.ts)
+  // instead, never as part of a normal `npm run e2e:real-backend`.
+  testIgnore: ['**/step-up-freshness.spec.ts'],
   fullyParallel: false,
   workers: 1,
   // Generous: settlement.spec.ts's TOTP enrolment + MFA step-up
