@@ -16,6 +16,7 @@ import email.utils
 import io
 import secrets
 import smtplib
+import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from email.message import EmailMessage
@@ -611,10 +612,12 @@ async def simulate_settlement() -> None:
         tenant_id=tenant_id, user_id=_SIM_LEAD_ESTIMATOR_ID, sub="lead-estimator-1", roles=frozenset({"lead_estimator"})
     )
     bd1_ctx = RequestContext(
-        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_1_ID, sub="bd-director-1", roles=frozenset({"bd_director"}), acr="silver"
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_1_ID, sub="bd-director-1", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
     )
     bd2_ctx = RequestContext(
-        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_2_ID, sub="bd-director-2", roles=frozenset({"bd_director"}), acr="silver"
+        tenant_id=tenant_id, user_id=_SIM_BD_DIRECTOR_2_ID, sub="bd-director-2", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
     )
 
     async with session_scope(sys_ctx) as session:
@@ -1438,10 +1441,16 @@ async def simulate_e2e() -> None:
     lead_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_LEAD_ESTIMATOR_ID, sub="e2e-lead-estimator", roles=frozenset({"lead_estimator"}))
     procurement_ctx = RequestContext(
         tenant_id=tenant_id, user_id=_E2E_PROCUREMENT_HEAD_ID, sub="e2e-procurement-head",
-        roles=frozenset({"procurement_head"}), acr="silver",
+        roles=frozenset({"procurement_head"}), acr="silver", auth_time=int(time.time()),
     )
-    bd1_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_1_ID, sub="e2e-bd-director-1", roles=frozenset({"bd_director"}), acr="silver")
-    bd2_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_2_ID, sub="e2e-bd-director-2", roles=frozenset({"bd_director"}), acr="silver")
+    bd1_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_1_ID, sub="e2e-bd-director-1", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
+    )
+    bd2_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_2_ID, sub="e2e-bd-director-2", roles=frozenset({"bd_director"}),
+        acr="silver", auth_time=int(time.time()),
+    )
 
     # --- 1. project + membership ---
     async with session_scope(sys_ctx) as session:
