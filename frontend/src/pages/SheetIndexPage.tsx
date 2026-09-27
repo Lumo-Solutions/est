@@ -8,7 +8,10 @@ export function SheetIndexPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">{drawing?.original_filename ?? 'Sheets'}</h1>
+      <Link to={`/projects/${projectId}`} className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
+        ← Back to project
+      </Link>
+      <h1 className="mt-2 text-xl font-semibold text-slate-800">{drawing?.original_filename ?? 'Sheets'}</h1>
       {drawing && <p className="mt-1 text-sm text-slate-500">Status: {drawing.status}</p>}
       {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
       {isError && <p className="mt-4 text-red-600">{error.message}</p>}

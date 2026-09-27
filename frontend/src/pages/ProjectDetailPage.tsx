@@ -16,16 +16,35 @@ function StatusBadge({ status }: { status: string }) {
 
 export function ProjectDetailPage() {
   const { projectId } = useParams()
-  const { data: project, isLoading, isError, error } = useProject(projectId)
+  const { data: project, isLoading, isError, error, refetch } = useProject(projectId)
   const { data: drawings } = useDrawings(projectId)
 
   if (isLoading) return <p className="p-6 text-slate-500">Loading...</p>
-  if (isError) return <p className="p-6 text-red-600">{error.message}</p>
+  if (isError) {
+    return (
+      <div className="p-6">
+        <Link to="/" className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
+          ← Projects
+        </Link>
+        <p className="mt-4 text-red-600">{error.message}</p>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="mt-2 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
   if (!project) return null
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">
+      <Link to="/" className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
+        ← Projects
+      </Link>
+      <h1 className="mt-2 text-xl font-semibold text-slate-800">
         {project.code} -- {project.name}
       </h1>
       <p className="mt-1 text-sm text-slate-500">
