@@ -290,13 +290,20 @@ too — still not patched one-off, per the prior run's recommendation (one
 shared Phase 4 component instead).
 
 New regression tests: `frontend/e2e/real-backend/typology-boq-procurement.spec.ts`,
-6 tests. All 6 plus the prior run's 8 (`project-pages.spec.ts`) verified
-passing together in one combined run (`--workers=1`, both files), 14/14
-green. (One transient `ECONNRESET` on the very first `GET /api/v1/projects`
-of a fresh suite run was seen twice across this session's runs, always on
-the first request right after `global-setup.ts`'s heavy Docker-exec/
-Keycloak-seed work; passed cleanly on retry both times — not a real bug,
-noted here in case it recurs often enough to be worth root-causing later.)
+6 tests. Every test across both files (`project-pages.spec.ts`'s 8 plus
+these 6) has passed individually and in small groups. Running all 14
+together sequentially, back to back, is flaky: two separate full-combined
+runs each saw 1-2 failures, but never the same test twice, and every
+"failure" passed cleanly on an immediate isolated re-run with no code
+changes in between (one `ECONNRESET` on the first `GET /api/v1/projects`
+of a run; separately a `SheetIndexPage` test and the `BoqImportWizardPage`
+upload test each failed once, both green on retry). This points to the
+dev stack (backend connection pool, or Keycloak's own session/rate
+handling) not comfortably sustaining 14 back-to-back real logins +
+full-page navigations in one `--workers=1` run, not a real regression in
+any of the fixes above. Worth root-causing if it gets worse as more
+Phase 2 specs accumulate, but not blocking — `npm run e2e:real-backend`'s
+CI-facing run should be watched for the same pattern.
 
 Commits this run: `chore(qa): configure Playwright MCP...` and
 `docs(ui-qa): log Phase 2 start...` were from the earlier
