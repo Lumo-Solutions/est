@@ -6,7 +6,11 @@ services:
     volumes:
       - ../backend/app:/app/app:ro
       - ../backend/alembic.ini:/app/alembic.ini:ro
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # --proxy-headers/--forwarded-allow-ips: this `command:` fully replaces
+    # backend/Dockerfile's CMD, so its --proxy-headers flag (see that
+    # Dockerfile's comment) has to be repeated here too, or redirect_uri
+    # comes back http:// even behind caddy-dev's HTTPS below.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips=*
     ports:
       - "8001:8000"
 
@@ -25,6 +29,35 @@ services:
   celery-beat:
     volumes:
       - ../backend/app:/app/app:ro
+
+  # TLS-terminating reverse proxy fronting Keycloak + the frontend on ONE
+  # locally-trusted self-signed origin (`tls internal`), path-routed the
+  # same way deploy/caddy/Caddyfile routes prod -- see
+  # deploy/caddy/Caddyfile.dev and docs/keycloak-setup.md's "Interactive
+  # browser login in dev" section for why this exists (Keycloak's own
+  # login-flow cookies are Secure+SameSite=None unconditionally, which a
+  # browser refuses to send back over plain HTTP) and how to trust the
+  # cert once. Bearer-token/API access is unaffected and keeps working
+  # over the existing plain-HTTP host ports (3000/8001/8080) -- this is
+  # only needed for the interactive login form.
+  caddy-dev:
+    image: caddy:2-alpine
+    container_name: installtec_caddy_dev
+    volumes:
+      - ./caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_dev_data:/data
+      - caddy_dev_config:/config
+    ports:
+      - "8443:8443"
+    depends_on:
+      - frontend
+      - keycloak
+      - backend
+    networks: [installtec]
+
+volumes:
+  caddy_dev_data:
+  caddy_dev_config:
 
 # Frontend dev server (Vite) is normally run on the host with `npm run dev`
 # for the fastest feedback loop; the `frontend` service here still builds the

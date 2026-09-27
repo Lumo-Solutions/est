@@ -32,4 +32,20 @@ USER app
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
     CMD curl -fsS http://localhost:8000/healthz || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers: without it, uvicorn reports scope["scheme"] as "http" for
+# every request regardless of what the client actually connected with,
+# because the backend<->Caddy hop is plain HTTP inside the compose network
+# -- Caddy (deploy/caddy/Caddyfile in prod, Caddyfile.dev in dev) terminates
+# the real TLS connection and forwards X-Forwarded-Proto: https. Without
+# this flag, request.url_for("auth_callback") (app/api/v1/routes/auth.py)
+# builds an http:// redirect_uri even behind HTTPS Caddy, which Keycloak's
+# https-only wildcard redirect URI (deploy/keycloak/realm-installtec.json)
+# then rejects -- a pre-existing bug (never exercised until Phase 10's dev
+# Caddy setup, since dev had no TLS hop before). This container has no
+# published host port of its own in prod (deploy/docker-compose.prod.yml
+# resets every OTHER internal service's port but never publishes backend's
+# either -- only Caddy is reachable from outside), so trusting
+# X-Forwarded-* from any peer on this docker network is the same "one
+# trusted hop" posture TRUSTED_PROXY_HOPS already assumes for
+# X-Forwarded-For (app/core/middleware.py::ClientIpMiddleware).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
