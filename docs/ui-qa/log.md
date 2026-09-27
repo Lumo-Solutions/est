@@ -398,6 +398,81 @@ bid-leveling`, `docs(ui-qa): log pages 9-11 results`.
 **Not yet covered:** SettlementPage, ExportPage, WinLossPage, AdminPage,
 AuditPage, the cross-cutting nav-hidden-page-still-403s check.
 
+## Phase 2 — pages 12-14: SettlementPage, ExportPage, WinLossPage
+
+**Status: done.** Also fixed a real money-serialization gap the main
+session found while reviewing the previous batch (see below, not part of
+this batch's own page walk).
+
+This batch carried an explicit escalation instruction (SettlementPage
+touches MFA step-up, SoD and money math): fix the routine role-gate/error-
+display pattern as usual, but stop and flag anything auth/money/SoD/step-
+up-structural for the main session instead of fixing it directly.
+**Nothing needed escalation.** The one borderline case — Approve/Reject's
+role eligibility beyond the existing SoD check — was deliberately left
+alone rather than guessed at (see UI-P2-018): `app/services/
+approvals.py::decide` authorizes against the specific routed approval
+tier's `required_role`, which is dynamic (margin-threshold-driven) and not
+exposed on `BidSettlementOut` for an already-submitted request, so a
+client-side role gate there risks getting it wrong in either direction.
+Logged as a P2 UX gap for Phase 3/4 instead (expose the routed tier's role
+so the UI can show/hide correctly) — the server enforces it correctly
+either way, so this is not a security issue, just a missing affordance.
+
+1. **SettlementPage** (UI-P2-018, P1, fixed): "Build (new) settlement
+   draft" and "Submit for approval" had no client-side role gate at all
+   (mirrors backend's `_HEADER_ROLES`/`_SUBMIT_ROLES` — same recurring
+   pattern as every other page this phase) and no error display on
+   build/submit/decide, nor on the settlement fetch itself. Fixed. The
+   existing SoD disable (a submitter can't approve their own request) and
+   the pre-existing 3dp margin-on-sell display were both already correct
+   and untouched.
+   - **Confirmed still green, not re-run mocked:** re-read (didn't need to
+     touch) the pre-existing `settlement.spec.ts` (Phase 0) — its real,
+     unmocked build → submit → approve flow with a genuine MFA step-up
+     (bd1 submits, SoD disables their own Approve, md1 completes a real
+     OTP step-up and approves) is unaffected by this batch's changes since
+     bd1/md1 both already have every role this batch gates on.
+2. **ExportPage**: no bugs found. Confirmed live that a non-approved
+   settlement's export correctly 403s with a clear message
+   ("...export is only available once approved") shown under the button,
+   not hidden — acceptable UX for a state-based (not role-based)
+   restriction. Confirmed by reading the route that `_LINE_ROLES` (all 5
+   roles) is correct here — no missing gate. UI-P2-020 (P2, Phase 4): the
+   real `Content-Disposition` filename is `settlement-{project_id}-
+   v{n}.xlsx` — a raw UUID, not the project's human-readable code — works
+   correctly but isn't very readable in a downloads folder.
+3. **WinLossPage** (UI-P2-019, P1, fixed): the record-outcome form
+   (outcome, prices, reason codes, note, submit) had no client-side role
+   gate (mirrors `_OUTCOME_ROLES`) — at least this one already showed
+   `recordOutcome.isError`, so failure wasn't silent, but the form was
+   misleadingly presented as usable to any role. Fixed: an unauthorized
+   role now sees "No outcome recorded yet. Only bd_director/
+   managing_director can record it." instead.
+
+**Separately, main-session fix (money, handled directly per brief §0.3,
+not part of this batch's page walk):** while reviewing the previous
+batch's cross-cutting money note, found the `JsonDecimal` sweep (UI-P2-011)
+was itself incomplete — `quotation_ingestion.py` (5 response schemas,
+including fields `QuoteReviewPage`/`BidLevelingPage` actually read — this
+was live, not latent) and `module_e.py` (2 more, latent — no frontend yet)
+still used bare `Decimal`, which serializes to JSON as a string against
+frontend types declared `number`. Fixed both files, added a static
+introspection test (`backend/tests/unit/test_response_schema_json_decimal.py`)
+scanning every `ORMModel` subclass across `app/schemas/*.py` so this can't
+silently reintroduce. `make test-unit` (344 passed), `make test-api` (19
+passed). Commit `1d6955c`.
+
+New regression tests: `frontend/e2e/real-backend/
+settlement-winloss-roles.spec.ts`, 4 tests — 2 passed live (submit-gate,
+win-loss-gate), 2 correctly skip with a clear reason tied to D1-SIM's
+current shared-fixture state (build-gate needs a REBUILDABLE_STATUSES
+status; export-download needs `approved`) rather than being flaky —
+verified individually, not just trusting a single combined run.
+
+**Not yet covered:** AdminPage, AuditPage, the cross-cutting nav-hidden-
+page-still-403s check, and the dynamic-approval-role UX gap logged above.
+
 ## Phase 3: gap-fill
 Not started.
 
