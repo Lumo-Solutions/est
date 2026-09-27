@@ -78,7 +78,19 @@ class OidcClient:
         }
         if acr_values:
             params["acr_values"] = acr_values
-            params["prompt"] = "login"
+            # NOT prompt=login: the realm's "browser-stepup" flow (fix/keycloak-step-up)
+            # relies on the Cookie authenticator silently reattaching the
+            # existing SSO session (already at level 1/bronze) so only the
+            # INCREMENTAL Level 2 subflow (OTP alone) runs -- prompt=login
+            # forces Keycloak to discard that session and restart from
+            # Level 1 (password + OTP again), which defeats the whole point
+            # of a lightweight step-up. Confirmed live: identical request
+            # differing only in prompt=login shows the password field
+            # again; without it, only the OTP field. Level 2's own
+            # loa-max-age=300 already forces a fresh OTP entry on every
+            # step-up regardless (it's essentially never "still valid"),
+            # which is the freshness prompt=login was trying to get another
+            # way.
         return f"{self._authorize_endpoint}?{httpx.QueryParams(params)}"
 
     async def exchange_code(self, code: str, redirect_uri: str, code_verifier: str) -> dict:
