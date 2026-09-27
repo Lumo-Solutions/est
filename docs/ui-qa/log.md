@@ -229,6 +229,90 @@ checked on all of them too, and probably resolved as one Phase 4
 design-system item rather than N more one-off patches if it's confirmed
 everywhere.
 
+### Pages 5-8: TypologyPage, BoqImportWizardPage, BoqReconciliationPage, ProcurementPackagesPage
+
+**Status: done.** Tested as estimator/lead_estimator (the roles that reach
+these pages). See `docs/ui-qa/issues.md` UI-P2-007 through UI-P2-010 for
+full writeups; summary here.
+
+Found and fixed 3 P1s, all the same class of bug the prior run's UI-P2-001/
+002 already established (an action a role can't perform stayed fully
+visible/enabled instead of hidden, and failed 100% silently on a real
+403):
+- **TypologyPage**: "Detect clusters"/"Review and confirm"/"Reject" had no
+  role gate at all, though the server restricts them to lead_estimator/
+  procurement_head/managing_director (notably **not** estimator or
+  bd_director, unlike most other project pages). Added the gate; also wired
+  up `detect.isError`/`reject.isError` display, and (defensively, not
+  independently live-triggered) fixed `useTypologyClusters`'s fetch-error
+  case falling through to an empty list.
+- **ProcurementPackagesPage**: "Create package" had no role gate (server:
+  lead/proc/bd/md, not estimator) and zero error feedback anywhere except
+  "Draft RFQs". Added the gate plus error display on create/add-items/
+  dispatch/resend, and disabled Dispatch/Resend while pending (was letting
+  a double-click fire two dispatch attempts).
+- **ProcurementPackagesPage**, separately: the trade-node dropdown rendered
+  `TradeNodeOut.path` — a Postgres ltree built from node **ids**
+  (`n073ec3ef_6b2f_...`), meant only for hierarchical queries, not display
+  — instead of `.name`. Fixed. **Same bug spotted (not fixed, out of this
+  run's page scope) in `TaxonomyAdmin.tsx`'s two dropdowns** — flagging for
+  whoever QAs `/admin`.
+
+**Significant gap surfaced, not fixed here (Phase 3's call):** writing the
+lead_estimator regression test above hit "Not a member of project ..." —
+none of the CLI's simulate/seed fixtures ever add the *real* Keycloak dev
+users (`estimator1`, `lead1`, ...) as `ProjectMember`, only their own
+synthetic ids. Combined with the already-known "no add-member UI" gap
+(Phase 1's `coverage.md` §2), **a real lead_estimator or estimator cannot
+be given access to an existing project through the product at all.**
+Added `frontend/e2e/real-backend/helpers.ts`'s `ensureProjectMember()` as
+a tested workaround so later Phase 2 runs (settlement, BOQ reconciliation
+actions, etc.) don't hit the same wall blind — every remaining
+estimator/lead_estimator write-path test will need it. Recommending this
+get a higher priority than a generic Phase 3 item, since it currently
+blocks realistic QA of most of the product as those two roles.
+
+**Confirmed, not fixed (explicit Phase 3 item):** still no delete-BOQ-item
+UI on `BoqReconciliationPage` (`DELETE /boq-items/{id}` exists, unused).
+
+**Cross-cutting note for Phase 4 / whoever QAs Settlement/Quotes/Export:**
+`backend/app/schemas/common.py`'s `JsonDecimal` serializes every money/
+percentage field to a JSON **number** (`float(v)`), not the string the
+brief's §0.2 assumes arrives from the API — precision loss, if any, already
+happens server-side, before any frontend `parseFloat` could touch it. Also
+confirmed **no shared money-formatting utility exists anywhere in the
+frontend** — every money display so far is ad-hoc `.toFixed(2)`, no
+thousands separator, no "AED" prefix. Neither is a Phase-2-page-scoped fix;
+flagging for a deliberate decision rather than fixing in passing.
+
+Breadcrumb/back-link gap (`UI-P2-004`) reconfirmed on all 4 of these pages
+too — still not patched one-off, per the prior run's recommendation (one
+shared Phase 4 component instead).
+
+New regression tests: `frontend/e2e/real-backend/typology-boq-procurement.spec.ts`,
+6 tests. All 6 plus the prior run's 8 (`project-pages.spec.ts`) verified
+passing together in one combined run (`--workers=1`, both files), 14/14
+green. (One transient `ECONNRESET` on the very first `GET /api/v1/projects`
+of a fresh suite run was seen twice across this session's runs, always on
+the first request right after `global-setup.ts`'s heavy Docker-exec/
+Keycloak-seed work; passed cleanly on retry both times — not a real bug,
+noted here in case it recurs often enough to be worth root-causing later.)
+
+Commits this run: `chore(qa): configure Playwright MCP...` and
+`docs(ui-qa): log Phase 2 start...` were from the earlier
+interactive-MCP-blocker investigation (see above); this pages-5-8 work is
+`fix(frontend): role-gate Typology and ProcurementPackages writes, fix
+trade-name display, add missing error feedback`, `test(e2e): Phase 2
+real-backend coverage for typology/BOQ/procurement`, and a `docs(ui-qa):`
+log/issues update.
+
+**Not yet covered** (next Phase 2 run): SettlementPage, ExportPage,
+WinLossPage, the remaining procurement pages (quarantine, quotes,
+bid-leveling), AdminPage, AuditPage, plus the cross-cutting
+nav-hidden-page-still-403s-server-side check from `coverage.md` §4. Any
+run testing estimator/lead_estimator writes should use the new
+`ensureProjectMember()` helper up front.
+
 ## Phase 3: gap-fill
 Not started.
 
