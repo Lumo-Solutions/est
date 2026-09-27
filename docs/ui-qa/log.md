@@ -167,11 +167,67 @@ running when the session started):
   and is not connected/installed on this machine, so Playwright MCP
   (fixed as above) is the path forward for live browser QA here.
 
-Net effect: no page has been walked through live yet. The next run of
-this phase (fresh session, so the `.mcp.json` fix is live) should confirm
-`browser_navigate` to `https://localhost:8443/api/v1/auth/login` no
-longer errors, then proceed through the coverage matrix. Nothing in
-`docs/ui-qa/issues.md` yet — it doesn't exist until real findings land.
+Net effect from that part of the run: no page had been walked through live
+yet via the interactive browser.
+
+**Update, same session, later run:** the `.mcp.json` fix did not take
+effect for either a fresh subagent fork or the main session itself (both
+still hit `ERR_CERT_AUTHORITY_INVALID`) — project-scoped MCP server config
+changes need a full Claude Code session restart, which wasn't available.
+Trying to work around it by importing caddy-dev's CA cert into the Windows
+trust store was correctly blocked by the permission system as a TLS-trust
+change. **Pivoted to the sanctioned alternative already used successfully
+in Phase 0/1**: driving real Playwright test specs against
+`playwright.real-backend.config.ts` (which already sets
+`ignoreHTTPSErrors: true` and needs no cert workaround) instead of the
+interactive MCP browser tool. This doubles as the regression-test
+deliverable rather than being a separate throwaway exploration step.
+Interactive MCP/Chrome browsing for this project remains blocked until a
+session restart happens naturally; future Phase 2 runs should keep using
+the Playwright-test-runner approach rather than retrying the interactive
+browser.
+
+**Also discovered and fixed while getting live QA working**: `frontend`'s
+Docker image is a static production build (`deploy/docker-compose.yml`'s
+`frontend` service has no dev volume mount or hot reload) — source edits
+under `frontend/src` do **not** take effect until the image is rebuilt
+(`docker compose ... build frontend && ... up -d frontend`). Any future
+Phase 2/3/4 run that edits frontend source must rebuild+recreate the
+`frontend` container before re-testing, or it will silently test the old
+bundle (this is exactly what caused an initial round of test failures in
+this run, before the rebuild).
+
+**Pages covered this run**: ProjectsListPage, ProjectDetailPage,
+SheetIndexPage, TakeoffViewerPage — as `estimator`. See
+`docs/ui-qa/issues.md` for the full write-up. Summary: found and fixed 4
+P1s (no catch-all 404 route; every 4xx retried 3x before the UI showed an
+error, ~7-10s of misleading "Loading..." app-wide; TakeoffViewerPage's own
+additional indefinite-loading-on-error bug; no breadcrumbs/back-links
+anywhere in the app, patched on these 4 pages). Logged 2 P2s for Phase 4
+(header shows the raw Keycloak subject UUID instead of a username — needs
+a backend `RequestContext`/`/auth/me` change, deliberately deferred rather
+than folded in here; ProjectsListPage has no empty-state message or
+pagination). Reconfirmed the pre-existing `dev-simulate-settlement`
+non-idempotency already logged in Phase 0/1 (still non-fatal). Flagged but
+did not confirm: GEO-TEST's fixture drawing has been stuck in status
+`extracting` since 2026-09-24 despite having sheets/entities already —
+possibly just a hand-built fixture that skipped the real status
+transition, needs checking against a drawing from real ingestion.
+
+New regression tests: `frontend/e2e/real-backend/project-pages.spec.ts`,
+8 tests, all passing against the rebuilt frontend image (verified
+individually and as a group: 1 batch of 3 + 5 run singly, all green;
+`npx playwright test --config=playwright.real-backend.config.ts
+--workers=1 project-pages.spec.ts`).
+
+**Not yet covered** (next Phase 2 run): TypologyPage, BoqImportWizardPage,
+BoqReconciliationPage, the 4 procurement pages, SettlementPage, ExportPage,
+WinLossPage, AdminPage, AuditPage — as their full role matrix, plus the
+cross-cutting nav-hidden-page-still-403s-server-side check from
+`coverage.md` §4. The breadcrumb/back-link gap (UI-P2-004) should be
+checked on all of them too, and probably resolved as one Phase 4
+design-system item rather than N more one-off patches if it's confirmed
+everywhere.
 
 ## Phase 3: gap-fill
 Not started.
