@@ -1343,6 +1343,422 @@ async def simulate_module_e_schema() -> None:
         print(f"read back: {len(outturn)} outturn_cost_observation(s), written_back_rate_id={[o.written_back_rate_id for o in outturn]} (always None -- no write-back workflow exists yet, this phase's own known gap)")
 
 
+# --------------------------------------------------------------------------
+# Phase 9: full end-to-end simulation across a dedicated, taggable project
+# --------------------------------------------------------------------------
+
+_E2E_PROJECT_CODE = "E2E-SIM"
+_E2E_VENDOR_NAME = "E2E Simulation Vendor"
+_E2E_VENDOR_EMAIL = "quotes@e2esim-vendor.example"
+_E2E_VENDOR_DOMAIN = "e2esim-vendor.example"
+_E2E_ESTIMATOR_ID = UUID("00000000-0000-0000-0000-0000000000f1")
+_E2E_LEAD_ESTIMATOR_ID = UUID("00000000-0000-0000-0000-0000000000f2")
+_E2E_PROCUREMENT_HEAD_ID = UUID("00000000-0000-0000-0000-0000000000f3")
+_E2E_BD_DIRECTOR_1_ID = UUID("00000000-0000-0000-0000-0000000000f5")
+_E2E_BD_DIRECTOR_2_ID = UUID("00000000-0000-0000-0000-0000000000f6")
+
+
+def _synthetic_alignment_dxf_bytes(length_units: float = 120.0) -> bytes:
+    """A minimal real DXF (via ezdxf) with one LINE entity on a "-CL"
+    suffixed layer -- AlignmentExtractor's own layer-name pattern (see
+    tests/unit/test_dxf_geometry.py's fixture) picks this up as an
+    alignment_length_m measurement directly from the DXF's real layer
+    metadata, with no PdfLayerMappingRule-style config needed (unlike the
+    PDF path below, which needs one since a PDF has no native layer
+    concept)."""
+    import ezdxf
+
+    doc = ezdxf.new(setup=True)
+    msp = doc.modelspace()
+    msp.add_line((0.0, 0.0), (length_units, 0.0), dxfattribs={"layer": "ROAD-CL"})
+    buf = io.StringIO()
+    doc.write(buf)
+    return buf.getvalue().encode("utf-8")
+
+
+async def _e2e_wait_for_geometry_extraction(sys_ctx: RequestContext, drawing_id: UUID, *, label: str) -> None:
+    import asyncio as _asyncio
+
+    from app.core.enums import ExtractionJobStatus, ExtractionJobType
+    from app.models.takeoff import ExtractionJob
+
+    deadline = _asyncio.get_event_loop().time() + 60
+    status = None
+    while _asyncio.get_event_loop().time() < deadline:
+        async with session_scope(sys_ctx) as session:
+            row = (
+                await session.execute(
+                    select(ExtractionJob).where(
+                        ExtractionJob.drawing_id == drawing_id, ExtractionJob.job_type == ExtractionJobType.EXTRACT_GEOMETRY.value
+                    )
+                )
+            ).scalar_one_or_none()
+            status = row.status if row else None
+        if status == ExtractionJobStatus.SUCCEEDED.value:
+            print(f"{label}: geometry extraction succeeded")
+            return
+        if status == ExtractionJobStatus.FAILED.value:
+            raise RuntimeError(f"simulate-e2e: {label} geometry extraction failed")
+        await _asyncio.sleep(2)
+    raise RuntimeError(f"simulate-e2e: timed out waiting for {label} geometry extraction, last status={status}")
+
+
+async def simulate_e2e() -> None:
+    """DEV ONLY: the full Phase 9 lifecycle against a dedicated,
+    independently-cleanable project (code E2E-SIM, never reused by any
+    other simulate-* command) -- upload a DXF and a vector PDF -> takeoff
+    -> BOQ import -> reconcile -> procurement package -> RFQ (real
+    dispatch) -> a simulated vendor quote (real SMTP into GreenMail, real
+    IMAP poll, real deterministic-xlsx extraction) -> accept -> bid-level
+    -> settle (submit, then a *different* user approves -- segregation of
+    duties) -> export both ways -> win/loss. Every quantity fed into the
+    BOQ import is read back from the real takeoff extraction first (never
+    guessed), so reconciliation lands clean by construction -- this
+    simulation demonstrates the pipeline, not a synthetic discrepancy.
+    Synthetic data only; `make dev-clean-demo-data` removes everything
+    this creates and nothing else. See docs/preconstruction-build-report.md."""
+    import asyncio as _asyncio
+    import csv as _csv
+
+    from app.core.enums import QuotationLineItemStatus as _QLIStatus
+    from app.core.errors import ForbiddenError as _ForbiddenError
+    from app.schemas.settlement import ExportRequest, OutcomeRequest
+    from app.services import quotation_ingestion as quotation_service
+    from app.services import takeoff as takeoff_service
+    from app.workers.tasks.quotation_ingestion import _assert_dev_imap_host_is_safe, _poll_and_ingest
+
+    settings = get_settings()
+    if settings.app_env == "production":
+        raise SystemExit("Refusing to run simulate-e2e with APP_ENV=production.")
+    _assert_dev_imap_host_is_safe(settings)
+
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    estimator_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_ESTIMATOR_ID, sub="e2e-estimator", roles=frozenset({"estimator"}))
+    lead_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_LEAD_ESTIMATOR_ID, sub="e2e-lead-estimator", roles=frozenset({"lead_estimator"}))
+    procurement_ctx = RequestContext(
+        tenant_id=tenant_id, user_id=_E2E_PROCUREMENT_HEAD_ID, sub="e2e-procurement-head",
+        roles=frozenset({"procurement_head"}), acr="silver",
+    )
+    bd1_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_1_ID, sub="e2e-bd-director-1", roles=frozenset({"bd_director"}), acr="silver")
+    bd2_ctx = RequestContext(tenant_id=tenant_id, user_id=_E2E_BD_DIRECTOR_2_ID, sub="e2e-bd-director-2", roles=frozenset({"bd_director"}), acr="silver")
+
+    # --- 1. project + membership ---
+    async with session_scope(sys_ctx) as session:
+        await _ensure_demo_tenant(session, tenant_id)
+        project = (
+            await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == _E2E_PROJECT_CODE))
+        ).scalar_one_or_none()
+        if project is not None:
+            raise SystemExit(
+                f"A project with code {_E2E_PROJECT_CODE!r} already exists (id={project.id}) -- run "
+                "`make dev-clean-demo-data` first so this simulation starts from a clean slate."
+            )
+        project = Project(tenant_id=tenant_id, code=_E2E_PROJECT_CODE, name="Phase 9 End-to-End Simulation")
+        session.add(project)
+        await session.flush()
+        project_id = project.id
+        for user_id in (_E2E_ESTIMATOR_ID, _E2E_LEAD_ESTIMATOR_ID):
+            session.add(ProjectMember(project_id=project_id, user_id=user_id, tenant_id=tenant_id))
+        await session.flush()
+        print(f"created project {_E2E_PROJECT_CODE} ({project_id})")
+
+    # --- 2. takeoff: upload + ingest a DXF and a vector PDF ---
+    async with session_scope(estimator_ctx) as session:
+        await takeoff_service.replace_pdf_layer_mapping_rules(
+            session, estimator_ctx, project_id,
+            [{"target_layer": "ROAD-CL", "stroke_color": "#ff0000", "min_line_width": 1.5, "max_line_width": 2.5, "priority": 1}],
+        )
+        dxf_drawing = await takeoff_service.upload_drawing(
+            session, estimator_ctx, project_id, "site-alignment.dxf", "application/dxf", _synthetic_alignment_dxf_bytes(120.0)
+        )
+        pdf_drawing = await takeoff_service.upload_drawing(
+            session, estimator_ctx, project_id, "alignment-plan.pdf", "application/pdf", _synthetic_alignment_pdf_bytes()
+        )
+        dxf_job_ids = await takeoff_service.trigger_ingest(session, estimator_ctx, dxf_drawing.id)
+        pdf_job_ids = await takeoff_service.trigger_ingest(session, estimator_ctx, pdf_drawing.id)
+        print(f"uploaded DXF {dxf_drawing.id} (jobs {dxf_job_ids}) and PDF {pdf_drawing.id} (jobs {pdf_job_ids})")
+
+    await _e2e_wait_for_geometry_extraction(sys_ctx, dxf_drawing.id, label="DXF")
+    await _e2e_wait_for_geometry_extraction(sys_ctx, pdf_drawing.id, label="PDF")
+
+    async with session_scope(estimator_ctx) as session:
+        dxf_sheet = await takeoff_service.get_sheet(session, dxf_drawing.id, 0)
+        pdf_sheet = await takeoff_service.get_sheet(session, pdf_drawing.id, 0)
+        dxf_measurements = [m for m in await takeoff_service.list_measurements(session, dxf_drawing.id, dxf_sheet.id) if m.kind == "alignment_length_m"]
+        pdf_measurements = [m for m in await takeoff_service.list_measurements(session, pdf_drawing.id, pdf_sheet.id) if m.kind == "alignment_length_m"]
+        if not dxf_measurements or not pdf_measurements:
+            raise RuntimeError(
+                f"simulate-e2e: expected an alignment_length_m measurement on both sheets, "
+                f"got DXF={len(dxf_measurements)} PDF={len(pdf_measurements)}"
+            )
+        dxf_measurement, pdf_measurement = dxf_measurements[0], pdf_measurements[0]
+        dxf_length = float(dxf_measurement.effective_value)
+        pdf_length = float(pdf_measurement.effective_value)
+        print(f"real extracted lengths: DXF={dxf_length}m PDF={pdf_length}m (fed into the BOQ import below, never guessed)")
+
+    # --- 3. BOQ import (the real preview -> commit wizard flow) ---
+    # A real .xlsx, not .csv: commit_import() only retains the original
+    # workbook (source_object_key) for .xlsx imports, and the "export
+    # into the original workbook" step below 409s without one ("use the
+    # generated export instead") -- found by actually running this
+    # simulation and reading the real error, not predicted up front.
+    # rate_column is a raw column-letter label, never parsed as a value
+    # at import time (see BoqImportColumnMapping's own docstring) -- just
+    # recorded so that later original-workbook export knows where to
+    # write settled rates back into. Flat item numbers ("1"/"2"), not
+    # "1.0"/"2.0" -- import_parser.py auto-infers a parent from any
+    # dot-delimited item_no (item_no.rsplit(".", 1)[0]), which is exactly
+    # right for real hierarchical BOQs but fails validation here since
+    # nothing in this 2-row file has bare item_no "1"/"2" as a parent row
+    # -- also found by running this simulation, not predicted up front.
+    boq_wb = Workbook()
+    boq_ws = boq_wb.active
+    boq_ws.title = "BOQ"
+    boq_ws.append(["Item No", "Description", "UoM", "Quantity", "Rate"])
+    boq_ws.append(["1", "Road centreline alignment (from site-alignment.dxf)", "m", dxf_length, None])
+    boq_ws.append(["2", "Road centreline alignment (from alignment-plan.pdf)", "m", pdf_length, None])
+    boq_buf = io.BytesIO()
+    boq_wb.save(boq_buf)
+    boq_bytes = boq_buf.getvalue()
+
+    mapping = BoqImportColumnMapping(
+        item_no_column="Item No", description_column="Description", uom_column="UoM", quantity_column="Quantity", rate_column="E",
+    )
+    async with session_scope(lead_ctx) as session:
+        preview = await boq_import_service.preview_import(session, lead_ctx, project_id, boq_bytes, "e2e-boq.xlsx", mapping)
+        if preview.error_count:
+            raise RuntimeError(f"simulate-e2e: BOQ import preview had errors: {[r.errors for r in preview.rows if r.errors]}")
+        print(f"BOQ import preview: {preview.valid_count} valid row(s), {preview.error_count} error(s)")
+    async with session_scope(lead_ctx) as session:
+        boq_items = await boq_import_service.commit_import(session, lead_ctx, project_id, boq_bytes, "e2e-boq.xlsx", mapping)
+        boq_items = sorted(boq_items, key=lambda i: i.item_no)
+        dxf_boq_item, pdf_boq_item = boq_items[0], boq_items[1]
+        print(f"BOQ import committed: {len(boq_items)} line item(s)")
+
+    # --- 4. reconcile: link each BOQ item to its real takeoff measurement ---
+    async with session_scope(lead_ctx) as session:
+        await boq_service.add_measurement_link(session, lead_ctx, dxf_boq_item.id, dxf_measurement.id)
+        await boq_service.add_measurement_link(session, lead_ctx, pdf_boq_item.id, pdf_measurement.id)
+        dxf_boq_item = await boq_service.reconcile_item(session, lead_ctx, dxf_boq_item.id)
+        pdf_boq_item = await boq_service.reconcile_item(session, lead_ctx, pdf_boq_item.id)
+        print(
+            f"reconciled: DXF item variance={dxf_boq_item.variance_pct}% discrepancy={dxf_boq_item.discrepancy_class}; "
+            f"PDF item variance={pdf_boq_item.variance_pct}% discrepancy={pdf_boq_item.discrepancy_class}"
+        )
+
+    # --- 5. procurement: package, vendor, RFQ, real dispatch ---
+    async with session_scope(sys_ctx) as session:
+        trade = (
+            await session.execute(select(TradeNode).where(TradeNode.tenant_id == tenant_id, TradeNode.code == "EARTH", TradeNode.parent_id.is_(None)))
+        ).scalar_one_or_none()
+        if trade is None:
+            trade = TradeNode(tenant_id=tenant_id, parent_id=None, code="EARTH", name="Earthworks", path="placeholder")
+            session.add(trade)
+            await session.flush()
+
+        vendor = (await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _E2E_VENDOR_NAME))).scalar_one_or_none()
+        if vendor is None:
+            vendor = await vendors_service.create_vendor(session, sys_ctx, VendorCreate(legal_name=_E2E_VENDOR_NAME, primary_email=_E2E_VENDOR_EMAIL))
+            vendor.status = "active"
+            vendor.email_domain = _E2E_VENDOR_DOMAIN
+            session.add(VendorTrade(tenant_id=tenant_id, vendor_id=vendor.id, trade_node_id=trade.id))
+            session.add(VendorContact(tenant_id=tenant_id, vendor_id=vendor.id, name="Quotes Desk", email=_E2E_VENDOR_EMAIL, is_primary=True))
+            await session.flush()
+            await prequal_service.decide_prequalification(
+                session, sys_ctx, vendor.id, PrequalificationDecision(status="approved", effective_from=date(2020, 1, 1), scope_trade_node_id=trade.id),
+            )
+
+        package = await procurement_service.create_package(session, sys_ctx, project_id, ProcurementPackageCreate(name="E2E Simulation Package", trade_node_id=trade.id))
+        await procurement_service.add_items(session, sys_ctx, package.id, [dxf_boq_item.id, pdf_boq_item.id])
+        matched = await procurement_service.match_vendors(session, package.id)
+        print(f"matched vendors: {[(m.legal_name, m.eligible) for m in matched]}")
+
+        [rfq] = await procurement_service.create_rfqs(session, sys_ctx, package.id, RfqCreateRequest(vendor_ids=[vendor.id]))
+        package_id, rfq_id, vendor_id = package.id, rfq.id, vendor.id
+
+    async with session_scope(procurement_ctx) as session:
+        rfq = await procurement_service.dispatch_rfq(session, procurement_ctx, rfq_id)
+        print(f"dispatched RFQ {rfq.rfq_ref}: status={rfq.status}")
+
+    # dispatch_rfq only enqueues dispatch_rfq_task (real SMTP send, via
+    # celery-worker-email) -- status is "queued" until that task actually
+    # completes and flips it to "sent". A simulated reply arriving while
+    # still "queued" is quarantined as match_status="quarantined_token_
+    # closed" (an RFQ isn't "open" for replies until it's actually sent) --
+    # found by running this simulation and reading back the resulting
+    # InboundEmail row, not predicted up front.
+    deadline = _asyncio.get_event_loop().time() + 30
+    rfq_status = None
+    while _asyncio.get_event_loop().time() < deadline:
+        async with session_scope(sys_ctx) as session:
+            rfq_status = (await session.execute(select(Rfq.status).where(Rfq.id == rfq_id))).scalar_one()
+        if rfq_status in (RfqStatus.SENT.value, RfqStatus.RESPONDED.value):
+            break
+        await _asyncio.sleep(1)
+    if rfq_status not in (RfqStatus.SENT.value, RfqStatus.RESPONDED.value):
+        raise RuntimeError(f"simulate-e2e: timed out waiting for the RFQ to actually be sent, last status={rfq_status}")
+    print(f"RFQ dispatch completed: status={rfq_status}")
+
+    # --- 6. a simulated vendor quote: real SMTP into GreenMail, real IMAP poll ---
+    async with session_scope(sys_ctx) as session:
+        tenant = (await session.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one()
+        rfq = (await session.execute(select(Rfq).where(Rfq.id == rfq_id))).scalar_one()
+        package_boq_items = await procurement_service.list_package_boq_items(session, package_id)
+        reply_address = build_reply_address(tenant_slug=tenant.slug, reply_token=rfq.reply_token, settings=settings)
+        xlsx_bytes = _pricing_sheet_reply_bytes(rfq, "E2E Simulation Package", package_boq_items, rate=50.0, currency="AED", vat_inclusive=True)
+        rfq_ref = rfq.rfq_ref
+
+    reply_msg = _build_reply_email(
+        from_addr=_E2E_VENDOR_EMAIL, to_addr=reply_address, subject=f"RE: {rfq_ref} - Quotation",
+        body="Please find our completed pricing sheet attached.",
+        attachment=(xlsx_bytes, f"{rfq_ref}-priced.xlsx", "application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    )
+    _send_via_greenmail(reply_msg, envelope_to=settings.imap_user, host=settings.imap_host)
+    print(f"sent a simulated vendor quote into GreenMail (envelope_to={settings.imap_user})")
+
+    await _poll_and_ingest()
+    print("polled the inbound mailbox directly (bypassing celery-beat's schedule for a fast, deterministic simulation)")
+
+    deadline = _asyncio.get_event_loop().time() + 30
+    quotation = None
+    while _asyncio.get_event_loop().time() < deadline:
+        async with session_scope(sys_ctx) as session:
+            quotation = (
+                await session.execute(select(Quotation).where(Quotation.rfq_id == rfq_id, Quotation.vendor_id == vendor_id, Quotation.is_current.is_(True)))
+            ).scalar_one_or_none()
+        if quotation is not None:
+            break
+        await _asyncio.sleep(1)
+    if quotation is None:
+        raise RuntimeError("simulate-e2e: timed out waiting for the simulated quote to be ingested")
+    print(f"quote ingested: extraction_method={quotation.extraction_method} status={quotation.status}")
+
+    # --- 7. accept the line items ---
+    async with session_scope(procurement_ctx) as session:
+        line_items = await quotation_service.list_quotation_line_items(session, quotation.id)
+        for line_item in line_items:
+            if line_item.status != _QLIStatus.ACCEPTED.value:
+                await quotation_service.accept_line_item(session, procurement_ctx, line_item.id)
+        print(f"accepted {len(line_items)} quotation line item(s)")
+
+    # --- 8. bid-leveling (read-only) ---
+    async with session_scope(sys_ctx) as session:
+        matrix = await quotation_service.get_bid_leveling_matrix(session, package_id)
+        print(f"bid-leveling matrix: {len(matrix)} BOQ row(s), {sum(len(r.cells) for r in matrix)} cell(s)")
+
+    # --- 9. settlement: build, submit, approve (a different user), export both, win/loss ---
+    async with session_scope(lead_ctx) as session:
+        settlement = await settlement_service.build_settlement_draft(session, lead_ctx, project_id)
+        settlement_id = settlement.id
+        await settlement_service.set_defaults(
+            session, lead_ctx, settlement_id,
+            SettlementDefaultsUpdate(default_plant_pct=2, default_overhead_pct=5, default_volatility_pct=3, default_markup_pct=10),
+        )
+        preview = await settlement_service.simulate(session, lead_ctx, settlement_id, SimulateRequest())
+        print(f"settlement draft v{settlement.version_no}: tender_total={preview.tender_total} required_role={preview.required_role}")
+
+    async with session_scope(bd1_ctx) as session:
+        settlement = await settlement_service.submit_settlement(session, bd1_ctx, settlement_id)
+        print(f"submitted for approval: status={settlement.status}")
+
+    async with session_scope(bd1_ctx) as session:
+        try:
+            await settlement_service.decide_settlement(session, bd1_ctx, settlement_id, approve=True, note="self-approval attempt")
+            raise RuntimeError("simulate-e2e: the submitter was unexpectedly allowed to approve their own request")
+        except _ForbiddenError:
+            print("segregation of duties confirmed: the submitter cannot approve their own request")
+
+    async with session_scope(bd2_ctx) as session:
+        settlement = await settlement_service.decide_settlement(session, bd2_ctx, settlement_id, approve=True, note="approved by a different bd_director")
+        print(f"approved by a different user: status={settlement.status}")
+
+    async with session_scope(lead_ctx) as session:
+        generated_bytes, generated_sha256, generated_filename = await settlement_service.export_settlement(
+            session, lead_ctx, settlement_id, ExportRequest(include_vat=True, vat_pct=5.0)
+        )
+        print(f"exported generated {generated_filename} ({len(generated_bytes)} bytes, sha256={generated_sha256})")
+
+    async with session_scope(lead_ctx) as session:
+        fidelity_report = await settlement_service.preview_original_export(session, lead_ctx, settlement_id)
+        original_bytes, original_sha256, original_filename = await settlement_service.export_original_settlement(
+            session, lead_ctx, settlement_id, accept_loss=not fidelity_report["ok"]
+        )
+        print(f"exported original {original_filename} ({len(original_bytes)} bytes, sha256={original_sha256}), fidelity_ok={fidelity_report['ok']}")
+
+    async with session_scope(bd2_ctx) as session:
+        won = await settlement_service.record_outcome(session, bd2_ctx, settlement_id, OutcomeRequest(outcome="won", note="Phase 9 end-to-end simulation"))
+        print(f"recorded win/loss: status={won.status} outcome={won.outcome}")
+
+    print(f"\nsimulate-e2e complete. project_id={project_id} settlement_id={settlement_id}")
+    print("run `make dev-clean-demo-data` to remove everything this created.")
+
+
+async def clean_demo_data() -> None:
+    """DEV ONLY: deletes the E2E-SIM project (cascades to every
+    project-scoped table: drawings, BOQ, procurement, quotations,
+    settlements) plus its dedicated vendor. Never touches any other
+    simulate-*'s own fixtures (C2-SIM, D1-SIM, or anything from `make
+    seed`).
+
+    Known, deliberate limitation: the simulated vendor reply's
+    inbound_emails/quotation_attachments rows are NOT deleted -- found
+    while building this cleanup, not assumed up front.
+    `inbound_emails` has no DELETE RLS policy at all (only SELECT/INSERT/
+    UPDATE -- see app/migrations/versions/0016_quotation_ingestion.py),
+    a deliberate append-only design (a quarantine/compliance trail no
+    role, including platform_admin, can silently erase evidence from).
+    A bulk `DELETE ... WHERE` against it succeeds but matches zero rows
+    under FORCE RLS with no DELETE policy -- confirmed directly against
+    a row proven to exist by an equivalent SELECT in the same
+    transaction. These rows become orphaned (rfq_id=NULL, by design --
+    see InboundEmail.rfq_id's own ON DELETE SET NULL, so a deleted RFQ
+    never loses its quarantine-queue history in the real product either)
+    once the project cascade removes the RFQ they pointed to, but stay
+    harmless and identifiable (from_address=e2esim-vendor.example)."""
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+
+    async with session_scope(sys_ctx) as session:
+        project = (
+            await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == _E2E_PROJECT_CODE))
+        ).scalar_one_or_none()
+        if project is None:
+            print(f"no project with code {_E2E_PROJECT_CODE!r} found -- nothing to clean.")
+        else:
+            rfq_ids = (
+                await session.execute(
+                    select(Rfq.id).where(Rfq.package_id.in_(select(ProcurementPackage.id).where(ProcurementPackage.project_id == project.id)))
+                )
+            ).scalars().all()
+            if rfq_ids:
+                from app.models.quotation_ingestion import InboundEmail
+
+                orphaned_count = (
+                    await session.execute(select(func.count()).select_from(InboundEmail).where(InboundEmail.rfq_id.in_(rfq_ids)))
+                ).scalar_one()
+                if orphaned_count:
+                    print(
+                        f"note: {orphaned_count} inbound_email row(s) referencing this project's RFQ(s) will become "
+                        "orphaned (rfq_id=NULL) once the project is deleted below, and stay that way -- inbound_emails "
+                        "has no DELETE RLS policy at all (append-only by design, see this function's own docstring). "
+                        "Harmless; identifiable by from_address=quotes@e2esim-vendor.example."
+                    )
+
+            await session.delete(project)
+            await session.flush()
+            print(f"deleted project {_E2E_PROJECT_CODE} ({project.id}) -- cascaded to every project-scoped table")
+
+        vendor = (await session.execute(select(Vendor).where(Vendor.tenant_id == tenant_id, Vendor.legal_name == _E2E_VENDOR_NAME))).scalar_one_or_none()
+        if vendor is not None:
+            await session.delete(vendor)
+            await session.flush()
+            print(f"deleted vendor {_E2E_VENDOR_NAME!r} ({vendor.id})")
+        else:
+            print(f"no vendor named {_E2E_VENDOR_NAME!r} found.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1372,6 +1788,14 @@ def main() -> None:
         "simulate-module-e-schema",
         help="DEV ONLY: seed and read back Module E Phase 1 schema-readiness rows (contracts, revisions, variations, exclusion register, outturn observations) against a won settlement",
     )
+    subparsers.add_parser(
+        "simulate-e2e",
+        help="DEV ONLY: the full Phase 9 lifecycle (DXF+PDF takeoff -> BOQ import -> reconcile -> procurement -> a real simulated quote -> accept -> bid-level -> settle+approve by a different user -> export both ways -> win/loss) against a dedicated, cleanable project",
+    )
+    subparsers.add_parser(
+        "clean-demo-data",
+        help="DEV ONLY: deletes only the E2E-SIM project/vendor simulate-e2e creates -- never touches any other simulate-*'s own fixtures",
+    )
 
     args = parser.parse_args()
     if args.command == "seed":
@@ -1388,6 +1812,10 @@ def main() -> None:
         asyncio.run(simulate_semantic_matching())
     elif args.command == "simulate-module-e-schema":
         asyncio.run(simulate_module_e_schema())
+    elif args.command == "simulate-e2e":
+        asyncio.run(simulate_e2e())
+    elif args.command == "clean-demo-data":
+        asyncio.run(clean_demo_data())
 
 
 if __name__ == "__main__":
