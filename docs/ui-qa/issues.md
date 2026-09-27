@@ -353,3 +353,138 @@ per `docs/ui-qa-brief.md`; P2 is deferred to Phase 4.
   to it being applied consistently, which is now fixed) is the right
   long-term choice given `docs/ui-qa-brief.md` §0.2's stated Decimal-to-
   the-wire architecture; and the missing shared money-formatting utility.
+
+## Phase 2 — pages 9-11 (QuarantineQueuePage, QuoteReviewPage,
+## BidLevelingPage), tested as procurement_head / estimator / platform_admin
+
+### UI-P2-012 (P1, fixed) — Quarantine/review queue never stopped showing an email once it was auto-processed successfully, drowning out the ones that actually need attention
+- **Page(s):** `QuarantineQueuePage.tsx`
+- **Role:** procurement_head / bd_director / managing_director (anyone who
+  can see the queue)
+- **Steps:** log in as `procurement1`, open any project's Quarantine and
+  review queue.
+- **Expected:** only inbound emails that actually need a human's attention
+  (flagged by the system as `needs_review`).
+- **Actual:** `list_inbound_review_queue` (`backend/app/services/
+  quotation_ingestion.py`) filtered on `review_status == "open"` alone.
+  `review_status` defaults to `"open"` for **every** inbound email,
+  including ones that were auto-processed and never needed review at all
+  (`app/models/quotation_ingestion.py`'s own comment: `needs_review` is set
+  even when `match_status == matched`; auto-processing only proceeds when
+  `match_status == matched AND not needs_review`) — it only moves off
+  `"open"` once someone resolves/dismisses/attaches a row. Confirmed live
+  against the real dev tenant ("demo"): 19 ordinary successfully-matched
+  emails sat in the queue forever alongside the 4 that genuinely needed
+  attention, and this only gets worse as normal mail volume grows over
+  time — exactly the kind of thing that would make a real procurement head
+  stop trusting the queue.
+- **Fix:** added `InboundEmail.needs_review.is_(True)` to the query.
+- **Regression test:** `backend/tests/integration/
+  test_quotation_ingestion_review.py::
+  test_review_queue_excludes_auto_processed_emails_that_never_needed_review`
+  (10 passed in the file, up from 9) and `quarantine-quotes-bidleveling.spec.ts`
+  → "the review queue excludes ordinary auto-processed emails and only
+  shows ones needing attention".
+
+### UI-P2-013 (P2, confirmed, not fixed — needs a main-session decision) — QuarantineQueuePage lives at a project-scoped URL but shows tenant-wide data, not that project's
+- **Page(s):** `QuarantineQueuePage.tsx` (route
+  `/projects/:id/procurement/quarantine`)
+- **Role:** any
+- **What was found:** `GET /quotation-inbound-review`
+  (`backend/app/api/v1/routes/quotation_ingestion.py`) is **not**
+  project-scoped at all — it takes no `project_id` and returns every
+  `needs_review` row RLS lets the caller's tenant see. The frontend page
+  faithfully calls this unfiltered endpoint regardless of which project's
+  `:id` is in the URL. Practical effect: opening Project A's quarantine
+  queue and Project B's quarantine queue shows the **identical** list,
+  with nothing in the UI indicating this isn't project-scoped — confusing
+  for a user who reasonably expects a project-nested page to show that
+  project's own data (`InboundEmail` also has no `project_id` column at
+  all; only an optional `rfq_id`, which is `NULL` for exactly the
+  `quarantined_unknown_tenant` rows that need review most).
+- **Why not fixed here:** fixing this properly is a product decision, not
+  a page patch — either (a) move the page to a real global route
+  (`/procurement/quarantine`, matching what it actually shows), which
+  changes navigation/IA, or (b) add real project scoping to `InboundEmail`
+  and the query, which is a schema change. Flagging for Phase 3/4 /
+  main-session decision rather than guessing.
+- Not to be confused with UI-P2-012 above (a real query bug, fixed) — this
+  one is a navigation/IA mismatch, not incorrect data.
+
+### UI-P2-014 (P2, confirmed, not fixed) — No `platform_admin` demo user exists anywhere; its one exclusive UI action ("Resolve tenant") cannot be exercised live at all
+- **Page(s):** `QuarantineQueuePage.tsx`'s "Resolve tenant" control (visible
+  only to `platform_admin` on a `tenant_id IS NULL` row)
+- **Role:** platform_admin
+- Checked `deploy/keycloak/bootstrap.sh`'s `seed_user` calls (estimator1,
+  lead1, procurement1, bd1, md1 — five roles, matching the SRS's five, per
+  `docs/ui-qa/coverage.md`'s own note that `platform_admin` is
+  "Keycloak-only, not in the SRS's five") and every `frontend/e2e/
+  real-backend/*.spec.ts` and `totp.ts`: no `platform_admin` user is ever
+  seeded or logged in as, anywhere. The 3 real `quarantined_unknown_tenant`
+  rows sitting in the dev database right now (confirmed via direct SQL)
+  are consequently untestable through the real UI by anyone, and a real
+  deployment team has no documented way to interactively exercise this
+  action either. Recommending Phase 1/3 add a seeded `admin1` /
+  `platform_admin` demo user the same way the other five are seeded.
+- **Regression test:** `quarantine-quotes-bidleveling.spec.ts` →
+  "resolve-tenant is not offered to a non-platform_admin role" (confirms
+  the negative case only; the positive case is exactly what's blocked).
+
+### UI-P2-015 (P1, fixed) — QuoteReviewPage has no client-side role gate on Accept/Reject/Reject quotation/Set currency/Promote; an unauthorized role gets a silently-failing button
+- **Page(s):** `QuoteReviewPage.tsx`
+- **Role:** estimator (server allows only procurement_head/bd_director/
+  managing_director — `_REVIEW_ROLES` in `backend/app/api/v1/routes/
+  quotation_ingestion.py`; notably **not** even `lead_estimator`, despite
+  this page being nav-gated to "all" per `docs/ui-qa/coverage.md`)
+- **Steps:** log in as `estimator1`, open Quote review on any project with
+  quotations, try Accept/Reject/Promote/Set currency/Reject quotation.
+- **Expected:** these controls are hidden for a role that can't use them,
+  same pattern already fixed on TypologyPage/ProcurementPackagesPage
+  (UI-P2-007/UI-P2-008).
+- **Actual:** every one of these buttons was fully rendered for any role,
+  and **none** of the five mutations (`useAcceptLineItem`,
+  `useRejectLineItem`, `usePromoteQuotationVersion`,
+  `useResolveCurrencyVat`, `useRejectQuotation`) rendered its `.isError`
+  state — a click by an unauthorized role just silently 403'd with zero
+  feedback.
+- **Fix:** added a `hasRole(procurement_head, bd_director,
+  managing_director)` gate around all five actions, and error text under
+  each one.
+- **Regression test:** `quarantine-quotes-bidleveling.spec.ts` →
+  "estimator sees no review actions, and a direct accept attempt 403s
+  server-side" / "procurement_head sees review actions...".
+
+### UI-P2-016 (confirmed correct, not a bug) — BidLevelingPage is read-only; no role gate needed
+- **Page(s):** `BidLevelingPage.tsx`
+- Every action on this page is a client-side cell selection (no mutation
+  hooks at all) — checked deliberately given the pattern above, but there
+  is nothing here for any role to be incorrectly allowed to do. No fix
+  needed.
+
+### UI-P2-017 (P2, not fixed, deferred to Phase 4) — BidLevelingPage shows nothing (not even an empty-state message) when a selected package has zero bid-leveling rows
+- **Page(s):** `BidLevelingPage.tsx`
+- The table only renders when `rows.length > 0`; a package with no
+  accepted line items yet renders a blank area below the package dropdown
+  with no "no bids yet" message and no loading indicator for any of its
+  three queries. Not exercised live this run (every demo project has at
+  least one accepted line item), found by code review. Same class of gap
+  as UI-P2-006 (ProjectsListPage's missing empty state) — Phase 4 polish,
+  not a functional break.
+
+### Confirmed live — `JsonDecimal` fix (UI-P2-011) verified correct on the pages it actually affects
+Both `QuoteReviewPage` and `BidLevelingPage` now render `unit_price`/
+`quantity`/`confidence`/`normalized_unit_price` as real JSON numbers end to
+end against the real backend (`typeof` assertions in
+`quarantine-quotes-bidleveling.spec.ts`, not just "it displays *some*
+text") — confirms UI-P2-011's fix actually reaches these two already-shipped
+pages, not just the schema layer.
+
+### Reconfirmed, not new
+- `QuarantineQueuePage`'s resolve-tenant/attach/dismiss still use
+  `window.prompt` (Phase 3 app-wide modal replacement item).
+- No back link on `QuarantineQueuePage`/`QuoteReviewPage`/
+  `BidLevelingPage` either — same app-wide gap as UI-P2-004, still
+  deliberately not patched one-off (now confirmed on 11 of the app's ~15
+  pages).
+- Raw UUID text inputs for "Tenant ID"/"RFQ ID" on `QuarantineQueuePage`
+  (paste-a-UUID-by-hand instead of a picker) — P2 polish, Phase 4.

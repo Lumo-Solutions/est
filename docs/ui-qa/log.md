@@ -138,7 +138,9 @@ a clean start) — this is why Phase 1's new settlement-status coverage
 uses its own QA-DEMO project instead of building on D1-SIM.
 
 ## Phase 2: functional QA
-**Status: in progress — blocked this run before any page was tested.**
+**Status: in progress — pages 1-11 of ~15 done (see below); Settlement,
+Export, Win/loss, Admin, Audit and the cross-cutting permission checks
+remain.**
 
 Branch `phase-2-functional-qa` created off `master`.
 
@@ -319,6 +321,82 @@ bid-leveling), AdminPage, AuditPage, plus the cross-cutting
 nav-hidden-page-still-403s-server-side check from `coverage.md` §4. Any
 run testing estimator/lead_estimator writes should use the new
 `ensureProjectMember()` helper up front.
+
+### Main-session fix, between Phase 2 runs: the JsonDecimal sweep was genuinely incomplete
+Following up the "cross-cutting note" above, the main session found the
+prior note's framing was only half the story: `JsonDecimal` (float-not-
+string) was the design, but it had only ever been applied to
+`settlement.py`/`approvals.py` (`docs/build-log.md`'s own Phase 10 "known
+gaps carried forward" already flagged this, unfixed until now). Five
+response fields in `app/schemas/quotation_ingestion.py` — read by the
+already-shipped `QuoteReviewPage`/`BidLevelingPage` — and two in
+`app/schemas/module_e.py` (no frontend yet) still used bare `Decimal`,
+which serializes to JSON as a **string** while every matching
+`frontend/src/types/api.ts` field is typed `number`. This was live, not
+latent. Fixed both files, added
+`backend/tests/unit/test_response_schema_json_decimal.py` (a static sweep
+across every `ORMModel` subclass in `app/schemas`, so this can't
+reintroduce itself). `make test-unit` (344 passed) and `make test-api` (19
+passed) green. See `docs/ui-qa/issues.md` UI-P2-011.
+
+## Phase 2 — pages 9-11: QuarantineQueuePage, QuoteReviewPage, BidLevelingPage
+Tested as procurement_head/estimator, plus confirming platform_admin's one
+action is untestable (see below). Mechanism: same as pages 5-8, the
+real-backend Playwright test runner (not the interactive MCP browser,
+still unreliable this session).
+
+**Found and fixed 2 P1s** (both live-confirmed):
+- **QuarantineQueuePage**: `list_inbound_review_queue`
+  (`backend/app/services/quotation_ingestion.py`) filtered on
+  `review_status == "open"` alone, but `review_status` defaults to `"open"`
+  for *every* inbound email, including ones auto-processed successfully and
+  never needing a human at all. Confirmed live against the real dev
+  ("demo") tenant: 19 ordinary matched emails sat in the queue forever
+  alongside the 4 that actually needed attention. Added a
+  `needs_review == True` filter. This is a backend service-layer fix, not
+  a page-scoped one — reviewed carefully since it touches what a real
+  procurement head sees as needing action; it does not touch RLS, auth, or
+  any write path, only which rows a read query returns. New integration
+  test (`test_review_queue_excludes_auto_processed_emails_that_never_needed_review`,
+  10 passed in the file, up from 9).
+- **QuoteReviewPage**: same recurring pattern as UI-P2-007/UI-P2-008 —
+  Accept/Reject/Reject-quotation/Set-currency/Promote had no client-side
+  role gate at all (server: procurement_head/bd_director/
+  managing_director only, notably not even lead_estimator) and zero error
+  feedback on any of the five mutations. Added the gate and error display.
+
+**Confirmed, not fixed — needs a decision, not a page patch:**
+- `QuarantineQueuePage` lives at a project-scoped URL
+  (`/projects/:id/procurement/quarantine`) but its data is entirely
+  tenant-wide, not project-specific (the underlying endpoint takes no
+  `project_id` at all) — opening any two projects' quarantine queues shows
+  the identical list. Fixing this means either moving it to a real global
+  route or adding project scoping to `InboundEmail` (schema change) —
+  flagging for Phase 3/4 rather than guessing which.
+- **No `platform_admin` demo user exists anywhere** in this repo (checked
+  `bootstrap.sh`'s `seed_user` calls and every real-backend spec) — its one
+  exclusive action, "Resolve tenant" on an unknown-tenant quarantine row,
+  cannot be exercised live by anyone right now, even though 3 real rows
+  needing exactly that sit in the dev database. Recommending a seeded
+  `admin1` user the same way the other five roles are.
+- BidLevelingPage confirmed read-only (no role gate needed — deliberately
+  checked, not assumed) but has no empty-state message for a package with
+  zero bid-leveling rows (P2, Phase 4).
+
+**JsonDecimal fix (UI-P2-011) verified live** on both pages it actually
+affects: `unit_price`/`quantity`/`confidence`/`normalized_unit_price` all
+confirmed `typeof === 'number'` end to end against the real backend, and
+rendering correctly in the DOM.
+
+New regression tests: `frontend/e2e/real-backend/
+quarantine-quotes-bidleveling.spec.ts`, 6 tests, all passing (one full run,
+5.3m, no flakiness this time). Commits: `fix(backend): quarantine queue
+excludes auto-processed emails`, `fix(frontend): role-gate QuoteReviewPage
+review actions`, `test(e2e): Phase 2 coverage for quarantine/quotes/
+bid-leveling`, `docs(ui-qa): log pages 9-11 results`.
+
+**Not yet covered:** SettlementPage, ExportPage, WinLossPage, AdminPage,
+AuditPage, the cross-cutting nav-hidden-page-still-403s check.
 
 ## Phase 3: gap-fill
 Not started.
