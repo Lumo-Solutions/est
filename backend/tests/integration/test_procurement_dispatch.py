@@ -12,6 +12,7 @@ task registers itself with a broker in this test environment.
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import date
 
@@ -43,7 +44,10 @@ TENANT = uuid.UUID("8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00")
 
 def _ctx(roles: frozenset[str], *, is_system: bool = False, user_id: uuid.UUID | None = None, acr: str | None = None) -> RequestContext:
     user_id = user_id or uuid.uuid4()
-    return RequestContext(tenant_id=TENANT, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr)
+    # has_recent_step_up (fix/keycloak-step-up) requires acr AND a recent
+    # auth_time, not acr alone.
+    auth_time = int(time.time()) if acr else None
+    return RequestContext(tenant_id=TENANT, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr, auth_time=auth_time)
 
 
 async def _seed_draft_rfq(session: AsyncSession) -> uuid.UUID:

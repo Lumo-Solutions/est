@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     jwks_cache_ttl_s: int = Field(default=600, alias="JWKS_CACHE_TTL_S")
     jwt_leeway_s: int = Field(default=30, alias="LEEWAY_S")
     required_acr_for_approval: str = Field(default="silver", alias="REQUIRED_ACR_FOR_APPROVAL")
+    # A still-valid session/token can carry acr=silver long after the OTP
+    # entry that earned it -- Keycloak's own realm-installtec.json Level 2
+    # flow subflow (fix/keycloak-step-up) re-checks its own loa-max-age=300
+    # before letting a NEW authentication reach silver, but a refresh_token
+    # grant on an EXISTING silver session just re-mints an access token that
+    # still says acr=silver, auth_time unchanged, no matter how old that
+    # auth_time gets. app/security/deps.py::has_recent_step_up re-checks
+    # auth_time against this independently for exactly that reason. Matches
+    # Keycloak's own loa-max-age for the same acr level by default.
+    step_up_max_age_s: int = Field(default=300, alias="STEP_UP_MAX_AGE_S")
 
     # --- session / cookies ---
     session_secret: str = Field(default="", alias="SESSION_SECRET")

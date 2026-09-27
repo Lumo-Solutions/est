@@ -6,6 +6,7 @@ gated, reason-code validation, role gating). See docs/module-d2-plan.md."""
 from __future__ import annotations
 
 import io
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -38,7 +39,10 @@ _MEMBER_USER_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e2")
 
 def _ctx(roles: frozenset[str], *, tenant_id: uuid.UUID, is_system: bool = False, user_id: uuid.UUID | None = None, acr: str | None = None) -> RequestContext:
     user_id = user_id or uuid.uuid4()
-    return RequestContext(tenant_id=tenant_id, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr)
+    # has_recent_step_up (fix/keycloak-step-up) requires acr AND a recent
+    # auth_time, not acr alone.
+    auth_time = int(time.time()) if acr else None
+    return RequestContext(tenant_id=tenant_id, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr, auth_time=auth_time)
 
 
 async def _system_ctx(session: AsyncSession, tenant_id: uuid.UUID) -> RequestContext:

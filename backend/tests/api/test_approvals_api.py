@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -75,6 +76,28 @@ async def test_decide_without_mfa_step_up_is_rejected(authed_client):
     request_id = create_resp.json()["id"]
 
     approver = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))  # acr defaults to None (no step-up)
+    resp = await approver.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})
+    assert resp.status_code == 403
+    assert resp.json()["type"] == "urn:installtec:step-up-required"
+
+
+async def test_decide_with_stale_silver_acr_is_rejected(authed_client):
+    # has_recent_step_up (fix/keycloak-step-up) checks acr AND that
+    # auth_time is actually recent -- a still-valid session/token can go on
+    # reporting acr=silver long after the OTP entry that earned it (cookie
+    # reattachment, a refresh_token grant), so acr=silver alone must NOT be
+    # enough once auth_time is older than Settings.step_up_max_age_s (300s
+    # default). This is the exact bug fixed on that branch: before it, this
+    # request would have been allowed through.
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    create_resp = await creator.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 10000, "currency": "AED"},
+    )
+    request_id = create_resp.json()["id"]
+
+    stale_auth_time = int(time.time()) - 301
+    approver = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), acr="silver", auth_time=stale_auth_time)
     resp = await approver.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})
     assert resp.status_code == 403
     assert resp.json()["type"] == "urn:installtec:step-up-required"

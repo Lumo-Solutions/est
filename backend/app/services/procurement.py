@@ -32,23 +32,19 @@ from app.core.errors import (
     StepUpRequiredError,
     ValidationAppError,
 )
+from app.core.config import get_settings
 from app.models.boq import BoqLineItem
 from app.models.procurement import ProcurementPackage, ProcurementPackageItem, Rfq
 from app.models.tenancy import Project
 from app.models.vendors import Vendor, VendorContact, VendorTrade
 from app.schemas.procurement import MatchedVendorOut, ProcurementPackageCreate, RfqCreateRequest
+from app.security.deps import has_recent_step_up
 from app.services import audit
 from app.services import prequal as prequal_service
 from app.services import vendors as vendors_service
 from app.services.projects import assert_can_see_project
 
 _ELIGIBLE_PREQUAL_STATUSES = {PrequalificationStatus.APPROVED.value, PrequalificationStatus.CONDITIONAL.value}
-# Same rank table as app/security/deps.py::require_mfa_step_up and
-# app/services/approvals.py -- kept as its own copy here rather than a
-# shared import, matching approvals.py's precedent (this module is not a
-# FastAPI dependency, and duplicating a two-entry dict is cheaper to reason
-# about than adding a cross-layer import for it).
-_ACR_RANK = {"bronze": 1, "silver": 2}
 _DISPATCH_ROLES = ("procurement_head", "bd_director", "managing_director")
 
 
@@ -322,7 +318,10 @@ async def list_rfqs(session: AsyncSession, package_id: UUID) -> list[Rfq]:
 def _require_dispatch_authority(ctx: RequestContext) -> None:
     if not ctx.has_role(*_DISPATCH_ROLES):
         raise ForbiddenError(f"Requires one of roles: {', '.join(_DISPATCH_ROLES)}")
-    if _ACR_RANK.get(ctx.acr or "", 0) < _ACR_RANK.get("silver", 2):
+    # has_recent_step_up (app/security/deps.py), shared with
+    # approvals.py::decide() -- same acr-AND-auth_time-recency check, not a
+    # separate copy that could drift. See fix/keycloak-step-up.
+    if not has_recent_step_up(ctx, get_settings()):
         raise StepUpRequiredError("Dispatching an RFQ requires a recent MFA step-up authentication")
 
 

@@ -8,6 +8,7 @@ role per permission, per the build brief's testing rule).
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -39,7 +40,12 @@ pytestmark = pytest.mark.asyncio
 
 def _ctx(roles: frozenset[str], *, tenant_id: uuid.UUID, is_system: bool = False, user_id: uuid.UUID | None = None, acr: str | None = None) -> RequestContext:
     user_id = user_id or uuid.uuid4()
-    return RequestContext(tenant_id=tenant_id, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr)
+    # auth_time="just now" whenever acr is set -- has_recent_step_up
+    # (app/security/deps.py, fix/keycloak-step-up) requires both acr AND a
+    # recent auth_time, not acr alone, so a bare acr="silver" here would
+    # otherwise 403 with StepUpRequiredError.
+    auth_time = int(time.time()) if acr else None
+    return RequestContext(tenant_id=tenant_id, user_id=user_id, sub=str(user_id), roles=roles, is_system=is_system, acr=acr, auth_time=auth_time)
 
 
 async def _system_ctx(session: AsyncSession, tenant_id: uuid.UUID) -> RequestContext:

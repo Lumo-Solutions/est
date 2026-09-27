@@ -35,6 +35,13 @@ class Principal:
     amr: list[str]
     sid: str | None
     exp: int
+    # Standard OIDC claim: when the underlying authentication EVENT happened,
+    # not when this particular token was issued/refreshed -- Keycloak
+    # preserves the original value across refresh_token grants, so this is
+    # what lets require_mfa_step_up (security/deps.py) tell a genuinely
+    # recent step-up from an old one whose still-valid access/refresh token
+    # just happens to carry acr=silver from long ago. See fix/keycloak-step-up.
+    auth_time: int | None = None
 
 
 class TokenValidator:
@@ -118,4 +125,5 @@ class TokenValidator:
             amr=claims.get("amr", []),
             sid=claims.get("sid"),
             exp=int(claims["exp"]),
+            auth_time=int(claims["auth_time"]) if claims.get("auth_time") is not None else None,
         )
