@@ -580,8 +580,44 @@ not just trusting subagent claims):**
 green. Branch `phase-2-functional-qa` is done.
 
 ## Phase 3: gap-fill
-Not started. Ready to begin once `phase-2-functional-qa` is reviewed and
-merged.
+**Status: in progress.** Branch `phase-3-gap-fill` created off `master`
+after Phase 2's merge.
+
+1. **Research pass** (no code changes): a fork surveyed the existing
+   Keycloak admin API integration (none existed), the CRUD/audit/RLS
+   pattern to copy for new endpoints, the frontend feature-module pattern,
+   every vendor/prequalification/cost-library/Module E endpoint's exact
+   shape, saved-scenario/settlement-override endpoints, every remaining
+   `window.prompt` call site (6, all text-input style, no
+   `window.confirm` anywhere, no existing modal component), and the real
+   project-editing/members gaps. Found two small additional gaps not in
+   `coverage.md`: no `GET /vendors/{id}/certificates` list endpoint and no
+   `GET /cost-items` list endpoint (both get-by-id only) -- both needed
+   for a real browsing screen, both to be added following existing
+   patterns.
+2. **Users & roles endpoint** (`GET /users`, main-session work, not
+   delegated -- new backend attack surface): installtec-backend's service
+   account is now enabled with exactly `view-users`/`query-users`/
+   `query-groups` on `realm-management`, plus a new client-role mapper on
+   the `installtec-claims` scope (without it, Keycloak's admin API 403s
+   every call regardless of the role grant, since it authorizes off the
+   token's own claims). `app/integrations/keycloak_admin.py` is
+   tenant-scoped by construction: Keycloak's admin API has no tenant
+   concept, so it walks the group tree for the caller's own tenant group
+   and only ever lists that group's members, failing closed (empty list)
+   if none matches. Verified end-to-end against the real dev stack (not
+   just mocked tests) as both an allowed role (`lead_estimator`, real
+   users+roles returned, noise roles like `default-roles-installtec`
+   filtered out) and a denied role (`estimator`, 403). 3 new unit tests +
+   2 new api tests (lowest allowed role + denied role), `make test-unit`:
+   347 passed, `make test-api`: 21 passed.
+
+Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
+before the next starts): vendor master + duplicate review + prequalification
+UI; cost library + Module E read-view UI; project location/members UI +
+saved-scenario delete; quotation attachments/exclusion-ack/fx-rate UI +
+settlement per-trade/per-line override UI; shared modal component +
+window.prompt replacement; taxonomy tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
