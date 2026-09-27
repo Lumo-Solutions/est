@@ -7,14 +7,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier, ApprovalRequest, ApprovalStep
 from app.schemas.approvals import ApprovalPolicyCreate, ApprovalRequestCreate
+from app.security.deps import has_recent_step_up
 from app.services import audit
-
-_ACR_RANK = {"bronze": 1, "silver": 2}
 
 
 async def list_policies(session: AsyncSession) -> list[tuple[ApprovalPolicy, list[ApprovalPolicyTier]]]:
@@ -247,7 +247,11 @@ async def decide(
 
     # Tier's requires_mfa is checked against the caller's token acr claim --
     # policy tiers default requires_mfa=true (migration 0008 seed).
-    if (_ACR_RANK.get(ctx.acr or "", 0)) < _ACR_RANK.get("silver", 2):
+    # has_recent_step_up (app/security/deps.py) checks acr AND that the
+    # underlying auth_time is actually recent -- acr=silver alone can
+    # persist on a still-valid session/token long after the OTP entry that
+    # earned it. See fix/keycloak-step-up.
+    if not has_recent_step_up(ctx, get_settings()):
         raise StepUpRequiredError("This approval decision requires a recent MFA step-up")
 
     current_step.status = "approved" if approve else "rejected"

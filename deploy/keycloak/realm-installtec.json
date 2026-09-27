@@ -20,6 +20,7 @@
   "attributes": {
     "acr.loa.map": "{\"bronze\":1,\"silver\":2}"
   },
+  "browserFlow": "browser-stepup",
   "requiredActions": [
     {
       "alias": "CONFIGURE_TOTP",
@@ -219,6 +220,125 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "browser-stepup",
+      "description": "acr.loa.map step-up flow -- see docs/keycloak-setup.md / fix/keycloak-step-up.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 0,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 1,
+          "flowAlias": "Auth Flow",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Auth Flow",
+      "description": "Level-of-authentication step-up subflow",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 0,
+          "flowAlias": "Level 1",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 1,
+          "flowAlias": "Level 2",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Level 1",
+      "description": "bronze: password + TOTP at login",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorConfig": "level1-condition",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 0,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 1,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 2,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Level 2",
+      "description": "silver: TOTP re-entered recently (step-up)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorConfig": "level2-condition",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 0,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 1,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "level1-condition",
+      "config": {
+        "loa-condition-level": "1",
+        "loa-max-age": "28800"
+      }
+    },
+    {
+      "alias": "level2-condition",
+      "config": {
+        "loa-condition-level": "2",
+        "loa-max-age": "300"
       }
     }
   ]

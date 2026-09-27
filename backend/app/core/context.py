@@ -17,6 +17,11 @@ class RequestContext:
     sub: str | None
     roles: frozenset[str] = field(default_factory=frozenset)
     acr: str | None = None
+    # Epoch seconds of the underlying authentication EVENT (OIDC's
+    # standard auth_time claim), not when the current token was issued --
+    # see app/security/deps.py::has_recent_step_up for why this, not acr
+    # alone, is what a step-up check must verify recency against.
+    auth_time: int | None = None
     ip_address: str | None = None
     user_agent: str | None = None
     request_id: str | None = None

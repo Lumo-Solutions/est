@@ -78,6 +78,7 @@ async def auth_callback(
         sub=principal.sub,
         roles=principal.roles,
         acr=principal.acr,
+        auth_time=principal.auth_time,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
         request_id=getattr(request.state, "request_id", None),

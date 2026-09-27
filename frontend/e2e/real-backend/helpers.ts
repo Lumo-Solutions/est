@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { generateTotp } from './totp'
+import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
 
 // Fixture project app/cli.py::simulate_settlement builds/reuses (see
 // global-setup.ts) -- one BOQ line with an ACCEPTED quotation line item
@@ -17,53 +17,27 @@ interface ProjectSummary {
 
 // Real Keycloak login form (no mocked /auth/me) -- see
 // docs/keycloak-setup.md's "Interactive browser login in dev" section.
-// Demo users are pre-provisioned by global-setup.ts (permanent password, no
-// pending required actions), so this only exercises the username/password
-// step, not TOTP enrolment -- that's a documented human first-login flow,
-// not something most of these specs need to automate (see that doc for
-// why). loginAndEnrollTotp below is the one exception, for a spec that
-// specifically needs a real MFA step-up.
+// fix/keycloak-step-up's browser-stepup flow requires OTP at EVERY login now
+// (bronze = password + TOTP, not just password -- see
+// deploy/keycloak/bootstrap.sh's ensure_browser_stepup_flow), so this always
+// completes both steps. Every demo user has a dev-fixed TOTP secret seeded
+// by that same bootstrap.sh (see totp.ts's DEMO_TOTP_SECRETS) -- a human
+// wanting to test genuine QR-code enrolment instead runs
+// deploy/keycloak/dev-reset-totp-user.sh first (see docs/keycloak-setup.md).
 export async function loginViaKeycloak(page: Page, username: string, password: string): Promise<void> {
+  const secret = DEMO_TOTP_SECRETS[username]
+  if (!secret) throw new Error(`No dev-fixed TOTP secret known for '${username}' -- see totp.ts's DEMO_TOTP_SECRETS`)
+
   await page.goto('/api/v1/auth/login')
   await page.locator('#username').fill(username)
   await page.locator('#password').fill(password)
   await page.locator('#kc-login').click()
+  // Same form/button id ("kc-login") on the OTP step as the password step.
+  await submitTotpCode(page, '#otp', () => page.locator('#kc-login').click(), secret)
   // Keycloak redirects through /api/v1/auth/callback and lands back on the
   // SPA -- wait for that round trip instead of a fixed path, since `next`
   // can vary.
   await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
-}
-
-// Same login form, but for an account left with CONFIGURE_TOTP pending on
-// purpose (dev-reset-totp-user.sh) so this can enrol a real TOTP
-// credential itself and return its secret for a later real MFA step-up
-// (completeMfaStepUp) -- see settlement.spec.ts.
-export async function loginAndEnrollTotp(page: Page, username: string, password: string): Promise<string> {
-  await page.goto('/api/v1/auth/login')
-  await page.locator('#username').fill(username)
-  await page.locator('#password').fill(password)
-  await page.locator('#kc-login').click()
-  await page.waitForURL(/\/realms\/.*login-actions\/required-action/)
-  const secret = await enrollTotp(page)
-  await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
-  return secret
-}
-
-// Completes Keycloak's CONFIGURE_TOTP required-action page (reached right
-// after loginViaKeycloak's password submit, for an account that still has
-// that required action pending -- see dev-reset-totp-user.sh) the way a
-// person would with an authenticator app: opens the "Unable to scan?"
-// manual-entry view, reads the real human-readable secret out of
-// #kc-totp-secret-key, and submits a freshly computed code. Returns the
-// base32 secret so a later real MFA step-up (completeMfaStepUp) can
-// generate a fresh code from the same now-registered credential --
-// Keycloak never exposes a credential's secret again after enrolment, so
-// this is the only time it's available.
-export async function enrollTotp(page: Page): Promise<string> {
-  await page.getByRole('link', { name: 'Unable to scan?' }).click()
-  const secret = (await page.locator('#kc-totp-secret-key').innerText()).replace(/\s+/g, '')
-  await submitTotpCode(page, '#totp', () => page.locator('#saveTOTPBtn').click(), secret)
-  return secret
 }
 
 // A code generated right before submission can still straddle Keycloak's
@@ -85,32 +59,35 @@ export async function enrollTotp(page: Page): Promise<string> {
 // any brute-force history left over from a PREVIOUS run so this always
 // starts from zero.
 async function submitTotpCode(page: Page, fieldSelector: string, submit: () => Promise<void>, secret: string): Promise<void> {
-  await page.locator(fieldSelector).fill(generateTotp(secret))
+  await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
   if (!(await page.getByText('Invalid authenticator code.').isVisible().catch(() => false))) return
   await page.waitForTimeout(65_000)
-  await page.locator(fieldSelector).fill(generateTotp(secret))
+  await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
 }
 
 // lib/api.ts's ApiError.isStepUpRequired handling does a full
 // `window.location.href = stepUpUrl()` on a 403 urn:installtec:step-up-required
 // (app/core/errors.py::StepUpRequiredError, app/security/deps.py::require_mfa_step_up)
-// -- this completes the resulting re-authentication (acr_values=silver
-// forces a real password + OTP challenge even with an existing SSO
-// session, not just an OTP prompt) and waits for the browser to land back
-// on the original page. The username field isn't present on this "please
-// re-authenticate" page at all (Keycloak already knows who from the SSO
-// session), so this only fills password + otp, unlike loginViaKeycloak.
-export async function completeMfaStepUp(page: Page, password: string, totpSecret: string): Promise<void> {
-  // The browser's URL stays on Keycloak's /protocol/openid-connect/auth
-  // endpoint while it serves this form (the form's OWN action attribute
-  // points at /login-actions/authenticate, which is where submitting it
-  // goes, not where it's displayed) -- so this waits on the password
-  // field itself rather than a URL, which Playwright's own action-waiting
-  // on .fill() already does.
-  await page.locator('#password').fill(password)
-  await page.getByRole('button', { name: 'Sign In' }).click()
+// -- this completes the resulting re-authentication and waits for the
+// browser to land back on the original page.
+//
+// CORRECTED (fix/keycloak-step-up review item 3): an earlier version of
+// this helper filled a `#password` field first, on the assumption that
+// Keycloak's browser-stepup flow re-demanded the password too. Verified
+// live against the real dev stack that this is wrong -- Cookie already
+// reattached the existing bronze session, and Level 1's own
+// conditional-level-of-authentication (deploy/keycloak/bootstrap.sh) is
+// satisfied by that existing session well within its 28800s max-age, so a
+// step-up request (acr_values=silver) skips Level 1 (password+OTP)
+// entirely and goes straight to Level 2, which is OTP alone -- Keycloak's
+// page shows only a read-only username and a one-time-code field, no
+// password field at all. Filling one hung `.fill('#password')` forever
+// (no such element ever appears), timing out the whole test rather than
+// failing fast, since neither this config nor playwright.*.config.ts sets
+// an explicit actionTimeout.
+export async function completeMfaStepUp(page: Page, totpSecret: string): Promise<void> {
   const signIn = () => page.getByRole('button', { name: 'Sign In' }).click()
   await submitTotpCode(page, '#otp', signIn, totpSecret)
   await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
@@ -219,4 +196,52 @@ export async function resolveUnresolvedLines(page: Page, projectId: string): Pro
       throw new Error(`Failed to resolve settlement line ${line.id}: ${patch.status()} ${await patch.text()}`)
     }
   }
+}
+
+// Same build -> force-zero-defaults -> resolve -> submit sequence
+// settlement.spec.ts drives inline, factored out so
+// step-up-freshness.spec.ts (fix/keycloak-step-up) can put a FRESH D1-SIM
+// settlement into "pending approval" for each of its three scenarios
+// without repeating it three times. `page` must already be a logged-in
+// submitter (e.g. bd1) -- this does not log in itself, unlike loginViaKeycloak.
+export async function submitSettlementForApproval(page: Page, projectId: string): Promise<void> {
+  await page.goto(`/projects/${projectId}/settlement`)
+  const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
+  if (await buildButton.isVisible().catch(() => false)) {
+    await buildButton.click()
+  }
+  await page.getByRole('button', { name: 'Submit for approval' }).waitFor({ state: 'visible' })
+  await forceZeroDefaults(page, projectId)
+  await resolveUnresolvedLines(page, projectId)
+  await page.reload()
+  await page.getByRole('button', { name: 'Submit for approval' }).click()
+  await page.getByRole('button', { name: 'Approve' }).waitFor({ state: 'visible' })
+}
+
+// Clicks the settlement page's Approve button and reports which of the two
+// real outcomes lib/api.ts's isStepUpRequired handling actually produces:
+// a full-page redirect to Keycloak (`window.location.href = stepUpUrl()` on
+// a 403 urn:installtec:step-up-required -- "blocked") or the page updating
+// in place to show the approved banner ("approved"). Never mocks the
+// decision -- this is reading the real consequence of the real
+// has_recent_step_up check (app/security/deps.py) on whatever session state
+// `page` currently has.
+export async function attemptApprove(page: Page): Promise<'blocked' | 'approved'> {
+  await page.getByRole('button', { name: 'Approve' }).click()
+  const [blocked, approved] = await Promise.all([
+    page.waitForURL((url) => url.pathname.startsWith('/realms/'), { timeout: 15_000 }).then(
+      () => true,
+      () => false,
+    ),
+    page
+      .getByText(/^v\d+ -- approved -- /)
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(
+        () => true,
+        () => false,
+      ),
+  ])
+  if (blocked) return 'blocked'
+  if (approved) return 'approved'
+  throw new Error('Approve click neither redirected to step-up nor showed the approved banner within 15s')
 }

@@ -53,15 +53,23 @@ def authed_client(client, monkeypatch):
     CurrentUser-based routes and get_session()'s direct ContextVar read see
     a consistent RequestContext, unlike overriding the FastAPI dependency
     alone."""
+    import time
     import uuid
 
     from app.security.jwt import Principal, TokenValidator
 
-    def _as(roles: frozenset[str], *, acr: str | None = None):
+    def _as(roles: frozenset[str], *, acr: str | None = None, auth_time: int | None = None):
         tenant_id = uuid.UUID("8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00")
         sub = str(uuid.uuid4())
+        # has_recent_step_up (fix/keycloak-step-up) requires acr AND a
+        # recent auth_time, not acr alone -- default to "just now" whenever
+        # a caller asks for acr, since real tokens always carry auth_time
+        # alongside a real acr.
+        if auth_time is None and acr is not None:
+            auth_time = int(time.time())
         principal = Principal(
-            sub=sub, tenant_id=tenant_id, email=None, roles=roles, acr=acr, amr=[], sid=None, exp=0
+            sub=sub, tenant_id=tenant_id, email=None, roles=roles, acr=acr, amr=[], sid=None, exp=0,
+            auth_time=auth_time,
         )
         monkeypatch.setattr(TokenValidator, "validate", lambda self, token: principal)
         client.headers["Authorization"] = "Bearer test-token"
