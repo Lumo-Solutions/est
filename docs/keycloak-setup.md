@@ -160,33 +160,55 @@ click through it (Advanced → Proceed) once per browser profile; Playwright
 tests instead pass `ignoreHTTPSErrors: true`
 (`frontend/playwright.real-backend.config.ts`).
 
-**A demo user's actual first login** (`deploy/keycloak/bootstrap.sh` seeds
-each with a *temporary* password and `CONFIGURE_TOTP` pending):
+**Every demo user already has a working login** (`make bootstrap-keycloak`,
+also run automatically by `frontend/e2e/real-backend`'s Playwright global
+setup): a permanent password and a dev-fixed TOTP credential, seeded
+directly rather than through the enrolment UI, so `estimator1` /
+`Estimator1Pass!` (see `deploy/keycloak/bootstrap.sh` for the rest) plus its
+6-digit code work immediately at `https://localhost:8443`. Each user's
+raw TOTP secret and its base32 form (for a real authenticator app, or
+`otplib` — see `frontend/e2e/real-backend/totp.ts`'s `DEMO_TOTP_SECRETS`,
+which must match `bootstrap.sh`'s `seed_totp` calls) are dev/test only,
+guarded there by `APP_ENV`, and printed by `bootstrap.sh`'s own output.
 
-1. Go to `https://localhost:8443`, click "Sign in".
-2. Enter the seeded username and temporary password (e.g. `estimator1` /
-   `Estimator1Pass!` — see `bootstrap.sh` for the rest).
-3. Keycloak asks for a new permanent password (the temporary one is
-   single-use).
-4. Keycloak shows a QR code to configure an authenticator app (Google
+**To instead test genuine QR-code enrolment** as a human would (the SRS's
+actual first-login experience): run
+`deploy/keycloak/dev-reset-totp-user.sh <user> <pass>` first, which removes
+that user's seeded credential and puts `CONFIGURE_TOTP` back, then:
+
+1. Go to `https://localhost:8443`, click "Sign in", enter the username and
+   the password just given to the reset script.
+2. Keycloak shows a QR code to configure an authenticator app (Google
    Authenticator, Authy, etc.) — scan it, or click "Unable to scan?" for
    the raw secret to enter manually — then enter the 6-digit code it
    produces and submit.
-5. You land back in the app, logged in.
+3. You land back in the app, logged in.
 
-`deploy/keycloak/dev-token.sh` (bearer tokens for scripting) and
-`deploy/keycloak/dev-prep-login-users.sh` (used by
-`frontend/e2e/real-backend`'s Playwright tests) both bypass steps 3–4 for
-their own purposes by clearing `requiredActions` and setting a permanent
-password directly via `kcadm.sh` — that's a deliberate dev-only shortcut
-for scripted/automated access, not something a real first login does.
+Re-run `make bootstrap-keycloak` afterwards to put the dev-fixed credential
+back (its own idempotency handles this correctly either way).
 
-**Approving anything needs a step further still** (MFA step-up, `acr=silver`)
-**and does not currently work for a real login at all** — see
-docs/build-log.md's Phase 10 entry ("MFA step-up can never reach
-`acr=silver`") and the in-progress fix on `fix/keycloak-step-up`.
+**Approving anything needs a step further still**: a real MFA step-up
+(`acr=silver`, `fix/keycloak-step-up`) — Approve/Reject/RFQ-dispatch all
+403 with `urn:installtec:step-up-required` the first time in a session,
+which `lib/api.ts` turns into a full-page redirect through Keycloak's
+`browser-stepup` flow (`deploy/keycloak/realm-installtec.json`): the Cookie
+authenticator reattaches the existing bronze session, so this is just the
+incremental OTP step (the same dev-fixed secret), not password again. It
+must be entered again within `STEP_UP_MAX_AGE_S` (default 300s,
+`app/core/config.py`) of the last time, matching the flow's own
+`loa-max-age=300` for level 2, so a stale-but-still-valid `acr=silver`
+session/token can't be reused indefinitely (`app/security/deps.py::has_recent_step_up`
+checks `auth_time`, not just `acr`, for exactly this reason). See
+docs/build-log.md's `fix/keycloak-step-up` entry for the full design and
+the gap it closes (an `acr.loa.map` with no flow behind it, which meant no
+real login could ever reach `acr=silver` at all before this).
 
-## What was actually verified end-to-end (Phase 8a + Phase 10)
+**The built-in Keycloak account console is disabled** (`bootstrap.sh`
+disables the `account`/`account-console` clients) — this app has its own
+frontend and never links to it, and it would otherwise let a user delete
+their only OTP credential and step around the step-up requirement.
+
+## What was actually verified end-to-end (Phase 8a, Phase 10, fix/keycloak-step-up)
 
 Phase 8a, against a real, freshly-imported Keycloak 26 container: realm
 import (roles/groups/clients created correctly via the Admin REST API),
@@ -197,10 +219,15 @@ Keycloak-issued, cryptographically validated JWT. The interactive
 Authorization Code browser flow was blocked by the cookie issue above and
 not completed live at the time.
 
-Phase 10 completed it live: a real Playwright browser driving the actual
-Keycloak login form end to end (`frontend/e2e/real-backend/login.spec.ts`,
-`make -C frontend e2e:real-backend` via `npm run e2e:real-backend`), plus
-real-backend happy paths for procurement (package → RFQ draft) and
-settlement (build → simulate → submit, submitter blocked by segregation of
-duties, a different real user's approval blocked by the MFA step-up gap
-above) — see `frontend/e2e/real-backend/*.spec.ts`.
+Phase 10 completed the login itself live: a real Playwright browser
+driving the actual Keycloak login form end to end
+(`frontend/e2e/real-backend/login.spec.ts`, `npm run e2e:real-backend`),
+plus real-backend happy paths for procurement (package → RFQ draft) and
+settlement up through submit (submitter blocked by segregation of duties).
+
+`fix/keycloak-step-up` completed the rest: `settlement.spec.ts` now runs
+the whole lifecycle live, including a different real user (`md1`) actually
+completing a real MFA step-up (password already satisfied via the reattached
+session, a fresh OTP code from the same dev-fixed credential) and the
+settlement reaching `approved` for real — no mocks, no synthetic
+`RequestContext(acr="silver")` shortcuts anywhere in that path.
