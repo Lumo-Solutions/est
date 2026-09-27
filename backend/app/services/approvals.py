@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -112,20 +113,26 @@ async def _active_policy(session: AsyncSession, entity_type: str) -> tuple[Appro
     return policy, list(tiers_result.scalars().all())
 
 
-def _tier_matches(tier: ApprovalPolicyTier, amount: float, margin_pct: float | None) -> bool:
-    bracket_match = float(tier.min_amount) <= amount and (tier.max_amount is None or amount <= float(tier.max_amount))
+def _tier_matches(tier: ApprovalPolicyTier, amount: Decimal, margin_pct: Decimal | None) -> bool:
+    # Decimal end to end -- min_amount/max_amount/max_margin_pct already
+    # come back from Postgres as Decimal (Numeric columns, asdecimal=True
+    # by default), and amount/margin_pct are Decimal all the way from
+    # app/services/settlement.py's Decimal-only math. No float() here: a
+    # 3dp-quantized margin like 7.995 must stay exactly 7.995 through this
+    # comparison rather than round-tripping through a binary float.
+    bracket_match = tier.min_amount <= amount and (tier.max_amount is None or amount <= tier.max_amount)
     # Escalates regardless of amount when the tier defines a margin floor
     # and the caller is below it (strictly less-than) -- e.g. Module D1's
     # bid_submission policy: managing_director if margin-on-sell < 8%, no
     # matter how small the deal. NULL max_margin_pct (every tier before
     # this feature existed) makes this clause always false, so amount-only
     # routing is unchanged for every pre-existing policy.
-    margin_match = tier.max_margin_pct is not None and margin_pct is not None and margin_pct < float(tier.max_margin_pct)
+    margin_match = tier.max_margin_pct is not None and margin_pct is not None and margin_pct < tier.max_margin_pct
     return bracket_match or margin_match
 
 
 def route_tiers(
-    tiers: list[ApprovalPolicyTier], amount: float, mode: str, margin_pct: float | None = None
+    tiers: list[ApprovalPolicyTier], amount: Decimal, mode: str, margin_pct: Decimal | None = None
 ) -> list[ApprovalPolicyTier]:
     """sequential_up_to_tier: every tier whose min_amount <= amount, in
     order (e.g. a 300k request needs lead_estimator AND procurement_head).
@@ -136,11 +143,11 @@ def route_tiers(
     if mode == "highest_tier_only":
         matching = [t for t in tiers if _tier_matches(t, amount, margin_pct)]
         return matching[-1:] if matching else []
-    return [t for t in tiers if float(t.min_amount) <= amount]
+    return [t for t in tiers if t.min_amount <= amount]
 
 
 async def preview_required_role(
-    session: AsyncSession, entity_type: str, amount: float, margin_pct: float | None = None
+    session: AsyncSession, entity_type: str, amount: Decimal, margin_pct: Decimal | None = None
 ) -> str | None:
     """Read-only preview of which role create_request() would route to for
     this entity_type/amount/margin_pct, without creating anything -- used by
@@ -193,7 +200,13 @@ async def create_request(session: AsyncSession, ctx: RequestContext, data: Appro
     await audit.record(
         session, ctx, action=AuditAction.CREATE, entity_type="approval_request", entity_id=request.id,
         project_id=data.project_id,
-        payload={"entity_type": data.entity_type, "entity_id": str(data.entity_id), "amount": data.amount},
+        # str(), not the Decimal itself -- audit payloads go through
+        # JSONB's plain json.dumps (app/services/audit.py), which can't
+        # serialize Decimal (found by tests/api/test_approvals_api.py
+        # while making this path Decimal end to end; see the settlement
+        # audit call a few lines below in app/services/settlement.py,
+        # which already stringifies its Decimal totals the same way).
+        payload={"entity_type": data.entity_type, "entity_id": str(data.entity_id), "amount": str(data.amount)},
     )
     return request
 

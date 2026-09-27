@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 from app.services.approvals import route_tiers
@@ -101,3 +102,22 @@ def test_bid_submission_negative_markup_escalates_regardless_of_amount():
     # Selling below landed cost -- margin-on-sell goes negative, always < 8.
     routed = route_tiers(BID_SUBMISSION_TIERS, 100_000, "highest_tier_only", margin_pct=-5.26)
     assert [t.required_role for t in routed] == ["managing_director"]
+
+
+def test_bid_submission_margin_at_third_decimal_below_floor_escalates():
+    # route_tiers/_tier_matches compare Decimal end to end (amount,
+    # min/max_amount, margin_pct), with no float() conversion anywhere in
+    # the path -- app/services/settlement.py's margin_on_sell_pct is
+    # quantized to 3dp (_Q3), so 7.995 must stay exactly 7.995 through this
+    # comparison and correctly escalate, even though it would round to
+    # 8.00 at the 2dp precision the UI displays elsewhere. See
+    # docs/build-log.md's Phase 10 section.
+    tiers = [
+        _tier(1, Decimal("0"), Decimal("2000000.00"), "bd_director"),
+        _tier(2, Decimal("2000000.01"), None, "managing_director", max_margin_pct=Decimal("8.00")),
+    ]
+    routed = route_tiers(tiers, Decimal("500000"), "highest_tier_only", margin_pct=Decimal("7.995"))
+    assert [t.required_role for t in routed] == ["managing_director"]
+
+    routed_at_floor = route_tiers(tiers, Decimal("500000"), "highest_tier_only", margin_pct=Decimal("8.00"))
+    assert [t.required_role for t in routed_at_floor] == ["bd_director"]
