@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:real-backend": "playwright test --config=playwright.real-backend.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.0",

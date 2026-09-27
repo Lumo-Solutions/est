@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.common import ORMModel
+from app.schemas.common import JsonDecimal, ORMModel
 
 PctType = Literal["plant", "overhead", "volatility", "markup"]
 
@@ -28,10 +28,10 @@ class TradeOverrideUpdate(BaseModel):
 class BidSettlementTradeOverrideOut(ORMModel):
     id: UUID
     trade_node_id: UUID
-    plant_pct: Decimal | None
-    overhead_pct: Decimal | None
-    volatility_pct: Decimal | None
-    markup_pct: Decimal | None
+    plant_pct: JsonDecimal | None
+    overhead_pct: JsonDecimal | None
+    volatility_pct: JsonDecimal | None
+    markup_pct: JsonDecimal | None
 
 
 class SettlementDefaultsUpdate(BaseModel):
@@ -71,9 +71,9 @@ class FxRateSet(BaseModel):
 class BidSettlementLineItemOut(ORMModel):
     id: UUID
     boq_line_item_id: UUID
-    quantity: Decimal
-    quantity_at_build: Decimal
-    direct_unit_cost: Decimal | None
+    quantity: JsonDecimal
+    quantity_at_build: JsonDecimal
+    direct_unit_cost: JsonDecimal | None
     source_currency: str
     cost_source: str
     source_quotation_line_item_id: UUID | None
@@ -82,14 +82,14 @@ class BidSettlementLineItemOut(ORMModel):
     source_set_by: UUID | None
     source_set_at: datetime | None
     source_note: str | None
-    fx_rate: Decimal | None
+    fx_rate: JsonDecimal | None
     fx_rate_date: date | None
-    plant_pct_override: Decimal | None
-    overhead_pct_override: Decimal | None
-    volatility_pct_override: Decimal | None
-    markup_pct_override: Decimal | None
-    unit_sell_rate: Decimal | None
-    line_amount: Decimal | None
+    plant_pct_override: JsonDecimal | None
+    overhead_pct_override: JsonDecimal | None
+    volatility_pct_override: JsonDecimal | None
+    markup_pct_override: JsonDecimal | None
+    unit_sell_rate: JsonDecimal | None
+    line_amount: JsonDecimal | None
     line_note: str | None
 
 
@@ -100,18 +100,18 @@ class BidSettlementOut(ORMModel):
     is_current: bool
     status: str
     currency: str
-    default_plant_pct: Decimal
-    default_overhead_pct: Decimal
-    default_volatility_pct: Decimal
-    default_markup_pct: Decimal
-    direct_cost_total: Decimal | None
-    plant_total: Decimal | None
-    overhead_total: Decimal | None
-    volatility_total: Decimal | None
-    markup_total: Decimal | None
-    tender_total: Decimal | None
-    rounding_difference: Decimal | None
-    margin_on_sell_pct: Decimal | None
+    default_plant_pct: JsonDecimal
+    default_overhead_pct: JsonDecimal
+    default_volatility_pct: JsonDecimal
+    default_markup_pct: JsonDecimal
+    direct_cost_total: JsonDecimal | None
+    plant_total: JsonDecimal | None
+    overhead_total: JsonDecimal | None
+    volatility_total: JsonDecimal | None
+    markup_total: JsonDecimal | None
+    tender_total: JsonDecimal | None
+    rounding_difference: JsonDecimal | None
+    margin_on_sell_pct: JsonDecimal | None
     approval_request_id: UUID | None
     quantities_refreshed_at: datetime | None
     submitted_at: datetime | None
@@ -119,8 +119,8 @@ class BidSettlementOut(ORMModel):
     decided_at: datetime | None
     decided_by: UUID | None
     outcome: str | None
-    outcome_our_price: Decimal | None
-    outcome_winning_price: Decimal | None
+    outcome_our_price: JsonDecimal | None
+    outcome_winning_price: JsonDecimal | None
     outcome_competitor_names: list[str]
     outcome_competitor_vendor_ids: list[UUID]
     outcome_reason_codes: list[str]
@@ -134,8 +134,8 @@ class BidSettlementOut(ORMModel):
 
 class QuantityMismatch(ORMModel):
     boq_line_item_id: UUID
-    settlement_quantity: Decimal
-    current_boq_quantity: Decimal
+    settlement_quantity: JsonDecimal
+    current_boq_quantity: JsonDecimal
 
 
 # --------------------------------------------------------------------------
@@ -167,34 +167,34 @@ class SimulateRequest(BaseModel):
 class SimulateLineResult(BaseModel):
     boq_line_item_id: UUID
     resolved: bool
-    quantity: Decimal
-    direct_unit_cost: Decimal | None
-    plant_pct: Decimal
-    overhead_pct: Decimal
-    volatility_pct: Decimal
-    markup_pct: Decimal
-    base: Decimal
-    plant: Decimal
-    overhead: Decimal
-    volatility: Decimal
-    markup: Decimal
-    model_sell: Decimal
-    unit_sell_rate: Decimal | None
-    line_amount: Decimal | None
+    quantity: JsonDecimal
+    direct_unit_cost: JsonDecimal | None
+    plant_pct: JsonDecimal
+    overhead_pct: JsonDecimal
+    volatility_pct: JsonDecimal
+    markup_pct: JsonDecimal
+    base: JsonDecimal
+    plant: JsonDecimal
+    overhead: JsonDecimal
+    volatility: JsonDecimal
+    markup: JsonDecimal
+    model_sell: JsonDecimal
+    unit_sell_rate: JsonDecimal | None
+    line_amount: JsonDecimal | None
 
 
 class SimulateResult(BaseModel):
     lines: list[SimulateLineResult]
     unresolved_line_ids: list[UUID]
-    direct_cost_total: Decimal
-    plant_total: Decimal
-    overhead_total: Decimal
-    volatility_total: Decimal
-    markup_total: Decimal
-    exact_model_total: Decimal
-    tender_total: Decimal
-    rounding_difference: Decimal
-    margin_on_sell_pct: Decimal | None
+    direct_cost_total: JsonDecimal
+    plant_total: JsonDecimal
+    overhead_total: JsonDecimal
+    volatility_total: JsonDecimal
+    markup_total: JsonDecimal
+    exact_model_total: JsonDecimal
+    tender_total: JsonDecimal
+    rounding_difference: JsonDecimal
+    margin_on_sell_pct: JsonDecimal | None
     required_role: str | None
 
 

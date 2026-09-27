@@ -543,8 +543,8 @@ async def _compute_breakdown(
     margin_on_sell_pct = (markup_total / tender_total * 100).quantize(_Q3, rounding=ROUND_HALF_UP) if tender_total != 0 else None
 
     required_role = await approvals_service.preview_required_role(
-        session, ApprovalEntityType.BID_SUBMISSION.value, float(tender_total),
-        margin_pct=float(margin_on_sell_pct) if margin_on_sell_pct is not None else None,
+        session, ApprovalEntityType.BID_SUBMISSION.value, tender_total,
+        margin_pct=margin_on_sell_pct,
     )
 
     return SimulateResult(
@@ -642,8 +642,8 @@ async def submit_settlement(session: AsyncSession, ctx: RequestContext, settleme
         session, ctx,
         ApprovalRequestCreate(
             project_id=settlement.project_id, entity_type=ApprovalEntityType.BID_SUBMISSION.value,
-            entity_id=settlement.id, amount=float(breakdown.tender_total), currency=settlement.currency,
-            margin_pct=float(breakdown.margin_on_sell_pct) if breakdown.margin_on_sell_pct is not None else None,
+            entity_id=settlement.id, amount=breakdown.tender_total, currency=settlement.currency,
+            margin_pct=breakdown.margin_on_sell_pct,
             payload_snapshot={"version_no": settlement.version_no, "tender_total": str(breakdown.tender_total)},
         ),
     )

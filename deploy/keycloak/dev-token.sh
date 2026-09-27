@@ -18,7 +18,14 @@ export MSYS_NO_PATHCONV=1
 : "${KEYCLOAK_CLIENT_SECRET:?}"
 REALM="${KEYCLOAK_REALM:-installtec}"
 CLIENT_ID="${KEYCLOAK_CLIENT_ID:-installtec-backend}"
-KC_URL="${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}"
+# Always Keycloak's own plain-HTTP port directly, NOT $KEYCLOAK_PUBLIC_URL
+# (now https://localhost:8443, through caddy-dev's self-signed cert -- see
+# docs/keycloak-setup.md). A scripted password-grant request doesn't need
+# TLS at all, and the issuer Keycloak puts in the resulting token is fixed
+# by KEYCLOAK_HOSTNAME regardless of which port the token request itself
+# arrived on, so it matches KEYCLOAK_PUBLIC_URL either way -- this just
+# avoids making curl trust a locally-generated cert for a plain dev script.
+KC_URL="http://localhost:8080"
 USERNAME="${1:-estimator1}"
 PASSWORD="${2:-Estimator1Pass!}"
 KC_CONTAINER="installtec_keycloak"

@@ -1,0 +1,37 @@
+# Dev-only TLS-terminating reverse proxy, so the interactive Keycloak login
+# form works in a real browser during local development.
+#
+# Root cause (docs/keycloak-setup.md's "Interactive browser login in dev"
+# section): Keycloak always marks its own login-flow cookies
+# (AUTH_SESSION_ID/KC_RESTART) Secure+SameSite=None, regardless of the
+# realm's sslRequired setting -- a browser refuses to send Secure cookies
+# back over a plain-HTTP connection, so the login form itself fails with
+# "Cookie not found" when Keycloak is hit directly over
+# http://localhost:8080. Chrome treating http://localhost as a *secure
+# context* for Web APIs does not change this: the Secure cookie attribute
+# requires the transport itself to be TLS.
+#
+# Fix: front both Keycloak and the frontend with ONE locally-trusted
+# self-signed origin (`tls internal` -- Caddy's own local CA, cached in the
+# caddy_dev_data volume so it doesn't regenerate, and hence re-prompt for
+# trust, on every restart), path-routed exactly like the production
+# Caddyfile in this same directory (auth paths -> keycloak, /api ->
+# backend, everything else -> frontend). This makes dev match prod's
+# single-origin shape instead of maintaining a second topology.
+localhost:8443 {
+	tls internal
+
+	@auth path /realms/* /resources/* /admin/*
+	handle @auth {
+		reverse_proxy keycloak:8080
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}

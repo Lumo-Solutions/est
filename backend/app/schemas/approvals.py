@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.common import ORMModel
+from app.schemas.common import JsonDecimal, ORMModel
 
 
 class ApprovalRequestCreate(BaseModel):
     project_id: UUID | None = None
     entity_type: str
     entity_id: UUID
-    amount: float
+    amount: Decimal
     currency: str = "AED"
     # Optional second routing signal for a policy tier with max_margin_pct
     # set (e.g. bid_submission) -- see app/services/approvals.py::route_tiers.
-    # Ignored by every tier that doesn't define max_margin_pct.
-    margin_pct: float | None = None
+    # Ignored by every tier that doesn't define max_margin_pct. Decimal, not
+    # float: route_tiers()/_tier_matches() compare this directly against
+    # ApprovalPolicyTier.max_margin_pct with no float conversion anywhere in
+    # the path, so a 3dp-quantized margin (e.g. 7.995) stays exact.
+    margin_pct: Decimal | None = None
     payload_snapshot: dict | None = None
 
 
@@ -36,7 +40,7 @@ class ApprovalRequestOut(ORMModel):
     project_id: UUID | None
     entity_type: str
     entity_id: UUID
-    amount: float
+    amount: JsonDecimal
     currency: str
     status: str
     current_seq: int
@@ -62,9 +66,9 @@ class ApprovalDecision(BaseModel):
 
 class ApprovalPolicyTierIn(BaseModel):
     seq: int
-    min_amount: float = 0
-    max_amount: float | None = None
-    max_margin_pct: float | None = None
+    min_amount: Decimal = Decimal("0")
+    max_amount: Decimal | None = None
+    max_margin_pct: Decimal | None = None
     required_role: str
     quorum: int = 1
     sla_hours: int | None = None
@@ -75,9 +79,9 @@ class ApprovalPolicyTierOut(ORMModel):
     id: UUID
     policy_id: UUID
     seq: int
-    min_amount: float
-    max_amount: float | None
-    max_margin_pct: float | None
+    min_amount: JsonDecimal
+    max_amount: JsonDecimal | None
+    max_margin_pct: JsonDecimal | None
     required_role: str
     quorum: int
     sla_hours: int | None
