@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -116,6 +116,20 @@ dev-simulate-semantic-matching:
 # the demo tenant -- run `make dev-simulate-settlement` first.
 dev-simulate-module-e-schema:
 	$(COMPOSE) exec backend python -m app.cli simulate-module-e-schema
+
+# Phase 9: the full end-to-end lifecycle (upload a DXF and a vector PDF ->
+# takeoff -> BOQ import -> reconcile -> procurement package -> RFQ (real
+# dispatch) -> a real simulated vendor quote -> accept -> bid-level ->
+# settle (submit, a *different* user approves) -> export both ways ->
+# win/loss) against a dedicated project (E2E-SIM) that `make
+# dev-clean-demo-data` can remove on its own, without touching any other
+# simulate-*'s own fixtures.
+dev-simulate-e2e:
+	$(COMPOSE) exec backend python -m app.cli simulate-e2e
+
+# Deletes only what `make dev-simulate-e2e` created above.
+dev-clean-demo-data:
+	$(COMPOSE) exec backend python -m app.cli clean-demo-data
 
 # DEV ONLY -- provisions the ONNX embedding model into the `onnxmodels`
 # named volume the real backend/celery-worker containers read from
