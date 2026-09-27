@@ -310,3 +310,46 @@ per `docs/ui-qa-brief.md`; P2 is deferred to Phase 4.
 - `ProcurementPackagesPage`'s "Resend" button still uses `window.prompt` —
   reconfirmed, not touched (explicit Phase 3 app-wide modal replacement
   item per the brief).
+
+### UI-P2-011 (P1, fixed) — Main-session follow-up on the money-serialization note above: the `JsonDecimal` sweep was genuinely incomplete, and it did hit real, already-shipped pages
+- **Page(s):** `QuoteReviewPage.tsx`, `BidLevelingPage.tsx` (both real,
+  built pages, not yet QA'd live in Phase 2 — this was found by code
+  inspection while following up on the cross-cutting note above, ahead of
+  the run that will exercise these pages live).
+- **Role:** any
+- **What was found:** the previous note's framing ("the actual wire format
+  is a JSON number... nothing for the frontend to unsafely parseFloat") is
+  only true where `JsonDecimal` is actually used. `docs/build-log.md`'s
+  Phase 10 entry already flagged, and left unfixed, that the `JsonDecimal`
+  fix was applied only to `settlement.py`/`approvals.py` — every other
+  `Decimal`-typed response field elsewhere still used bare `Decimal`, which
+  Pydantic v2 serializes to JSON as a **string** (`"350.00"`), while every
+  matching field in `frontend/src/types/api.ts` is typed `number`. Five
+  response schemas in `app/schemas/quotation_ingestion.py` had this,
+  including fields `QuoteReviewPage`/`BidLevelingPage` actually read and do
+  arithmetic on: `QuotationOut.stated_total`/`fx_rate_to_base`,
+  `QuotationLineItemOut.unit_price`/`quantity`/`extended_price_stated`/
+  `extended_price_computed`/`confidence`, `QuotationExclusionFlagOut
+  .confidence`, `BidLevelingCellOut.unit_price`/`normalized_unit_price`,
+  `QuotationTotalOut.stated_total`. Two more in `app/schemas/module_e.py`
+  (`ContractVariationOut.delta_amount`,
+  `OutturnCostObservationOut.observed_unit_cost`/`observed_quantity`) —
+  Module E has no frontend UI yet (per `coverage.md`), so latent rather
+  than live, but would have hit Phase 3's new Module E screens.
+- **Fix:** all of the above switched from `Decimal` to `JsonDecimal`
+  (`backend/app/schemas/quotation_ingestion.py`,
+  `backend/app/schemas/module_e.py`). No behavior change for any request
+  schema (money/percentage *input* fields are correctly left as bare
+  `Decimal` — pydantic parses a JSON number or numeric string into
+  `Decimal` identically either way, per `common.py`'s own comment).
+- **Regression test:** `backend/tests/unit/test_response_schema_json_decimal.py`
+  — introspects every `ORMModel` subclass across every `app/schemas/*.py`
+  module and asserts no field mixes a `Decimal` type with a missing
+  `PlainSerializer`, so any future response field added anywhere in the
+  schemas package can't reintroduce this. `make test-unit` (344 passed) and
+  `make test-api` (19 passed) both green after the fix.
+- **Still open, for Phase 4/main session (unchanged from the prior note):**
+  whether `JsonDecimal`'s float-not-string wire format itself (as opposed
+  to it being applied consistently, which is now fixed) is the right
+  long-term choice given `docs/ui-qa-brief.md` §0.2's stated Decimal-to-
+  the-wire architecture; and the missing shared money-formatting utility.

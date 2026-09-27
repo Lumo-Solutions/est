@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
 from uuid import UUID
 
-from app.schemas.common import ORMModel
+from app.schemas.common import JsonDecimal, ORMModel
 
 
 class ContractOut(ORMModel):
@@ -44,7 +43,7 @@ class ContractVariationOut(ORMModel):
     revision_id: UUID
     variation_ref: str | None
     description: str
-    delta_amount: Decimal | None
+    delta_amount: JsonDecimal | None
     status: str
     created_at: datetime
 
@@ -68,8 +67,8 @@ class OutturnCostObservationOut(ORMModel):
     contract_id: UUID
     boq_line_item_id: UUID | None
     cost_item_id: UUID | None
-    observed_unit_cost: Decimal
-    observed_quantity: Decimal | None
+    observed_unit_cost: JsonDecimal
+    observed_quantity: JsonDecimal | None
     currency: str
     observed_at: date
     source_note: str | None
