@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration lint fmt typecheck build
+.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -235,7 +235,34 @@ test-integration:
 	$(COMPOSE_TEST) down -v; \
 	exit $$STATUS
 
+# tests/api drives the real FastAPI app over ASGI (httpx, no real network
+# socket) rather than a real HTTP server, but shares tests/conftest.py's
+# postgres_container/redis_container testcontainers fixtures with
+# tests/integration, so it needs the same Docker-outside-of-Docker
+# container (Docker socket mount, host.docker.internal override) -- see
+# test-integration's comment above for why. Mirrors that target exactly,
+# just pointed at tests/api.
+test-api:
+	$(COMPOSE_TEST) up -d
+	export MSYS_NO_PATHCONV=1; \
+	docker run --rm \
+	  --network $(TEST_PROJECT_NAME)_default \
+	  --add-host=host.docker.internal:host-gateway \
+	  -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal \
+	  -v "$(CURDIR)/backend:/workspace" \
+	  -v "$(CURDIR)/ai-service:/ai-service" \
+	  -v /var/run/docker.sock:/var/run/docker.sock \
+	  -v installtec-test-pip-cache:/root/.cache/pip \
+	  -w /workspace \
+	  python:3.12-slim \
+	  bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential >/dev/null && pip install --quiet -e '.[dev]' && python -m pytest tests/api -q"; \
+	STATUS=$$?; \
+	$(COMPOSE_TEST) down -v; \
+	exit $$STATUS
+
 test: test-unit test-integration
+
+test-all: test-unit test-integration test-api
 
 build:
 	$(COMPOSE) build
