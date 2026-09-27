@@ -3,12 +3,14 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
+import { ApiError } from './lib/api'
 import { AdminPage } from './pages/AdminPage'
 import { AuditPage } from './pages/AuditPage'
 import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
 import { ExportPage } from './pages/ExportPage'
+import { NotFoundPage } from './pages/NotFoundPage'
 import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
@@ -20,7 +22,21 @@ import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 import { TypologyPage } from './pages/TypologyPage'
 import { WinLossPage } from './pages/WinLossPage'
 
-const queryClient = new QueryClient()
+// A 4xx (not found, forbidden, validation) is never transient -- retrying it
+// just delays a page's error state behind react-query's default 3-retry
+// backoff (~7s) while every isLoading-gated page keeps showing "Loading...",
+// indistinguishable from actually still loading. Only retry what a retry can
+// plausibly fix: network failures and 5xx.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
+        return failureCount < 3
+      },
+    },
+  },
+})
 
 // One placeholder route per screen listed in
 // docs/preconstruction-build-brief.md's Phase 8, wired up for real as each
@@ -48,6 +64,7 @@ function AppRoutes() {
         <Route path="/projects/:projectId/win-loss" element={<WinLossPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/audit" element={<AuditPage />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   )

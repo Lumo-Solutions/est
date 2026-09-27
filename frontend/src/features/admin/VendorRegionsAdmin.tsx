@@ -1,9 +1,16 @@
 import { useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
+import { Role } from '../../lib/roles'
 import { useReplaceVendorServiceRegions, useVendorServiceRegions, useVendorsPage } from './api'
 
 const EMIRATES = ['Abu Dhabi', 'Dubai', 'Sharjah', 'Ajman', 'Umm Al Quwain', 'Ras Al Khaimah', 'Fujairah']
 
+// Mirrors backend/app/api/v1/routes/vendors.py's _WRITE_ROLES.
+const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+
 export function VendorRegionsAdmin() {
+  const { hasRole } = useAuth()
+  const canWrite = hasRole(...WRITE_ROLES)
   const { data: vendorPage } = useVendorsPage(200)
   const [vendorId, setVendorId] = useState('')
   const { data: regions } = useVendorServiceRegions(vendorId || undefined)
@@ -37,6 +44,7 @@ export function VendorRegionsAdmin() {
                   <input
                     type="checkbox"
                     checked={checked}
+                    disabled={!canWrite}
                     onChange={(e) => {
                       const base = selected.length > 0 ? selected : regions
                       setSelected(e.target.checked ? [...base, emirate] : base.filter((r) => r !== emirate))
@@ -47,14 +55,19 @@ export function VendorRegionsAdmin() {
               )
             })}
           </div>
-          <button
-            type="button"
-            onClick={() => replace.mutate(selected.length > 0 ? selected : regions)}
-            disabled={replace.isPending}
-            className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            Save regions
-          </button>
+          {canWrite ? (
+            <button
+              type="button"
+              onClick={() => replace.mutate(selected.length > 0 ? selected : regions)}
+              disabled={replace.isPending}
+              className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              Save regions
+            </button>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">Your role can view service regions but not change them.</p>
+          )}
+          {replace.isError && <p className="mt-1 text-sm text-red-600">{replace.error.message}</p>}
         </div>
       )}
     </div>

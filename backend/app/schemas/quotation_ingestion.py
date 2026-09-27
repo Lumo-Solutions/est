@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.common import ORMModel
+from app.schemas.common import JsonDecimal, ORMModel
 
 
 class InboundEmailOut(ORMModel):
@@ -61,9 +61,9 @@ class QuotationOut(ORMModel):
     submitted_at: datetime
     is_late: bool
     status: str
-    stated_total: Decimal | None
+    stated_total: JsonDecimal | None
     total_mismatch: bool
-    fx_rate_to_base: Decimal | None
+    fx_rate_to_base: JsonDecimal | None
     fx_rate_date: date | None
     created_at: datetime
 
@@ -74,15 +74,15 @@ class QuotationLineItemOut(ORMModel):
     boq_line_item_id: UUID | None
     vendor_item_text: str | None
     vendor_description_text: str | None
-    unit_price: Decimal | None
-    quantity: Decimal | None
-    extended_price_stated: Decimal | None
-    extended_price_computed: Decimal | None
+    unit_price: JsonDecimal | None
+    quantity: JsonDecimal | None
+    extended_price_stated: JsonDecimal | None
+    extended_price_computed: JsonDecimal | None
     arithmetic_mismatch: bool
     quantity_mismatch: bool
     vendor_uom: str | None
     uom_mismatch: bool
-    confidence: Decimal
+    confidence: JsonDecimal
     source: str
     match_method: str | None
     remarks_text: str | None
@@ -99,7 +99,7 @@ class QuotationExclusionFlagOut(ORMModel):
     source_quote_text: str
     source_location: str | None
     citation_verified: bool
-    confidence: Decimal
+    confidence: JsonDecimal
     status: str
     reviewed_by: UUID | None
     reviewed_at: datetime | None
@@ -131,13 +131,13 @@ class RejectQuotationRequest(BaseModel):
 class BidLevelingCellOut(ORMModel):
     quotation_id: UUID
     vendor_id: UUID
-    unit_price: Decimal
+    unit_price: JsonDecimal
     currency: str
     vat_inclusive: bool
     confidence: float
     arithmetic_mismatch: bool
     quantity_mismatch: bool
-    normalized_unit_price: Decimal | None
+    normalized_unit_price: JsonDecimal | None
     uom_mismatch: bool
 
 
@@ -149,7 +149,7 @@ class BidLevelingRowOut(ORMModel):
 class QuotationTotalOut(ORMModel):
     quotation_id: UUID
     vendor_id: UUID
-    stated_total: Decimal | None
+    stated_total: JsonDecimal | None
     total_mismatch: bool
 
 

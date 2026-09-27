@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useTaxonomyNodes } from '../features/admin/api'
 import { useBoqItems } from '../features/boq/api'
 import {
@@ -13,6 +14,14 @@ import {
   useResendRfq,
   useRfqs,
 } from '../features/procurement/api'
+import { Role } from '../lib/roles'
+
+// Mirrors backend/app/api/v1/routes/procurement.py's _STRUCTURE_ROLES --
+// creating a package, adding items, and drafting RFQs are all lead/proc/bd/md
+// only server-side. An estimator can still reach this page (nav-gated to
+// est/lead/proc), so the create form must hide itself rather than let an
+// estimator fill it in and hit a silent 403.
+const STRUCTURE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
 function PackageDetail({ projectId, packageId }: { projectId: string; packageId: string }) {
   const { data: items } = usePackageItems(packageId)
@@ -64,6 +73,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
           Add items
         </button>
       </div>
+      {addItems.isError && <p className="mt-1 text-sm text-red-600">{addItems.error.message}</p>}
 
       <h3 className="mt-4 text-sm font-semibold text-slate-800">Matched vendors</h3>
       <ul className="mt-1 text-sm">
@@ -124,16 +134,24 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
               <td>{rfq.status}</td>
               <td>{rfq.dispatch_attempts}</td>
               <td className="space-x-2">
-                <button type="button" onClick={() => dispatch.mutate(rfq.id)} className="text-slate-600 underline">
+                <button
+                  type="button"
+                  disabled={dispatch.isPending}
+                  onClick={() => dispatch.mutate(rfq.id)}
+                  className="text-slate-600 underline disabled:opacity-50"
+                >
                   Dispatch
                 </button>
                 <button
                   type="button"
+                  disabled={resend.isPending}
                   onClick={() => {
+                    // TODO(Phase 3): window.prompt replaced app-wide with a
+                    // proper modal -- see docs/ui-qa/issues.md.
                     const reason = window.prompt('Reason for resending?')
                     if (reason) resend.mutate({ rfqId: rfq.id, reason })
                   }}
-                  className="text-slate-600 underline"
+                  className="text-slate-600 underline disabled:opacity-50"
                 >
                   Resend
                 </button>
@@ -142,12 +160,15 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
           ))}
         </tbody>
       </table>
+      {dispatch.isError && <p className="mt-1 text-sm text-red-600">Dispatch failed: {dispatch.error.message}</p>}
+      {resend.isError && <p className="mt-1 text-sm text-red-600">Resend failed: {resend.error.message}</p>}
     </div>
   )
 }
 
 export function ProcurementPackagesPage() {
   const { projectId } = useParams()
+  const { hasRole } = useAuth()
   const { data: packages } = useProcurementPackages(projectId)
   const { data: tradeNodes } = useTaxonomyNodes()
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null)
@@ -159,43 +180,46 @@ export function ProcurementPackagesPage() {
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Procurement packages and RFQs</h1>
 
-      <form
-        className="mt-4 flex items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          createPackage.mutate(
-            { name, trade_node_id: tradeNodeId || null },
-            { onSuccess: () => setName('') },
-          )
-        }}
-      >
-        <input
-          placeholder="Package name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-          className="rounded border border-slate-300 px-2 py-1 text-sm"
-        />
-        {/* Vendor matching (POST /procurement-packages/{id}/matched-vendors)
-            requires trade_node_id to be set -- leaving it unset lets you
-            create the package but leaves "Matched vendors" permanently
-            empty below, with no way to draft an RFQ. */}
-        <select
-          value={tradeNodeId}
-          onChange={(e) => setTradeNodeId(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1 text-sm"
+      {hasRole(...STRUCTURE_ROLES) && (
+        <form
+          className="mt-4 flex items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            createPackage.mutate(
+              { name, trade_node_id: tradeNodeId || null },
+              { onSuccess: () => setName('') },
+            )
+          }}
         >
-          <option value="">No trade (vendor matching disabled)</option>
-          {(tradeNodes ?? []).map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.path}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">
-          Create package
-        </button>
-      </form>
+          <input
+            placeholder="Package name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          />
+          {/* Vendor matching (POST /procurement-packages/{id}/matched-vendors)
+              requires trade_node_id to be set -- leaving it unset lets you
+              create the package but leaves "Matched vendors" permanently
+              empty below, with no way to draft an RFQ. */}
+          <select
+            value={tradeNodeId}
+            onChange={(e) => setTradeNodeId(e.target.value)}
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">No trade (vendor matching disabled)</option>
+            {(tradeNodes ?? []).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">
+            Create package
+          </button>
+        </form>
+      )}
+      {createPackage.isError && <p className="mt-1 text-sm text-red-600">{createPackage.error.message}</p>}
 
       <ul className="mt-4 space-y-1">
         {(packages ?? []).map((p) => (

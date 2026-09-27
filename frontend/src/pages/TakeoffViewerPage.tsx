@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import {
   useDrawing,
   useMeasurements,
@@ -12,17 +12,32 @@ import { MeasurementPanel } from '../features/takeoff/MeasurementPanel'
 import { PdfSheetView } from '../features/takeoff/PdfSheetView'
 
 export function TakeoffViewerPage() {
-  const { drawingId, sheetIndex: sheetIndexParam } = useParams()
+  const { projectId, drawingId, sheetIndex: sheetIndexParam } = useParams()
   const sheetIndex = Number(sheetIndexParam)
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
   const [calibrating, setCalibrating] = useState(false)
   const [calibrationPoints, setCalibrationPoints] = useState<[number, number][]>([])
 
-  const { data: drawing } = useDrawing(drawingId)
-  const { data: sheet, isLoading: sheetLoading } = useSheet(drawingId, sheetIndex)
+  const { data: drawing, isError: drawingError, error: drawingErr } = useDrawing(drawingId)
+  const {
+    data: sheet,
+    isLoading: sheetLoading,
+    isError: sheetError,
+    error: sheetErr,
+  } = useSheet(drawingId, sheetIndex)
   const { data: entities } = useSheetEntities(sheet?.id)
   const { data: measurements } = useMeasurements(drawingId, sheet?.id)
 
+  if (sheetError || drawingError) {
+    return (
+      <div className="p-6">
+        <Link to={`/projects/${projectId}/drawings/${drawingId}`} className="text-sm text-slate-800 hover:underline">
+          ← Sheets
+        </Link>
+        <p className="mt-4 text-red-600">{(sheetErr ?? drawingErr)?.message}</p>
+      </div>
+    )
+  }
   if (sheetLoading || !sheet || !drawing) return <p className="p-6 text-slate-500">Loading...</p>
 
   const selectedMeasurement = measurements?.find((m) => m.id === selectedMeasurementId) ?? null
@@ -56,7 +71,13 @@ export function TakeoffViewerPage() {
       </div>
       <div className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white">
         <div className="p-4">
-          <h2 className="text-sm font-semibold text-slate-800">
+          <Link
+            to={`/projects/${projectId}/drawings/${drawingId}`}
+            className="text-xs text-slate-500 hover:text-slate-800 hover:underline"
+          >
+            ← Sheets
+          </Link>
+          <h2 className="mt-1 text-sm font-semibold text-slate-800">
             {sheet.sheet_title ?? sheet.source_name ?? `Sheet ${sheetIndex + 1}`}
           </h2>
           <p className="mt-1 text-xs text-slate-500">

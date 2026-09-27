@@ -138,10 +138,404 @@ a clean start) — this is why Phase 1's new settlement-status coverage
 uses its own QA-DEMO project instead of building on D1-SIM.
 
 ## Phase 2: functional QA
-Not started.
+**Status: in progress — pages 1-11 of ~15 done (see below); Settlement,
+Export, Win/loss, Admin, Audit and the cross-cutting permission checks
+remain.**
+
+Branch `phase-2-functional-qa` created off `master`.
+
+Environment notes from resuming this session (Docker Desktop was not
+running when the session started):
+- Restarted Docker Desktop; all `docker compose` containers came back up
+  except `installtec_caddy_dev`, which had exited (code 255) shortly
+  after the daemon restart (likely started before backend/frontend were
+  healthy — not root-caused further since a plain `docker start` fixed
+  it and it has stayed up since). Worth a health/depends_on check if it
+  recurs.
+- The interactive Playwright MCP browser (used for live click-through QA,
+  as opposed to the `npm run e2e:real-backend` test suite) had never
+  actually been pointed at `https://localhost:8443` before in this
+  project's QA history — Phase 0/1's "confirmed live" evidence came from
+  running real Playwright *test files* (whose own `playwright.*.config.ts`
+  already sets `ignoreHTTPSErrors: true`), not from interactive MCP
+  browsing. Doing that for the first time hit `ERR_CERT_AUTHORITY_INVALID`
+  against caddy-dev's self-signed cert, exactly the case brief section 0.5
+  anticipates. Fixed by adding a project-scoped `.mcp.json`
+  (`3113dc1`, branch `phase-2-functional-qa`) that overrides the global
+  `playwright` MCP server entry with `--ignore-https-errors`. **This
+  requires an MCP reconnect (new session) to take effect** — the
+  already-running MCP process for a given session can't pick up new args.
+  The Chrome extension (`claude-in-chrome`) was also tried as a fallback
+  and is not connected/installed on this machine, so Playwright MCP
+  (fixed as above) is the path forward for live browser QA here.
+
+Net effect from that part of the run: no page had been walked through live
+yet via the interactive browser.
+
+**Update, same session, later run:** the `.mcp.json` fix did not take
+effect for either a fresh subagent fork or the main session itself (both
+still hit `ERR_CERT_AUTHORITY_INVALID`) — project-scoped MCP server config
+changes need a full Claude Code session restart, which wasn't available.
+Trying to work around it by importing caddy-dev's CA cert into the Windows
+trust store was correctly blocked by the permission system as a TLS-trust
+change. **Pivoted to the sanctioned alternative already used successfully
+in Phase 0/1**: driving real Playwright test specs against
+`playwright.real-backend.config.ts` (which already sets
+`ignoreHTTPSErrors: true` and needs no cert workaround) instead of the
+interactive MCP browser tool. This doubles as the regression-test
+deliverable rather than being a separate throwaway exploration step.
+Interactive MCP/Chrome browsing for this project remains blocked until a
+session restart happens naturally; future Phase 2 runs should keep using
+the Playwright-test-runner approach rather than retrying the interactive
+browser.
+
+**Also discovered and fixed while getting live QA working**: `frontend`'s
+Docker image is a static production build (`deploy/docker-compose.yml`'s
+`frontend` service has no dev volume mount or hot reload) — source edits
+under `frontend/src` do **not** take effect until the image is rebuilt
+(`docker compose ... build frontend && ... up -d frontend`). Any future
+Phase 2/3/4 run that edits frontend source must rebuild+recreate the
+`frontend` container before re-testing, or it will silently test the old
+bundle (this is exactly what caused an initial round of test failures in
+this run, before the rebuild).
+
+**Pages covered this run**: ProjectsListPage, ProjectDetailPage,
+SheetIndexPage, TakeoffViewerPage — as `estimator`. See
+`docs/ui-qa/issues.md` for the full write-up. Summary: found and fixed 4
+P1s (no catch-all 404 route; every 4xx retried 3x before the UI showed an
+error, ~7-10s of misleading "Loading..." app-wide; TakeoffViewerPage's own
+additional indefinite-loading-on-error bug; no breadcrumbs/back-links
+anywhere in the app, patched on these 4 pages). Logged 2 P2s for Phase 4
+(header shows the raw Keycloak subject UUID instead of a username — needs
+a backend `RequestContext`/`/auth/me` change, deliberately deferred rather
+than folded in here; ProjectsListPage has no empty-state message or
+pagination). Reconfirmed the pre-existing `dev-simulate-settlement`
+non-idempotency already logged in Phase 0/1 (still non-fatal). Flagged but
+did not confirm: GEO-TEST's fixture drawing has been stuck in status
+`extracting` since 2026-09-24 despite having sheets/entities already —
+possibly just a hand-built fixture that skipped the real status
+transition, needs checking against a drawing from real ingestion.
+
+New regression tests: `frontend/e2e/real-backend/project-pages.spec.ts`,
+8 tests, all passing against the rebuilt frontend image (verified
+individually and as a group: 1 batch of 3 + 5 run singly, all green;
+`npx playwright test --config=playwright.real-backend.config.ts
+--workers=1 project-pages.spec.ts`).
+
+**Not yet covered** (next Phase 2 run): TypologyPage, BoqImportWizardPage,
+BoqReconciliationPage, the 4 procurement pages, SettlementPage, ExportPage,
+WinLossPage, AdminPage, AuditPage — as their full role matrix, plus the
+cross-cutting nav-hidden-page-still-403s-server-side check from
+`coverage.md` §4. The breadcrumb/back-link gap (UI-P2-004) should be
+checked on all of them too, and probably resolved as one Phase 4
+design-system item rather than N more one-off patches if it's confirmed
+everywhere.
+
+### Pages 5-8: TypologyPage, BoqImportWizardPage, BoqReconciliationPage, ProcurementPackagesPage
+
+**Status: done.** Tested as estimator/lead_estimator (the roles that reach
+these pages). See `docs/ui-qa/issues.md` UI-P2-007 through UI-P2-010 for
+full writeups; summary here.
+
+Found and fixed 3 P1s, all the same class of bug the prior run's UI-P2-001/
+002 already established (an action a role can't perform stayed fully
+visible/enabled instead of hidden, and failed 100% silently on a real
+403):
+- **TypologyPage**: "Detect clusters"/"Review and confirm"/"Reject" had no
+  role gate at all, though the server restricts them to lead_estimator/
+  procurement_head/managing_director (notably **not** estimator or
+  bd_director, unlike most other project pages). Added the gate; also wired
+  up `detect.isError`/`reject.isError` display, and (defensively, not
+  independently live-triggered) fixed `useTypologyClusters`'s fetch-error
+  case falling through to an empty list.
+- **ProcurementPackagesPage**: "Create package" had no role gate (server:
+  lead/proc/bd/md, not estimator) and zero error feedback anywhere except
+  "Draft RFQs". Added the gate plus error display on create/add-items/
+  dispatch/resend, and disabled Dispatch/Resend while pending (was letting
+  a double-click fire two dispatch attempts).
+- **ProcurementPackagesPage**, separately: the trade-node dropdown rendered
+  `TradeNodeOut.path` — a Postgres ltree built from node **ids**
+  (`n073ec3ef_6b2f_...`), meant only for hierarchical queries, not display
+  — instead of `.name`. Fixed. **Same bug spotted (not fixed, out of this
+  run's page scope) in `TaxonomyAdmin.tsx`'s two dropdowns** — flagging for
+  whoever QAs `/admin`.
+
+**Significant gap surfaced, not fixed here (Phase 3's call):** writing the
+lead_estimator regression test above hit "Not a member of project ..." —
+none of the CLI's simulate/seed fixtures ever add the *real* Keycloak dev
+users (`estimator1`, `lead1`, ...) as `ProjectMember`, only their own
+synthetic ids. Combined with the already-known "no add-member UI" gap
+(Phase 1's `coverage.md` §2), **a real lead_estimator or estimator cannot
+be given access to an existing project through the product at all.**
+Added `frontend/e2e/real-backend/helpers.ts`'s `ensureProjectMember()` as
+a tested workaround so later Phase 2 runs (settlement, BOQ reconciliation
+actions, etc.) don't hit the same wall blind — every remaining
+estimator/lead_estimator write-path test will need it. Recommending this
+get a higher priority than a generic Phase 3 item, since it currently
+blocks realistic QA of most of the product as those two roles.
+
+**Confirmed, not fixed (explicit Phase 3 item):** still no delete-BOQ-item
+UI on `BoqReconciliationPage` (`DELETE /boq-items/{id}` exists, unused).
+
+**Cross-cutting note for Phase 4 / whoever QAs Settlement/Quotes/Export:**
+`backend/app/schemas/common.py`'s `JsonDecimal` serializes every money/
+percentage field to a JSON **number** (`float(v)`), not the string the
+brief's §0.2 assumes arrives from the API — precision loss, if any, already
+happens server-side, before any frontend `parseFloat` could touch it. Also
+confirmed **no shared money-formatting utility exists anywhere in the
+frontend** — every money display so far is ad-hoc `.toFixed(2)`, no
+thousands separator, no "AED" prefix. Neither is a Phase-2-page-scoped fix;
+flagging for a deliberate decision rather than fixing in passing.
+
+Breadcrumb/back-link gap (`UI-P2-004`) reconfirmed on all 4 of these pages
+too — still not patched one-off, per the prior run's recommendation (one
+shared Phase 4 component instead).
+
+New regression tests: `frontend/e2e/real-backend/typology-boq-procurement.spec.ts`,
+6 tests. Every test across both files (`project-pages.spec.ts`'s 8 plus
+these 6) has passed individually and in small groups. Running all 14
+together sequentially, back to back, is flaky: two separate full-combined
+runs each saw 1-2 failures, but never the same test twice, and every
+"failure" passed cleanly on an immediate isolated re-run with no code
+changes in between (one `ECONNRESET` on the first `GET /api/v1/projects`
+of a run; separately a `SheetIndexPage` test and the `BoqImportWizardPage`
+upload test each failed once, both green on retry). This points to the
+dev stack (backend connection pool, or Keycloak's own session/rate
+handling) not comfortably sustaining 14 back-to-back real logins +
+full-page navigations in one `--workers=1` run, not a real regression in
+any of the fixes above. Worth root-causing if it gets worse as more
+Phase 2 specs accumulate, but not blocking — `npm run e2e:real-backend`'s
+CI-facing run should be watched for the same pattern.
+
+Commits this run: `chore(qa): configure Playwright MCP...` and
+`docs(ui-qa): log Phase 2 start...` were from the earlier
+interactive-MCP-blocker investigation (see above); this pages-5-8 work is
+`fix(frontend): role-gate Typology and ProcurementPackages writes, fix
+trade-name display, add missing error feedback`, `test(e2e): Phase 2
+real-backend coverage for typology/BOQ/procurement`, and a `docs(ui-qa):`
+log/issues update.
+
+**Not yet covered** (next Phase 2 run): SettlementPage, ExportPage,
+WinLossPage, the remaining procurement pages (quarantine, quotes,
+bid-leveling), AdminPage, AuditPage, plus the cross-cutting
+nav-hidden-page-still-403s-server-side check from `coverage.md` §4. Any
+run testing estimator/lead_estimator writes should use the new
+`ensureProjectMember()` helper up front.
+
+### Main-session fix, between Phase 2 runs: the JsonDecimal sweep was genuinely incomplete
+Following up the "cross-cutting note" above, the main session found the
+prior note's framing was only half the story: `JsonDecimal` (float-not-
+string) was the design, but it had only ever been applied to
+`settlement.py`/`approvals.py` (`docs/build-log.md`'s own Phase 10 "known
+gaps carried forward" already flagged this, unfixed until now). Five
+response fields in `app/schemas/quotation_ingestion.py` — read by the
+already-shipped `QuoteReviewPage`/`BidLevelingPage` — and two in
+`app/schemas/module_e.py` (no frontend yet) still used bare `Decimal`,
+which serializes to JSON as a **string** while every matching
+`frontend/src/types/api.ts` field is typed `number`. This was live, not
+latent. Fixed both files, added
+`backend/tests/unit/test_response_schema_json_decimal.py` (a static sweep
+across every `ORMModel` subclass in `app/schemas`, so this can't
+reintroduce itself). `make test-unit` (344 passed) and `make test-api` (19
+passed) green. See `docs/ui-qa/issues.md` UI-P2-011.
+
+## Phase 2 — pages 9-11: QuarantineQueuePage, QuoteReviewPage, BidLevelingPage
+Tested as procurement_head/estimator, plus confirming platform_admin's one
+action is untestable (see below). Mechanism: same as pages 5-8, the
+real-backend Playwright test runner (not the interactive MCP browser,
+still unreliable this session).
+
+**Found and fixed 2 P1s** (both live-confirmed):
+- **QuarantineQueuePage**: `list_inbound_review_queue`
+  (`backend/app/services/quotation_ingestion.py`) filtered on
+  `review_status == "open"` alone, but `review_status` defaults to `"open"`
+  for *every* inbound email, including ones auto-processed successfully and
+  never needing a human at all. Confirmed live against the real dev
+  ("demo") tenant: 19 ordinary matched emails sat in the queue forever
+  alongside the 4 that actually needed attention. Added a
+  `needs_review == True` filter. This is a backend service-layer fix, not
+  a page-scoped one — reviewed carefully since it touches what a real
+  procurement head sees as needing action; it does not touch RLS, auth, or
+  any write path, only which rows a read query returns. New integration
+  test (`test_review_queue_excludes_auto_processed_emails_that_never_needed_review`,
+  10 passed in the file, up from 9).
+- **QuoteReviewPage**: same recurring pattern as UI-P2-007/UI-P2-008 —
+  Accept/Reject/Reject-quotation/Set-currency/Promote had no client-side
+  role gate at all (server: procurement_head/bd_director/
+  managing_director only, notably not even lead_estimator) and zero error
+  feedback on any of the five mutations. Added the gate and error display.
+
+**Confirmed, not fixed — needs a decision, not a page patch:**
+- `QuarantineQueuePage` lives at a project-scoped URL
+  (`/projects/:id/procurement/quarantine`) but its data is entirely
+  tenant-wide, not project-specific (the underlying endpoint takes no
+  `project_id` at all) — opening any two projects' quarantine queues shows
+  the identical list. Fixing this means either moving it to a real global
+  route or adding project scoping to `InboundEmail` (schema change) —
+  flagging for Phase 3/4 rather than guessing which.
+- **No `platform_admin` demo user exists anywhere** in this repo (checked
+  `bootstrap.sh`'s `seed_user` calls and every real-backend spec) — its one
+  exclusive action, "Resolve tenant" on an unknown-tenant quarantine row,
+  cannot be exercised live by anyone right now, even though 3 real rows
+  needing exactly that sit in the dev database. Recommending a seeded
+  `admin1` user the same way the other five roles are.
+- BidLevelingPage confirmed read-only (no role gate needed — deliberately
+  checked, not assumed) but has no empty-state message for a package with
+  zero bid-leveling rows (P2, Phase 4).
+
+**JsonDecimal fix (UI-P2-011) verified live** on both pages it actually
+affects: `unit_price`/`quantity`/`confidence`/`normalized_unit_price` all
+confirmed `typeof === 'number'` end to end against the real backend, and
+rendering correctly in the DOM.
+
+New regression tests: `frontend/e2e/real-backend/
+quarantine-quotes-bidleveling.spec.ts`, 6 tests, all passing (one full run,
+5.3m, no flakiness this time). Commits: `fix(backend): quarantine queue
+excludes auto-processed emails`, `fix(frontend): role-gate QuoteReviewPage
+review actions`, `test(e2e): Phase 2 coverage for quarantine/quotes/
+bid-leveling`, `docs(ui-qa): log pages 9-11 results`.
+
+**Not yet covered:** SettlementPage, ExportPage, WinLossPage, AdminPage,
+AuditPage, the cross-cutting nav-hidden-page-still-403s check.
+
+## Phase 2 — pages 12-14: SettlementPage, ExportPage, WinLossPage
+
+**Status: done.** Also fixed a real money-serialization gap the main
+session found while reviewing the previous batch (see below, not part of
+this batch's own page walk).
+
+This batch carried an explicit escalation instruction (SettlementPage
+touches MFA step-up, SoD and money math): fix the routine role-gate/error-
+display pattern as usual, but stop and flag anything auth/money/SoD/step-
+up-structural for the main session instead of fixing it directly.
+**Nothing needed escalation.** The one borderline case — Approve/Reject's
+role eligibility beyond the existing SoD check — was deliberately left
+alone rather than guessed at (see UI-P2-018): `app/services/
+approvals.py::decide` authorizes against the specific routed approval
+tier's `required_role`, which is dynamic (margin-threshold-driven) and not
+exposed on `BidSettlementOut` for an already-submitted request, so a
+client-side role gate there risks getting it wrong in either direction.
+Logged as a P2 UX gap for Phase 3/4 instead (expose the routed tier's role
+so the UI can show/hide correctly) — the server enforces it correctly
+either way, so this is not a security issue, just a missing affordance.
+
+1. **SettlementPage** (UI-P2-018, P1, fixed): "Build (new) settlement
+   draft" and "Submit for approval" had no client-side role gate at all
+   (mirrors backend's `_HEADER_ROLES`/`_SUBMIT_ROLES` — same recurring
+   pattern as every other page this phase) and no error display on
+   build/submit/decide, nor on the settlement fetch itself. Fixed. The
+   existing SoD disable (a submitter can't approve their own request) and
+   the pre-existing 3dp margin-on-sell display were both already correct
+   and untouched.
+   - **Confirmed still green, not re-run mocked:** re-read (didn't need to
+     touch) the pre-existing `settlement.spec.ts` (Phase 0) — its real,
+     unmocked build → submit → approve flow with a genuine MFA step-up
+     (bd1 submits, SoD disables their own Approve, md1 completes a real
+     OTP step-up and approves) is unaffected by this batch's changes since
+     bd1/md1 both already have every role this batch gates on.
+2. **ExportPage**: no bugs found. Confirmed live that a non-approved
+   settlement's export correctly 403s with a clear message
+   ("...export is only available once approved") shown under the button,
+   not hidden — acceptable UX for a state-based (not role-based)
+   restriction. Confirmed by reading the route that `_LINE_ROLES` (all 5
+   roles) is correct here — no missing gate. UI-P2-020 (P2, Phase 4): the
+   real `Content-Disposition` filename is `settlement-{project_id}-
+   v{n}.xlsx` — a raw UUID, not the project's human-readable code — works
+   correctly but isn't very readable in a downloads folder.
+3. **WinLossPage** (UI-P2-019, P1, fixed): the record-outcome form
+   (outcome, prices, reason codes, note, submit) had no client-side role
+   gate (mirrors `_OUTCOME_ROLES`) — at least this one already showed
+   `recordOutcome.isError`, so failure wasn't silent, but the form was
+   misleadingly presented as usable to any role. Fixed: an unauthorized
+   role now sees "No outcome recorded yet. Only bd_director/
+   managing_director can record it." instead.
+
+**Separately, main-session fix (money, handled directly per brief §0.3,
+not part of this batch's page walk):** while reviewing the previous
+batch's cross-cutting money note, found the `JsonDecimal` sweep (UI-P2-011)
+was itself incomplete — `quotation_ingestion.py` (5 response schemas,
+including fields `QuoteReviewPage`/`BidLevelingPage` actually read — this
+was live, not latent) and `module_e.py` (2 more, latent — no frontend yet)
+still used bare `Decimal`, which serializes to JSON as a string against
+frontend types declared `number`. Fixed both files, added a static
+introspection test (`backend/tests/unit/test_response_schema_json_decimal.py`)
+scanning every `ORMModel` subclass across `app/schemas/*.py` so this can't
+silently reintroduce. `make test-unit` (344 passed), `make test-api` (19
+passed). Commit `1d6955c`.
+
+New regression tests: `frontend/e2e/real-backend/
+settlement-winloss-roles.spec.ts`, 4 tests — 2 passed live (submit-gate,
+win-loss-gate), 2 correctly skip with a clear reason tied to D1-SIM's
+current shared-fixture state (build-gate needs a REBUILDABLE_STATUSES
+status; export-download needs `approved`) rather than being flaky —
+verified individually, not just trusting a single combined run.
+
+## Phase 2 — AdminPage, AuditPage, cross-cutting permission matrix (final chunk)
+
+**Status: done. Phase 2 as a whole is now complete.**
+
+1. **AdminPage** (UI-P2-021, P1, fixed): none of the six tabs
+   (Taxonomy/Approval policies/Tolerances/Layer-mapping/Reason codes/
+   Vendor regions) had any client-side role gate — the by-now-familiar
+   pattern, just not yet applied here. Added a `hasRole` gate per tab
+   mirroring each endpoint's real server role list (confirmed by reading
+   every route file, not assumed): Taxonomy/Tolerances/Layer-mapping =
+   lead/proc/md; **Approval policies = managing_director only**; Reason
+   codes/Vendor regions = lead/proc/bd/md. Disabled per-row edit widgets
+   for non-writing roles, added missing `isError` displays on every
+   mutation. Also fixed, in passing, the `TaxonomyAdmin.tsx` raw-ltree-
+   path dropdown bug already flagged (not yet fixed) under UI-P2-009.
+2. **UI-P2-022** (P1, confirmed via code reading — no live test possible,
+   flagged for a product decision, not fixed): `platform_admin` is
+   nav-gated into both `/admin` and `/audit`, but is in **none** of the
+   six Admin tabs' write-role lists, nor `/audit`'s read role list, nor
+   `/audit/verify`'s. After this run's fix, `/admin` correctly renders
+   read-only for `platform_admin` — but `/audit` would 403 immediately on
+   load. Two of this role's three nav-visible destinations are either
+   read-only or broken. Could be intentional (the brief frames
+   `platform_admin` as narrow — quarantine tenant-resolution only) or a
+   real gap; recommending the main session/user decide whether to narrow
+   the nav gates or widen the backend role lists, rather than guessing.
+3. **AuditPage**: mostly already correct (md-only verify gate, list-query
+   error display already present) — added the one missing `isError`
+   display on `verifyChain`. Confirmed server enforcement matches: `bd1`
+   can view but not verify (direct `GET /audit/verify` 403s); `estimator1`
+   hitting `/audit` by direct URL (nav-hidden) gets a real, informative
+   error ("Requires one of roles: ...") with no table — not a leak.
+4. **Cross-cutting permission matrix** (coverage.md §4): spot-checked
+   nav-hidden-but-URL-reachable pages and a couple of un-tested direct-API
+   writes. One check initially looked like a P0 data leak — `estimator`
+   reaching `SettlementPage` by direct URL saw full tender/margin
+   figures — but investigating the actual route roles (not just assuming)
+   showed this is genuine, intentional server-granted access
+   (`_LINE_ROLES` includes `estimator`), not a leak; the real finding is
+   the same shape as UI-P2-022 (**UI-P2-023**, also flagged for a
+   decision, not fixed): the Settlement nav gate excludes `estimator` and
+   `procurement_head` despite both having real, substantial server-granted
+   permissions there. No actual data leak found anywhere checked. Direct
+   API writes re-confirmed refused for `estimator`: `POST /taxonomy`,
+   `POST /vendors`, `POST /cost-items` (all 403).
+5. New regression tests: `frontend/e2e/real-backend/
+   admin-audit-permissions.spec.ts`, 8 tests, all passing (verified twice
+   — the first run caught two mistakes in the *tests themselves*, not
+   product bugs: a regex that didn't match the server's actual error text,
+   and the Settlement assumption above — both fixed, then re-verified
+   green).
+
+### Phase 2 final tally
+13 P1s found and fixed, 1 confirmed pre-existing gap deferred to Phase 3
+(UI-P2-010, explicit brief item), 2 flagged for a product/nav-model
+decision (UI-P2-022, UI-P2-023), several P2s deferred to Phase 4
+(UI-P2-005, 006, 013, 014, 017, 020). 33 new regression tests across the
+phase, all passing. `make test-unit`: 344 passed. `make test-api`: 19
+passed. Full detail: `docs/ui-qa/issues.md`.
+
+**Not merged to master yet** — branch `phase-2-functional-qa` is ready for
+the main session's final review and merge.
 
 ## Phase 3: gap-fill
-Not started.
+Not started. Ready to begin once `phase-2-functional-qa` is reviewed and
+merged.
 
 ## Phase 4: design system and redesign
 Not started.

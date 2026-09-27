@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useProcurementPackages, useRfqs } from '../features/procurement/api'
 import {
   useAcceptLineItem,
@@ -10,9 +11,21 @@ import {
   useRejectQuotation,
   useResolveCurrencyVat,
 } from '../features/quotations/api'
+import { Role } from '../lib/roles'
 import type { QuotationOut } from '../types/api'
 
+// Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
+// accept/reject/promote/resolve-currency-vat/reject-quotation are
+// procurement_head/bd_director/managing_director only server-side (notably
+// NOT estimator or lead_estimator, even though this page is nav-gated to
+// "all"). Before this fix, every one of these buttons was fully enabled for
+// any role and had zero error feedback, so an estimator/lead_estimator saw
+// working-looking controls that just silently 403'd.
+const REVIEW_ROLES = [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+
 function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: QuotationOut }) {
+  const { hasRole } = useAuth()
+  const canReview = hasRole(...REVIEW_ROLES)
   const { data: lineItems } = useQuotationLineItems(quotation.id)
   const acceptItem = useAcceptLineItem(quotation.id)
   const rejectItem = useRejectLineItem(quotation.id)
@@ -27,42 +40,47 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
         <h4 className="text-sm font-semibold text-slate-800">
           v{quotation.version_no} {quotation.is_current && '(current)'} -- {quotation.status}
         </h4>
-        {!quotation.is_current && (
+        {!quotation.is_current && canReview && (
           <button type="button" onClick={() => promote.mutate(quotation.id)} className="text-xs text-slate-600 underline">
             Promote to current
           </button>
         )}
       </div>
+      {promote.isError && <p className="mt-1 text-xs text-red-600">{promote.error.message}</p>}
       <p className="mt-1 text-xs text-slate-500">
         {quotation.currency ?? '?'} {quotation.stated_total ?? '--'}
         {quotation.total_mismatch && <span className="text-red-600"> (total mismatch)</span>}
       </p>
 
-      <div className="mt-2 flex items-end gap-2">
-        <input
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-          placeholder="Currency"
-          className="w-16 rounded border border-slate-300 px-1 py-0.5 text-xs"
-        />
-        <button
-          type="button"
-          onClick={() => resolveCurrencyVat.mutate({ quotationId: quotation.id, currency, vatInclusive: true })}
-          className="text-xs text-slate-600 underline"
-        >
-          Set currency (VAT-incl.)
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            const reason = window.prompt('Reject reason?')
-            if (reason) rejectQuotation.mutate({ quotationId: quotation.id, reason })
-          }}
-          className="text-xs text-red-600 underline"
-        >
-          Reject quotation
-        </button>
-      </div>
+      {canReview && (
+        <div className="mt-2 flex items-end gap-2">
+          <input
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            placeholder="Currency"
+            className="w-16 rounded border border-slate-300 px-1 py-0.5 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => resolveCurrencyVat.mutate({ quotationId: quotation.id, currency, vatInclusive: true })}
+            className="text-xs text-slate-600 underline"
+          >
+            Set currency (VAT-incl.)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const reason = window.prompt('Reject reason?')
+              if (reason) rejectQuotation.mutate({ quotationId: quotation.id, reason })
+            }}
+            className="text-xs text-red-600 underline"
+          >
+            Reject quotation
+          </button>
+        </div>
+      )}
+      {resolveCurrencyVat.isError && <p className="mt-1 text-xs text-red-600">{resolveCurrencyVat.error.message}</p>}
+      {rejectQuotation.isError && <p className="mt-1 text-xs text-red-600">{rejectQuotation.error.message}</p>}
 
       <table className="mt-2 w-full text-left text-xs">
         <thead className="text-slate-500">
@@ -86,17 +104,23 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
               </td>
               <td>{li.status}</td>
               <td className="space-x-1">
-                <button type="button" onClick={() => acceptItem.mutate(li.id)} className="text-green-700 underline">
-                  Accept
-                </button>
-                <button type="button" onClick={() => rejectItem.mutate(li.id)} className="text-red-700 underline">
-                  Reject
-                </button>
+                {canReview && (
+                  <>
+                    <button type="button" onClick={() => acceptItem.mutate(li.id)} className="text-green-700 underline">
+                      Accept
+                    </button>
+                    <button type="button" onClick={() => rejectItem.mutate(li.id)} className="text-red-700 underline">
+                      Reject
+                    </button>
+                  </>
+                )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {acceptItem.isError && <p className="mt-1 text-xs text-red-600">{acceptItem.error.message}</p>}
+      {rejectItem.isError && <p className="mt-1 text-xs text-red-600">{rejectItem.error.message}</p>}
     </div>
   )
 }

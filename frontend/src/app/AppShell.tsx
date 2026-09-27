@@ -27,19 +27,39 @@ function projectNavItems(projectId: string): NavItem[] {
       requiresRoles: [Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD],
     },
     {
+      // backend/app/api/v1/routes/settlement.py's _LINE_ROLES grants
+      // simulate/line-edit/scenario/export access to all 5 business roles,
+      // not just the 3 that can build/submit a draft (_HEADER_ROLES) --
+      // the nav gate previously only matched _HEADER_ROLES minus estimator,
+      // so estimator/procurement_head had real server-granted access to
+      // this page with no nav link to reach it (docs/ui-qa/issues.md
+      // UI-P2-023).
       label: 'Settlement',
       to: `/projects/${projectId}/settlement`,
-      requiresRoles: [Role.LEAD_ESTIMATOR, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR],
+      requiresRoles: [
+        Role.ESTIMATOR,
+        Role.LEAD_ESTIMATOR,
+        Role.PROCUREMENT_HEAD,
+        Role.BD_DIRECTOR,
+        Role.MANAGING_DIRECTOR,
+      ],
     },
     { label: 'Export', to: `/projects/${projectId}/export` },
     { label: 'Win/loss', to: `/projects/${projectId}/win-loss` },
   ]
 }
 
+// platform_admin is deliberately absent from both of these: it's a narrow,
+// Keycloak-only role scoped to the quarantine queue's tenant-resolution
+// action (docs/ui-qa/coverage.md's role glossary), not a general admin
+// persona. None of Admin's six tabs or Audit's endpoints grant it any
+// read or write access server-side -- the nav previously linked it to two
+// destinations that were either fully read-only-looking-but-broken or a
+// guaranteed 403 on load (docs/ui-qa/issues.md UI-P2-022).
 const GLOBAL_NAV_ITEMS: NavItem[] = [
   { label: 'Projects', to: '/' },
-  { label: 'Admin', to: '/admin', requiresRoles: [Role.PLATFORM_ADMIN, Role.MANAGING_DIRECTOR] },
-  { label: 'Audit', to: '/audit', requiresRoles: [Role.PLATFORM_ADMIN, Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
+  { label: 'Admin', to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
+  { label: 'Audit', to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
 ]
 
 function NavList({ items, hasRole }: { items: NavItem[]; hasRole: (...roles: string[]) => boolean }) {

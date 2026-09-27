@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useBoqItems } from '../features/boq/api'
 import {
   useConfirmTypologyCluster,
@@ -10,6 +11,7 @@ import {
   useTypologyRollup,
   useTypologyVariantDeltas,
 } from '../features/typology/api'
+import { Role } from '../lib/roles'
 import type { ConfirmClusterDeltaIn, ConfirmClusterGroupIn, TypologyClusterStatus } from '../types/api'
 
 const STATUS_STYLES: Record<TypologyClusterStatus, string> = {
@@ -17,6 +19,14 @@ const STATUS_STYLES: Record<TypologyClusterStatus, string> = {
   confirmed: 'bg-green-100 text-green-800',
   rejected: 'bg-slate-100 text-slate-500',
 }
+
+// Mirrors backend/app/api/v1/routes/typology.py's _STRUCTURE_ROLES --
+// detect/confirm/reject are lead_estimator/procurement_head/managing_director
+// only server-side (notably NOT estimator or bd_director, unlike most other
+// project pages). This page is nav-gated to "all", so estimator and
+// bd_director can both land here and, before this fix, saw fully enabled
+// buttons that just failed silently.
+const STRUCTURE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.MANAGING_DIRECTOR]
 
 function ConfirmForm({
   projectId,
@@ -149,6 +159,7 @@ function ConfirmForm({
 }
 
 function ClusterDetail({ projectId, clusterId, status }: { projectId: string; clusterId: string; status: TypologyClusterStatus }) {
+  const { hasRole } = useAuth()
   const { data: instances } = useTypologyClusterInstances(clusterId)
   const { data: deltas } = useTypologyVariantDeltas(clusterId)
   const { data: rollup } = useTypologyRollup(clusterId, status === 'confirmed')
@@ -179,7 +190,7 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
         </>
       )}
 
-      {status === 'proposed' && (
+      {status === 'proposed' && hasRole(...STRUCTURE_ROLES) && (
         <div className="mt-3 flex gap-2">
           <button
             type="button"
@@ -190,13 +201,15 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
           </button>
           <button
             type="button"
+            disabled={reject.isPending}
             onClick={() => reject.mutate()}
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
           >
             Reject
           </button>
         </div>
       )}
+      {reject.isError && <p className="mt-1 text-sm text-red-600">{reject.error.message}</p>}
 
       {confirming && instances && (
         <ConfirmForm
@@ -235,8 +248,9 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
 }
 
 export function TypologyPage() {
+  const { hasRole } = useAuth()
   const { projectId } = useParams()
-  const { data: clusters, isLoading } = useTypologyClusters(projectId)
+  const { data: clusters, isLoading, isError, error } = useTypologyClusters(projectId)
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null)
   const detect = useDetectTypologyClusters(projectId)
 
@@ -246,16 +260,23 @@ export function TypologyPage() {
     <div className="p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-800">Typology cluster review</h1>
-        <button
-          type="button"
-          onClick={() => detect.mutate()}
-          disabled={detect.isPending}
-          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-        >
-          Detect clusters
-        </button>
+        {hasRole(...STRUCTURE_ROLES) && (
+          <button
+            type="button"
+            onClick={() => detect.mutate()}
+            disabled={detect.isPending}
+            className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Detect clusters
+          </button>
+        )}
       </div>
+      {detect.isError && <p className="mt-2 text-sm text-red-600">{detect.error.message}</p>}
       {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
+      {/* Regression guard (UI-P2-007): this used to fall straight through to
+          `(clusters ?? []).map(...)` on a fetch error, rendering an empty
+          list indistinguishable from "no clusters yet". */}
+      {isError && <p className="mt-4 text-red-600">{error.message}</p>}
       <ul className="mt-4 space-y-1">
         {(clusters ?? []).map((c) => (
           <li key={c.id}>
