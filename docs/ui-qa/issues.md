@@ -717,6 +717,31 @@ end to end.
   (real figures render for `estimator`, Build/Submit stay hidden) instead
   of the wrong assumption it started with.
 
+**Resolved by the main session, both in the same direction as each finding's own root cause (not guessed):**
+- **UI-P2-022**: removed `platform_admin` from `/admin` and `/audit`'s nav
+  gates (`frontend/src/app/AppShell.tsx`'s `GLOBAL_NAV_ITEMS`), rather than
+  widening six backend role lists to include a role the brief itself frames
+  as narrow and single-purpose. No backend change, no new permissions
+  granted to anyone — this only stops presenting two dead-end/guaranteed-
+  403 nav links to `platform_admin`. Confirmed directly against
+  `backend/app/api/v1/routes/audit.py`'s `_READ_ROLES` (excludes
+  `platform_admin`) before making the change.
+- **UI-P2-023**: widened `SettlementPage`'s nav gate to all 5 `_LINE_ROLES`
+  roles (`ESTIMATOR`, `LEAD_ESTIMATOR`, `PROCUREMENT_HEAD`, `BD_DIRECTOR`,
+  `MANAGING_DIRECTOR`), matching real server-granted access rather than
+  narrowing it — the opposite direction from UI-P2-022, because here the
+  gap was real users being unable to find work they're genuinely permitted
+  to do, which is exactly what the brief's Phase 2 checklist calls out
+  ("every entity a user needs... has a visible way"). Confirmed directly
+  against `backend/app/api/v1/routes/settlement.py`'s `_LINE_ROLES`/
+  `_HEADER_ROLES` before making the change. Updated
+  `admin-audit-permissions.spec.ts`'s Settlement test to assert the nav
+  link is now visible to `estimator` (it previously asserted the opposite,
+  documenting the gap rather than the fix).
+- `make test-unit`: 344 passed (no backend change here, sanity-checked
+  anyway). New/updated e2e assertions verified passing against the
+  rebuilt frontend image.
+
 ### Confirmed correct, not a leak — cross-cutting permission matrix (coverage.md section 4)
 Spot-checked (not exhaustively re-tested — every page already checked its
 own obvious cases while being fixed this phase; this targeted the specific

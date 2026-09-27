@@ -126,24 +126,14 @@ test.describe('AuditPage', () => {
 })
 
 test.describe('cross-cutting permission spot checks', () => {
-  // NOT a data leak, despite first appearances -- this documents a real
-  // finding rather than asserting the wrong thing. SettlementPage is
-  // nav-gated to lead_estimator/bd_director/managing_director only
-  // (frontend/src/app/AppShell.tsx), but the server's GET endpoints
-  // (list_settlements_endpoint/get_settlement_endpoint,
-  // backend/app/api/v1/routes/settlement.py) use plain `CurrentUser` (any
-  // authenticated, tenant/project-scoped user) with no role check at all --
-  // consistent with `_LINE_ROLES` (= ESTIMATOR + every _HEADER_ROLES role,
-  // i.e. literally all 5 business roles) genuinely granting estimator
-  // simulate/line-edit/save-scenario/export access here. So an estimator
-  // reaching this page by direct URL (no nav link) correctly sees full
-  // settlement figures -- that's real, server-granted access, not a leak.
-  // The actual finding: the nav gate excludes both estimator (has real
-  // _LINE_ROLES access) and procurement_head (has real _HEADER_ROLES
-  // access to build/update-defaults/trade-overrides/refresh -- only
-  // `_SUBMIT_ROLES`, bd/md, is actually restricted the way the nav gate
-  // implies). See docs/ui-qa/issues.md UI-P2-022 (extended to cover this).
-  test('estimator hitting SettlementPage by direct URL sees real settlement figures -- confirmed intentional (_LINE_ROLES), not a leak; build/submit stay correctly gated (UI-P2-018)', async ({ page }) => {
+  // UI-P2-023, resolved by the main session after this run: SettlementPage's
+  // nav gate originally excluded estimator/procurement_head even though the
+  // server's `_LINE_ROLES` (backend/app/api/v1/routes/settlement.py --
+  // ESTIMATOR + every _HEADER_ROLES role, i.e. all 5 business roles)
+  // genuinely grants estimator simulate/line-edit/save-scenario/export
+  // access there. AppShell.tsx's nav gate now includes all 5 _LINE_ROLES
+  // roles to match, so the nav link is correctly visible now, not hidden.
+  test('estimator sees the Settlement nav link and its real (_LINE_ROLES) figures; build/submit stay correctly gated (UI-P2-018/023)', async ({ page }) => {
     await loginViaKeycloak(page, 'estimator1', 'Estimator1Pass!')
     const projectsResponse = await page.request.get('/api/v1/projects')
     const projects = (await projectsResponse.json()) as { id: string; code: string }[]
@@ -151,7 +141,8 @@ test.describe('cross-cutting permission spot checks', () => {
     test.skip(!d1sim, 'D1-SIM fixture not present this run')
     if (!d1sim) return
 
-    await expect(page.getByRole('link', { name: 'Settlement' })).toHaveCount(0)
+    await page.goto(`/projects/${d1sim.id}`)
+    await expect(page.getByRole('link', { name: 'Settlement' })).toBeVisible()
     await page.goto(`/projects/${d1sim.id}/settlement`)
     await expect(page.getByRole('heading', { name: 'Settlement cockpit' })).toBeVisible()
     // Read access is real -- the cockpit's own numbers should render, not
