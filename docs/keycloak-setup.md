@@ -103,7 +103,7 @@ raise `LookupError`. `tests/api/conftest.py::authed_client` instead
 monkeypatches `TokenValidator.validate()` and sends a dummy Bearer header,
 which runs through the real middleware and sets the real ContextVar.
 
-## Known local-dev limitation: "Cookie not found" over plain HTTP
+## RESOLVED: "Cookie not found" over plain HTTP (Phase 10)
 
 Running Keycloak via `start-dev` directly on `http://localhost:8080` (no
 TLS-terminating reverse proxy in front) causes Keycloak to mark its
@@ -114,30 +114,93 @@ sure cookies are enabled in your browser," even though cookies **are**
 enabled. This reproduces with a scripted Authorization Code + PKCE flow
 against a bare `docker run` Keycloak, and is unrelated to `sslRequired`
 (tested with both `external` and `none` — no effect) — it's driven by
-Keycloak/Quarkus's own HTTP layer, not the realm's SSL policy.
+Keycloak/Quarkus's own HTTP layer, not the realm's SSL policy. Chrome
+treating `http://localhost` as a secure *context* for Web APIs does not
+change this: the `Secure` cookie attribute requires the transport itself to
+be TLS, not just an origin browsers are willing to trust.
 
-**This does not affect direct-grant token issuance** (used for admin
-scripting and this doc's own testing) or the resource-server side (JWT
-validation of an already-issued token) — only the interactive browser login
-form specifically, when accessed without TLS. **Production deployments are
-unaffected**: `deploy/docker-compose.prod.yml` puts Caddy in front with real
-TLS, at which point Keycloak sees genuine HTTPS and the cookies work
-normally. For **local development** that needs to click through an actual
-login page, put a TLS-terminating reverse proxy (even a self-signed one, or
-`deploy/caddy/Caddyfile` pointed at `localhost`) in front of Keycloak rather
-than hitting its HTTP port directly.
+**This did not affect direct-grant token issuance** (used for admin
+scripting) or the resource-server side (JWT validation of an already-issued
+token) — only the interactive browser login form specifically, when
+accessed without TLS. Fixed in Phase 10 by giving dev a real (if
+self-signed) TLS hop, the same shape as prod — see the next section.
 
-## What was actually verified end-to-end during development
+## Interactive browser login in dev
 
-Against a real, freshly-imported Keycloak 26 container: realm import
-(roles/groups/clients created correctly via the Admin REST API), password
-grant token issuance with `tenant_id` + `realm_access.roles` claims
-present, and — after fixing the bugs described above — a full
-`create vendor → list vendors` round trip through the real FastAPI app,
-real Postgres (with RLS), and a real Keycloak-issued, cryptographically
-validated JWT. The interactive Authorization Code browser flow was blocked
-by the cookie issue above and was not completed live; the code path itself
-(`security/oidc.py`) is unit-adjacent tested via
-`tests/unit/test_jwt_validation.py` and is otherwise unchanged from the
-manually-verified direct-grant/password-grant validation path (both go
-through the same `TokenValidator.validate()`).
+`make up` now also starts `caddy-dev` (`deploy/docker-compose.override.dev.yml`
++ `deploy/caddy/Caddyfile.dev`), a `tls internal` (locally-generated,
+self-signed) reverse proxy in front of both Keycloak and the frontend on
+**one** origin, `https://localhost:8443`, path-routed exactly like
+`deploy/caddy/Caddyfile` routes prod (`/realms/*` etc. → Keycloak, `/api/*`
+→ backend, everything else → frontend). This is what makes the interactive
+login form work: the browser's connection to Keycloak's login pages is now
+genuinely TLS, so its `Secure` cookies round-trip correctly.
+
+`deploy/.env.example`'s defaults follow this: `KEYCLOAK_PUBLIC_URL` and
+`KEYCLOAK_HOSTNAME` both point at `https://localhost:8443` (`KEYCLOAK_HOSTNAME`
+takes a full URL, not just a bare hostname, on Keycloak 26's hostname-v2
+provider — this is what makes every issued token's `iss` match
+`KEYCLOAK_PUBLIC_URL` regardless of which port a token *request* actually
+arrived on), and `COOKIE_SECURE=true` (the backend's own `__Host-`-prefixed
+session/CSRF cookies hard-require `Secure` too — `COOKIE_SECURE=false`, the
+old default from when dev had no TLS anywhere, meant the browser was
+silently dropping them on every login, a second pre-existing bug
+independent of Keycloak's own cookies; see the Phase 10 build-log entry).
+Bearer-token/API/CLI access (`make dev-token`, `curl localhost:8001/...`)
+is unaffected and keeps working over the existing plain-HTTP ports —
+`deploy/keycloak/dev-token.sh` deliberately still talks to Keycloak's own
+`:8080` directly, not through `caddy-dev`, since a password-grant request
+doesn't need TLS and the issuer Keycloak stamps into the token is fixed by
+`KEYCLOAK_HOSTNAME` regardless of which port the request arrived on.
+
+**First time hitting `https://localhost:8443`**, Chrome will show a
+certificate warning (the cert is self-signed, generated locally by
+`caddy-dev` and cached in the `caddy_dev_data` volume across restarts) —
+click through it (Advanced → Proceed) once per browser profile; Playwright
+tests instead pass `ignoreHTTPSErrors: true`
+(`frontend/playwright.real-backend.config.ts`).
+
+**A demo user's actual first login** (`deploy/keycloak/bootstrap.sh` seeds
+each with a *temporary* password and `CONFIGURE_TOTP` pending):
+
+1. Go to `https://localhost:8443`, click "Sign in".
+2. Enter the seeded username and temporary password (e.g. `estimator1` /
+   `Estimator1Pass!` — see `bootstrap.sh` for the rest).
+3. Keycloak asks for a new permanent password (the temporary one is
+   single-use).
+4. Keycloak shows a QR code to configure an authenticator app (Google
+   Authenticator, Authy, etc.) — scan it, or click "Unable to scan?" for
+   the raw secret to enter manually — then enter the 6-digit code it
+   produces and submit.
+5. You land back in the app, logged in.
+
+`deploy/keycloak/dev-token.sh` (bearer tokens for scripting) and
+`deploy/keycloak/dev-prep-login-users.sh` (used by
+`frontend/e2e/real-backend`'s Playwright tests) both bypass steps 3–4 for
+their own purposes by clearing `requiredActions` and setting a permanent
+password directly via `kcadm.sh` — that's a deliberate dev-only shortcut
+for scripted/automated access, not something a real first login does.
+
+**Approving anything needs a step further still** (MFA step-up, `acr=silver`)
+**and does not currently work for a real login at all** — see
+docs/build-log.md's Phase 10 entry ("MFA step-up can never reach
+`acr=silver`") and the in-progress fix on `fix/keycloak-step-up`.
+
+## What was actually verified end-to-end (Phase 8a + Phase 10)
+
+Phase 8a, against a real, freshly-imported Keycloak 26 container: realm
+import (roles/groups/clients created correctly via the Admin REST API),
+password grant token issuance with `tenant_id` + `realm_access.roles`
+claims present, and a full `create vendor → list vendors` round trip
+through the real FastAPI app, real Postgres (with RLS), and a real
+Keycloak-issued, cryptographically validated JWT. The interactive
+Authorization Code browser flow was blocked by the cookie issue above and
+not completed live at the time.
+
+Phase 10 completed it live: a real Playwright browser driving the actual
+Keycloak login form end to end (`frontend/e2e/real-backend/login.spec.ts`,
+`make -C frontend e2e:real-backend` via `npm run e2e:real-backend`), plus
+real-backend happy paths for procurement (package → RFQ draft) and
+settlement (build → simulate → submit, submitter blocked by segregation of
+duties, a different real user's approval blocked by the MFA step-up gap
+above) — see `frontend/e2e/real-backend/*.spec.ts`.
