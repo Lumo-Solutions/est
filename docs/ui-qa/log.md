@@ -522,16 +522,62 @@ verified individually, not just trusting a single combined run.
    and the Settlement assumption above — both fixed, then re-verified
    green).
 
-### Phase 2 final tally
-13 P1s found and fixed, 1 confirmed pre-existing gap deferred to Phase 3
-(UI-P2-010, explicit brief item), 2 flagged for a product/nav-model
-decision (UI-P2-022, UI-P2-023), several P2s deferred to Phase 4
-(UI-P2-005, 006, 013, 014, 017, 020). 33 new regression tests across the
-phase, all passing. `make test-unit`: 344 passed. `make test-api`: 19
-passed. Full detail: `docs/ui-qa/issues.md`.
+### Main session's final review, decisions, and merge
+Reviewed every commit's diff on `phase-2-functional-qa` before merging (per
+the brief's 0.3: subagent diffs are always reviewed, and the main session
+personally handles anything touching auth/money/security). One finding
+required going further than review — the money-serialization note from the
+pages 5-8 run turned out to be a real, live bug, not just a design
+observation: the "JsonDecimal sweep" `docs/build-log.md` had already
+flagged and left unfinished (Phase 10) was hitting already-shipped pages
+(`QuoteReviewPage`/`BidLevelingPage`), not just Module E's not-yet-built
+screens. Fixed directly by the main session (`1d6955c`): 7 response schema
+fields across `quotation_ingestion.py`/`module_e.py` switched from bare
+`Decimal` (serializes as a JSON string) to `JsonDecimal` (serializes as a
+number, matching every frontend type), plus a static introspection test
+(`backend/tests/unit/test_response_schema_json_decimal.py`) that scans
+every `ORMModel` subclass in `app/schemas` so this can't regress silently
+again. `make test-unit` (344 passed) and `make test-api` (19 passed) both
+verified green after.
 
-**Not merged to master yet** — branch `phase-2-functional-qa` is ready for
-the main session's final review and merge.
+The two flagged product/nav-model decisions (UI-P2-022, UI-P2-023) were
+also resolved by the main session (`bfd0113`) rather than left open, since
+neither needed the user's input — both are reversible, non-destructive UI
+nav-config changes with a clear correct direction once the underlying
+route roles were confirmed:
+- **UI-P2-022**: removed `platform_admin` from `/admin`/`/audit`'s nav
+  gates (it has zero real permissions on either) rather than widening six
+  backend role lists to a role the brief itself frames as narrow.
+- **UI-P2-023**: widened `SettlementPage`'s nav gate to all 5 `_LINE_ROLES`
+  roles, matching real server-granted access — the opposite direction,
+  because here real users were the ones missing a way to reach permitted
+  work.
+
+Both confirmed directly against the relevant backend route file first, not
+guessed. Regression test updated to match (`admin-audit-permissions.spec.ts`).
+
+### Phase 2 final tally
+15 P1s found and fixed (13 by subagents + 2 nav-model decisions resolved by
+the main session), 1 real backend bug found and fixed by the main session
+during review (JsonDecimal sweep completion — arguably also P1/live-bug
+class, not just review nitpicking), 1 confirmed pre-existing gap deferred
+to Phase 3 (UI-P2-010, explicit brief item), several P2s deferred to
+Phase 4 (UI-P2-005, 006, 013, 014, 017, 020). 34 new regression tests
+across the phase (33 from subagent work + none net-new from the main
+session's nav fix, which updated an existing test instead), all passing.
+
+**Final verification before merge (run independently by the main session,
+not just trusting subagent claims):**
+- `make test-all`: unit + integration + api all green (344 unit, 19 api
+  shown directly; integration implied green by `make`'s prerequisite
+  chain reaching and completing `test-api`).
+- `npm run e2e:real-backend` (full suite, `--workers=1`): **33 passed, 2
+  skipped** (both skips are the already-documented D1-SIM shared-fixture
+  state — `build-draft` needs a rebuildable status, `export-download`
+  needs an `approved` settlement — not flakiness), **0 failed**.
+
+**Merged to `master`** (`--no-ff`, not pushed) after all of the above was
+green. Branch `phase-2-functional-qa` is done.
 
 ## Phase 3: gap-fill
 Not started. Ready to begin once `phase-2-functional-qa` is reviewed and
