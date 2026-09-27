@@ -11,6 +11,8 @@ set -euo pipefail
 # which breaks `docker exec` paths. Harmless on Linux/macOS.
 export MSYS_NO_PATHCONV=1
 
+. "$(dirname "${BASH_SOURCE[0]}")/lib-env-guard.sh"
+
 : "${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set (see deploy/.env)}"
 : "${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}"
 : "${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set}"
@@ -140,11 +142,23 @@ run update "realms/${REALM}" -s browserFlow=browser-stepup
 # BECAUSE a user has one configured, which would otherwise make every
 # direct-grant request fail with invalid_grant unless it also sent an otp
 # param. Disabling it is what actually keeps direct grant simple/bronze.
-echo "Disabling direct grant's conditional OTP (dev-token.sh stays bronze-only)..."
-DIRECT_GRANT_OTP_ID=$(run get "authentication/flows/direct%20grant/executions" -r "$REALM" --fields id,displayName --format csv --noquotes \
-    | tr -d '\r' | awk -F, '$2=="Direct Grant - Conditional OTP"{print $1}')
-[ -n "$DIRECT_GRANT_OTP_ID" ] && run update "authentication/flows/direct%20grant/executions" -r "$REALM" \
-    -b "{\"id\":\"${DIRECT_GRANT_OTP_ID}\",\"requirement\":\"DISABLED\"}"
+#
+# This is a realm-wide weakening of the direct grant flow (anyone using
+# password grant against ANY user skips OTP even if that user has a real
+# credential), so it's gated by the exact same dev/test-only guard as the
+# demo users/secrets below, not applied unconditionally -- outside dev/test
+# the direct grant flow's OTP step is left exactly as Keycloak's own
+# built-in default has it, and dev-token.sh (which relies on this being
+# disabled) is dev/test-only, documented in its own header comment.
+if is_dev_or_test_env; then
+    echo "Disabling direct grant's conditional OTP (dev-token.sh stays bronze-only, APP_ENV=${APP_ENV})..."
+    DIRECT_GRANT_OTP_ID=$(run get "authentication/flows/direct%20grant/executions" -r "$REALM" --fields id,displayName --format csv --noquotes \
+        | tr -d '\r' | awk -F, '$2=="Direct Grant - Conditional OTP"{print $1}')
+    [ -n "$DIRECT_GRANT_OTP_ID" ] && run update "authentication/flows/direct%20grant/executions" -r "$REALM" \
+        -b "{\"id\":\"${DIRECT_GRANT_OTP_ID}\",\"requirement\":\"DISABLED\"}"
+else
+    echo "APP_ENV='${APP_ENV:-<unset>}' is not 'dev' or 'test' -- leaving direct grant's Conditional OTP as Keycloak's own default (dev-token.sh only works in dev/test)."
+fi
 
 # Closes the gap where a user could remove their only OTP credential via
 # Keycloak's own account console, which -- since account-console isn't
@@ -175,13 +189,12 @@ seed_user() {
 # DEV/TEST ONLY -- fixed TOTP secrets so both a human (any authenticator
 # app, enter the base32 form manually) and frontend/e2e/real-backend's
 # Playwright specs (via otplib, computing codes from the SAME secret) can
-# log in deterministically. Guarded by APP_ENV: never seed a real secret
-# under a real/production realm, and the realm's own bronze level now
-# REQUIRES a working OTP credential to log in at all (auth-otp-form is
-# REQUIRED, not conditional -- see ensure_browser_stepup_flow above), so a
-# demo user with no credential and no CONFIGURE_TOTP required action left
-# pending would otherwise be unable to log in at all. A developer who wants
-# to test genuine QR-code enrolment instead runs
+# log in deterministically. The realm's own bronze level now REQUIRES a
+# working OTP credential to log in at all (auth-otp-form is REQUIRED, not
+# conditional -- see ensure_browser_stepup_flow above), so a demo user with
+# no credential and no CONFIGURE_TOTP required action left pending would
+# otherwise be unable to log in at all. A developer who wants to test
+# genuine QR-code enrolment instead runs
 # deploy/keycloak/dev-reset-totp-user.sh <user> <pass> first, which clears
 # this seeded credential and puts CONFIGURE_TOTP back.
 seed_totp() {
@@ -207,23 +220,31 @@ seed_totp() {
     echo "  '$username' TOTP secret (base32, for a real authenticator app or otplib): ${b32}"
 }
 
-seed_user estimator1 estimator "Estimator1Pass!"
-seed_user lead1 lead_estimator "Lead1Pass!"
-seed_user procurement1 procurement_head "Procurement1Pass!"
-seed_user bd1 bd_director "Bd1Pass!"
-seed_user md1 managing_director "Md1Pass!"
+# Fail CLOSED, not open: demo users get KNOWN passwords and (below)
+# dev-fixed TOTP secrets, which must never be seeded anywhere but a real
+# dev/test environment -- an unset APP_ENV, or any value other than
+# exactly "dev"/"test" (including "prod", "production", or a typo/unknown
+# value), skips this whole block rather than defaulting to "seed anyway".
+# See lib-env-guard.sh and test-lib-env-guard.sh.
+if is_dev_or_test_env; then
+    seed_user estimator1 estimator "Estimator1Pass!"
+    seed_user lead1 lead_estimator "Lead1Pass!"
+    seed_user procurement1 procurement_head "Procurement1Pass!"
+    seed_user bd1 bd_director "Bd1Pass!"
+    seed_user md1 managing_director "Md1Pass!"
 
-if [ "${APP_ENV:-dev}" = "production" ]; then
-    echo "APP_ENV=production -- refusing to seed dev-fixed TOTP secrets. Enrol each user's OTP for real." >&2
-else
-    echo "Seeding dev-fixed TOTP secrets (APP_ENV=${APP_ENV:-dev})..."
+    echo "Seeding dev-fixed TOTP secrets (APP_ENV=${APP_ENV})..."
     seed_totp estimator1 "installtec-dev-estimator1-totp01"
     seed_totp lead1 "installtec-dev-lead1-totp01-secret"
     seed_totp procurement1 "installtec-dev-procurement1-totp1"
     seed_totp bd1 "installtec-dev-bd1-totp-secret1"
     seed_totp md1 "installtec-dev-md1-totp-secret01"
+
+    echo
+    echo "Demo users seeded (permanent passwords, dev-fixed TOTP already enrolled -- see docs/keycloak-setup.md)."
+else
+    echo
+    echo "APP_ENV='${APP_ENV:-<unset>}' is not exactly 'dev' or 'test' -- refusing to create demo users with known passwords or dev-fixed TOTP secrets. This script's user/credential seeding is for local development and automated tests only; set APP_ENV=dev (or test) to run it, or enrol real users by hand for any other environment." >&2
 fi
 
-echo
-echo "Demo users seeded (permanent passwords, dev-fixed TOTP already enrolled -- see docs/keycloak-setup.md)."
 echo "JWKS URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}/realms/${REALM}/protocol/openid-connect/certs"

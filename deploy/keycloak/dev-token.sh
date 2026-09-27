@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
-# DEV ONLY. Gets a real bearer token for a seeded demo user so you can call the
-# API without the browser login flow. It:
+# DEV/TEST ONLY -- ONLY WORKS WHEN APP_ENV IS EXACTLY "dev" OR "test". Gets a
+# real bearer token for a seeded demo user so you can call the API without
+# the browser login flow. It:
 #   1. enables the password grant on the installtec-backend client (LOCAL Keycloak only),
 #   2. clears the demo user's required actions (TOTP enrolment, temp password),
 #   3. gives the user a permanent password,
 #   4. requests a token and prints it.
 # Never run this against a shared or production Keycloak.
+#
+# This relies on two things deploy/keycloak/bootstrap.sh only ever does
+# under its own is_dev_or_test_env guard (lib-env-guard.sh): the demo user
+# existing with a known password at all, and the realm's built-in "direct
+# grant" flow having its Conditional OTP subflow disabled (otherwise a
+# password-only request 400s with invalid_grant the moment the target user
+# has a real OTP credential, which every dev-fixed demo user now does).
+# Outside dev/test, run `make bootstrap-keycloak` with APP_ENV=production and
+# this script has nothing to work against -- there's no known password to
+# use, and direct grant's own OTP step is left exactly as Keycloak's default.
 #
 # Usage (from the repo root, in Git Bash):
 #   set -a; . deploy/.env; set +a; bash deploy/keycloak/dev-token.sh [username] [password]

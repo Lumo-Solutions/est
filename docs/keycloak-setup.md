@@ -152,6 +152,13 @@ is unaffected and keeps working over the existing plain-HTTP ports —
 `:8080` directly, not through `caddy-dev`, since a password-grant request
 doesn't need TLS and the issuer Keycloak stamps into the token is fixed by
 `KEYCLOAK_HOSTNAME` regardless of which port the request arrived on.
+**`dev-token.sh` only works when `APP_ENV` is `dev` or `test`**: it relies
+on `bootstrap.sh` having both created the demo user with a known password
+*and* disabled direct grant's "Conditional OTP" subflow, and `bootstrap.sh`
+now only does either under that same guard (`deploy/keycloak/lib-env-guard.sh`)
+— outside dev/test there's no known password to use, and a plain
+password-grant request 400s the moment the target user has a real OTP
+credential, which every seeded demo user does.
 
 **First time hitting `https://localhost:8443`**, Chrome will show a
 certificate warning (the cert is self-signed, generated locally by
@@ -207,6 +214,75 @@ real login could ever reach `acr=silver` at all before this).
 disables the `account`/`account-console` clients) — this app has its own
 frontend and never links to it, and it would otherwise let a user delete
 their only OTP credential and step around the step-up requirement.
+
+## Admin runbook: lost TOTP / password reset (account console disabled)
+
+With `account`/`account-console` disabled (above), a user has **no
+self-service** way to reset a lost authenticator or change their own
+password — every case below is an admin action via `kcadm.sh` (the same CLI
+`bootstrap.sh`/`dev-token.sh` already use), either from a shell with network
+access to Keycloak's admin API, or via `docker exec` into the Keycloak
+container as these examples do for the dev container name. Substitute the
+real container/host and an admin session for that environment; nothing
+below is dev-specific.
+
+```bash
+KCADM="/opt/keycloak/bin/kcadm.sh"
+REALM="installtec"          # or the real realm name
+USERNAME="someone"          # the affected user
+
+# One-time per shell: authenticate the CLI against Keycloak's admin API.
+docker exec -it installtec_keycloak $KCADM config credentials \
+    --server http://localhost:8080 --realm master \
+    --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+
+USER_ID=$(docker exec installtec_keycloak $KCADM get users -r "$REALM" \
+    -q username="$USERNAME" -q exact=true --fields id --format csv --noquotes | tr -d '\r')
+```
+
+**Lost TOTP device** (user can still log in with their password but has no
+working authenticator): delete their `otp` credential(s) and re-require
+enrolment on next login — Keycloak will show them a fresh QR code
+automatically, no admin involvement needed after this:
+
+```bash
+docker exec installtec_keycloak $KCADM get "users/${USER_ID}/credentials" -r "$REALM" \
+    --fields id,type --format csv --noquotes | tr -d '\r' | grep ,otp$
+# for each matching credential id:
+docker exec installtec_keycloak $KCADM delete "users/${USER_ID}/credentials/<credential-id>" -r "$REALM"
+
+docker exec installtec_keycloak $KCADM update "users/${USER_ID}" -r "$REALM" \
+    -s 'requiredActions=["CONFIGURE_TOTP"]'
+```
+
+Also clear any brute-force lockout left over from the failed attempts that
+likely prompted this (harmless no-op if there isn't one):
+
+```bash
+docker exec installtec_keycloak $KCADM delete "attack-detection/brute-force/users/${USER_ID}" -r "$REALM"
+```
+
+**Forgotten/compromised password**: set a new one directly. `--temporary`
+(the default when `-p`/`--new-password` is omitted from an interactive
+prompt) forces a change on next login instead of handing the user a
+permanent one outright — prefer that unless the new password is already
+being communicated to the user out-of-band right before they log in:
+
+```bash
+docker exec installtec_keycloak $KCADM set-password -r "$REALM" \
+    --username "$USERNAME" --new-password "<temporary-value>" --temporary
+```
+
+If they've also lost their TOTP device, combine both: run the credential
+deletion above first, then the password reset — they'll be prompted for a
+new password (if temporary) followed immediately by fresh TOTP enrolment on
+their next login, exactly the SRS's original first-login sequence.
+
+`deploy/keycloak/dev-reset-totp-user.sh` automates this exact sequence but
+is **dev/test only** (it sets a known, non-temporary password and is meant
+for resetting the seeded demo users between Playwright runs, not for a real
+user in a real environment) — use the commands above directly against any
+other environment.
 
 ## What was actually verified end-to-end (Phase 8a, Phase 10, fix/keycloak-step-up)
 
