@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useTaxonomyNodes } from '../features/admin/api'
 import { useBoqItems } from '../features/boq/api'
 import {
   useAddPackageItems,
@@ -148,8 +149,10 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
 export function ProcurementPackagesPage() {
   const { projectId } = useParams()
   const { data: packages } = useProcurementPackages(projectId)
+  const { data: tradeNodes } = useTaxonomyNodes()
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null)
   const [name, setName] = useState('')
+  const [tradeNodeId, setTradeNodeId] = useState('')
   const createPackage = useCreateProcurementPackage(projectId)
 
   return (
@@ -160,7 +163,10 @@ export function ProcurementPackagesPage() {
         className="mt-4 flex items-end gap-2"
         onSubmit={(e) => {
           e.preventDefault()
-          createPackage.mutate({ name }, { onSuccess: () => setName('') })
+          createPackage.mutate(
+            { name, trade_node_id: tradeNodeId || null },
+            { onSuccess: () => setName('') },
+          )
         }}
       >
         <input
@@ -170,6 +176,22 @@ export function ProcurementPackagesPage() {
           required
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         />
+        {/* Vendor matching (POST /procurement-packages/{id}/matched-vendors)
+            requires trade_node_id to be set -- leaving it unset lets you
+            create the package but leaves "Matched vendors" permanently
+            empty below, with no way to draft an RFQ. */}
+        <select
+          value={tradeNodeId}
+          onChange={(e) => setTradeNodeId(e.target.value)}
+          className="rounded border border-slate-300 px-2 py-1 text-sm"
+        >
+          <option value="">No trade (vendor matching disabled)</option>
+          {(tradeNodes ?? []).map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.path}
+            </option>
+          ))}
+        </select>
         <button type="submit" className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">
           Create package
         </button>
