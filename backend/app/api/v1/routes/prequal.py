@@ -39,6 +39,16 @@ async def list_certificate_types_endpoint(
     return [CertificateTypeOut.model_validate(c) for c in await prequal_service.list_certificate_types(session)]
 
 
+@router.get("/vendors/{vendor_id}/certificates", response_model=list[VendorCertificateOut])
+async def list_vendor_certificates_endpoint(
+    vendor_id: UUID,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[VendorCertificateOut]:
+    rows = await prequal_service.list_certificates_for_vendor(session, vendor_id)
+    return [VendorCertificateOut.model_validate(r) for r in rows]
+
+
 @router.post("/vendor-certificates", response_model=VendorCertificateOut, status_code=201)
 async def add_certificate_endpoint(
     data: VendorCertificateCreate,

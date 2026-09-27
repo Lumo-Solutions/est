@@ -23,6 +23,18 @@ async def list_certificate_types(session: AsyncSession) -> list[CertificateType]
     return list((await session.execute(select(CertificateType))).scalars().all())
 
 
+async def list_certificates_for_vendor(session: AsyncSession, vendor_id: UUID) -> list[VendorCertificate]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): only single-cert add/verify
+    existed before -- a certificates screen with expiry alerts needs to see
+    every certificate a vendor has, not just one at a time."""
+    result = await session.execute(
+        select(VendorCertificate)
+        .where(VendorCertificate.vendor_id == vendor_id)
+        .order_by(VendorCertificate.expiry_date.asc().nulls_last())
+    )
+    return list(result.scalars().all())
+
+
 async def add_certificate(
     session: AsyncSession, ctx: RequestContext, data: VendorCertificateCreate
 ) -> VendorCertificate:
