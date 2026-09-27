@@ -69,6 +69,7 @@ export function AuditPage() {
               {verifyChain.data.ok ? 'Chain intact.' : `Chain broken: ${verifyChain.data.detail}`}
             </p>
           )}
+          {verifyChain.isError && <p className="mt-2 text-sm text-red-600">{verifyChain.error.message}</p>}
         </div>
       )}
     </div>

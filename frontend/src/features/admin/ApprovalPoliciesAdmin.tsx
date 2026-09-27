@@ -1,10 +1,18 @@
 import { useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
+import { Role } from '../../lib/roles'
 import type { ApprovalPolicyTierIn } from '../../types/api'
 import { useApprovalPolicies, useCreateApprovalPolicy, useSetApprovalPolicyActive } from './api'
 
 const ROLES = ['estimator', 'lead_estimator', 'procurement_head', 'bd_director', 'managing_director']
 
+// Mirrors backend/app/api/v1/routes/approvals.py's _POLICY_ADMIN_ROLES --
+// managing_director only (not even platform_admin or procurement_head).
+const POLICY_ADMIN_ROLES = [Role.MANAGING_DIRECTOR]
+
 export function ApprovalPoliciesAdmin() {
+  const { hasRole } = useAuth()
+  const canWrite = hasRole(...POLICY_ADMIN_ROLES)
   const { data: policies } = useApprovalPolicies()
   const createPolicy = useCreateApprovalPolicy()
   const setActive = useSetApprovalPolicyActive()
@@ -24,6 +32,10 @@ export function ApprovalPoliciesAdmin() {
         prior one; deactivate it explicitly below once the new one is ready.
       </p>
 
+      {!canWrite && (
+        <p className="mt-2 text-xs text-slate-500">Your role can view policies but not create or (de)activate them.</p>
+      )}
+      {canWrite && (
       <form
         className="mt-3 rounded border border-slate-200 p-3"
         onSubmit={(e) => {
@@ -82,6 +94,7 @@ export function ApprovalPoliciesAdmin() {
         </div>
         {createPolicy.isError && <p className="mt-1 text-sm text-red-600">{createPolicy.error.message}</p>}
       </form>
+      )}
 
       <table className="mt-4 w-full text-left text-sm">
         <thead className="border-b border-slate-200 text-slate-500">
@@ -108,6 +121,7 @@ export function ApprovalPoliciesAdmin() {
                 <input
                   type="checkbox"
                   checked={p.is_active}
+                  disabled={!canWrite}
                   onChange={(e) => setActive.mutate({ policyId: p.id, data: { is_active: e.target.checked } })}
                 />
               </td>
@@ -115,6 +129,7 @@ export function ApprovalPoliciesAdmin() {
           ))}
         </tbody>
       </table>
+      {setActive.isError && <p className="mt-1 text-sm text-red-600">{setActive.error.message}</p>}
     </div>
   )
 }
