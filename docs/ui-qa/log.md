@@ -470,11 +470,72 @@ current shared-fixture state (build-gate needs a REBUILDABLE_STATUSES
 status; export-download needs `approved`) rather than being flaky —
 verified individually, not just trusting a single combined run.
 
-**Not yet covered:** AdminPage, AuditPage, the cross-cutting nav-hidden-
-page-still-403s check, and the dynamic-approval-role UX gap logged above.
+## Phase 2 — AdminPage, AuditPage, cross-cutting permission matrix (final chunk)
+
+**Status: done. Phase 2 as a whole is now complete.**
+
+1. **AdminPage** (UI-P2-021, P1, fixed): none of the six tabs
+   (Taxonomy/Approval policies/Tolerances/Layer-mapping/Reason codes/
+   Vendor regions) had any client-side role gate — the by-now-familiar
+   pattern, just not yet applied here. Added a `hasRole` gate per tab
+   mirroring each endpoint's real server role list (confirmed by reading
+   every route file, not assumed): Taxonomy/Tolerances/Layer-mapping =
+   lead/proc/md; **Approval policies = managing_director only**; Reason
+   codes/Vendor regions = lead/proc/bd/md. Disabled per-row edit widgets
+   for non-writing roles, added missing `isError` displays on every
+   mutation. Also fixed, in passing, the `TaxonomyAdmin.tsx` raw-ltree-
+   path dropdown bug already flagged (not yet fixed) under UI-P2-009.
+2. **UI-P2-022** (P1, confirmed via code reading — no live test possible,
+   flagged for a product decision, not fixed): `platform_admin` is
+   nav-gated into both `/admin` and `/audit`, but is in **none** of the
+   six Admin tabs' write-role lists, nor `/audit`'s read role list, nor
+   `/audit/verify`'s. After this run's fix, `/admin` correctly renders
+   read-only for `platform_admin` — but `/audit` would 403 immediately on
+   load. Two of this role's three nav-visible destinations are either
+   read-only or broken. Could be intentional (the brief frames
+   `platform_admin` as narrow — quarantine tenant-resolution only) or a
+   real gap; recommending the main session/user decide whether to narrow
+   the nav gates or widen the backend role lists, rather than guessing.
+3. **AuditPage**: mostly already correct (md-only verify gate, list-query
+   error display already present) — added the one missing `isError`
+   display on `verifyChain`. Confirmed server enforcement matches: `bd1`
+   can view but not verify (direct `GET /audit/verify` 403s); `estimator1`
+   hitting `/audit` by direct URL (nav-hidden) gets a real, informative
+   error ("Requires one of roles: ...") with no table — not a leak.
+4. **Cross-cutting permission matrix** (coverage.md §4): spot-checked
+   nav-hidden-but-URL-reachable pages and a couple of un-tested direct-API
+   writes. One check initially looked like a P0 data leak — `estimator`
+   reaching `SettlementPage` by direct URL saw full tender/margin
+   figures — but investigating the actual route roles (not just assuming)
+   showed this is genuine, intentional server-granted access
+   (`_LINE_ROLES` includes `estimator`), not a leak; the real finding is
+   the same shape as UI-P2-022 (**UI-P2-023**, also flagged for a
+   decision, not fixed): the Settlement nav gate excludes `estimator` and
+   `procurement_head` despite both having real, substantial server-granted
+   permissions there. No actual data leak found anywhere checked. Direct
+   API writes re-confirmed refused for `estimator`: `POST /taxonomy`,
+   `POST /vendors`, `POST /cost-items` (all 403).
+5. New regression tests: `frontend/e2e/real-backend/
+   admin-audit-permissions.spec.ts`, 8 tests, all passing (verified twice
+   — the first run caught two mistakes in the *tests themselves*, not
+   product bugs: a regex that didn't match the server's actual error text,
+   and the Settlement assumption above — both fixed, then re-verified
+   green).
+
+### Phase 2 final tally
+13 P1s found and fixed, 1 confirmed pre-existing gap deferred to Phase 3
+(UI-P2-010, explicit brief item), 2 flagged for a product/nav-model
+decision (UI-P2-022, UI-P2-023), several P2s deferred to Phase 4
+(UI-P2-005, 006, 013, 014, 017, 020). 33 new regression tests across the
+phase, all passing. `make test-unit`: 344 passed. `make test-api`: 19
+passed. Full detail: `docs/ui-qa/issues.md`.
+
+**Not merged to master yet** — branch `phase-2-functional-qa` is ready for
+the main session's final review and merge.
 
 ## Phase 3: gap-fill
-Not started.
+Not started. Ready to begin once `phase-2-functional-qa` is reviewed and
+merged.
 
 ## Phase 4: design system and redesign
 Not started.

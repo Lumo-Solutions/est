@@ -589,3 +589,173 @@ in `approved` state (it skips with a clear reason otherwise, same pattern
 as UI-P2-018's tests) — verify by running the full suite through a
 completed `settlement.spec.ts` approval first if this needs re-confirming
 end to end.
+
+## Phase 2 — AdminPage, AuditPage, and the cross-cutting permission matrix (docs/ui-qa/coverage.md section 4)
+
+### UI-P2-021 (P1, fixed) — None of AdminPage's six tabs had any client-side role gate; every tab's write controls were fully enabled to any role that could reach the page
+- **Page(s):** `AdminPage.tsx` and all six sub-components under
+  `frontend/src/features/admin/`: `TaxonomyAdmin`, `ApprovalPoliciesAdmin`,
+  `TolerancesAdmin`, `LayerTradeMappingAdmin`, `ReasonCodesAdmin`,
+  `VendorRegionsAdmin`.
+- **Role:** any role that reaches `/admin` (nav-gated to
+  `platform_admin`/`managing_director`, but see UI-P2-022 below — the page
+  has no route-level guard, so it's also reachable directly by URL).
+- **Steps:** log in as any role other than `managing_director`, open
+  `/admin` (via nav if `platform_admin`, via direct URL otherwise), try any
+  tab's write control.
+- **Expected:** a role the server will refuse gets a hidden/disabled
+  control or a clear explanatory message, same as every other page fixed
+  this phase.
+- **Actual (confirmed live before the fix):** every tab showed its create/
+  edit form fully enabled to any authenticated user, regardless of role —
+  same recurring pattern as UI-P2-007/008/015/018/019, just not yet applied
+  to Admin.
+- **Fix:** added a `hasRole` gate (mirroring each endpoint's real
+  server-side role list, one constant per component with a comment citing
+  the backend file/constant) around each tab's write form, disabled the
+  per-row edit widgets (checkboxes/selects) for a non-writing role, and
+  added missing `isError` displays on every mutation
+  (`updateNode`/`moveNode` on Taxonomy, `setActive` on Approval policies,
+  `setTolerance`, `replace` on Layer-mapping and Vendor-regions,
+  `updateCode` on Reason codes). The exact role lists, confirmed by reading
+  each route file:
+  - Taxonomy, Tolerances, Layer-mapping: `lead_estimator`/
+    `procurement_head`/`managing_director`.
+  - Approval policies: **`managing_director` only.**
+  - Reason codes, Vendor regions: `lead_estimator`/`procurement_head`/
+    `bd_director`/`managing_director`.
+  - None of the six include `platform_admin` — see UI-P2-022.
+- **Also fixed in passing:** `TaxonomyAdmin.tsx` had the same raw-ltree-
+  path-as-label bug already flagged (not yet fixed) in UI-P2-009's
+  "found elsewhere" note — both dropdowns (`-- No parent (root) --` create
+  form, and the per-row "move to new parent" picker) showed `n.path`/
+  `candidate.path` instead of `.name`. Fixed both.
+- **Regression test:** `frontend/e2e/real-backend/admin-audit-permissions.spec.ts`
+  — `managing_director` sees every tab's write form; `lead_estimator`
+  reaches `/admin` by direct URL (no nav link) and sees exactly the write
+  access the server actually grants (5 of 6 tabs, not Approval policies);
+  `estimator` sees every tab as read-only, plus a direct `POST /taxonomy`
+  attempt independently 403s server-side.
+
+### UI-P2-022 (P1, confirmed via code reading, not fixed — needs a product decision) — `platform_admin` is nav-gated into `/admin` and `/audit`, but is in NONE of the underlying endpoints' write/read role lists
+- **Page(s):** `AdminPage.tsx` (all six tabs), `AuditPage.tsx`.
+- **Role:** `platform_admin` (the `admin` role — see coverage.md's role
+  glossary).
+- **Why not verified live:** no `platform_admin` demo user exists anywhere
+  in the seed data (already logged as UI-P2-014, blocking the Quarantine
+  page's "Resolve tenant" action too) — confirmed instead by reading every
+  relevant route file's role decorator, cross-referenced against
+  `frontend/src/app/AppShell.tsx`'s nav gates:
+  - `/admin` nav gate: `platform_admin`, `managing_director`
+    (`AppShell.tsx:41`).
+  - Taxonomy/Tolerances/Layer-mapping writes: `lead_estimator`/
+    `procurement_head`/`managing_director` — no `platform_admin`.
+  - Approval policy writes: `managing_director` only — no `platform_admin`.
+  - Reason codes/Vendor regions writes: `lead_estimator`/
+    `procurement_head`/`bd_director`/`managing_director` — no
+    `platform_admin`.
+  - `/audit` nav gate: `platform_admin`, `managing_director`,
+    `bd_director` (`AppShell.tsx:42`). Server `_READ_ROLES`
+    (`backend/app/api/v1/routes/audit.py`): `lead_estimator`/
+    `procurement_head`/`bd_director`/`managing_director` — no
+    `platform_admin` (and `GET /audit/verify` is `managing_director`
+    only, also excluding `platform_admin`).
+- **Net effect:** a `platform_admin` user would see nav links to `/admin`
+  and `/audit`, and (after this run's own role-gate fix) `/admin`'s six
+  tabs would all correctly show as read-only for them — but `/audit`
+  itself would 403 immediately on load (the page's own list query is
+  gated by `_READ_ROLES`, which excludes `platform_admin` entirely), so
+  the nav link leads to an error page, not a read-only view. This is
+  `platform_admin`'s *only* other nav-visible destination besides the
+  Quarantine queue's tenant-resolution action — i.e. two of this role's
+  three reachable surfaces are either fully read-only or fully broken.
+- **Not fixed here:** this looks like it could be intentional (the brief
+  itself describes `platform_admin` as a narrow, Keycloak-only role for
+  the quarantine tenant-resolution action specifically, not a general
+  admin persona — see `docs/ui-qa/coverage.md`'s role glossary), in which
+  case the right fix is narrowing the nav gates (drop `platform_admin`
+  from `/admin` and `/audit`'s `requiresRoles`), not widening every
+  backend role list to include it. Flagging for a main-session/product
+  decision rather than guessing which direction is correct — this is
+  exactly the kind of role-model question the brief reserves for that
+  review, not a page-scoped UI fix.
+- **Regression test:** none added (nothing to assert without knowing which
+  direction is correct) — `admin-audit-permissions.spec.ts`'s
+  `estimator`/`lead_estimator` tests cover the roles that ARE testable.
+
+### UI-P2-023 (P1, confirmed live, not fixed — same product decision as UI-P2-022) — SettlementPage's nav gate excludes two roles that have real, server-granted access to it
+- **Page(s):** `SettlementPage.tsx`.
+- **Role:** `estimator`, `procurement_head`.
+- **What was found (initially looked like a P0 data leak — it isn't):** a
+  cross-cutting spot-check navigated `estimator` directly to
+  `/projects/:id/settlement` (nav-gated to `lead_estimator`/`bd_director`/
+  `managing_director` only per `AppShell.tsx`) expecting a 403, and instead
+  got the full cockpit — tender total, cost breakdown, margin %, sliders.
+  Investigated before concluding either way: `list_settlements_endpoint`/
+  `get_settlement_endpoint` (`backend/app/api/v1/routes/settlement.py`) use
+  plain `CurrentUser` (any authenticated, project-visible user), which is
+  consistent with `_LINE_ROLES` (`= ESTIMATOR + every _HEADER_ROLES role` —
+  i.e. all 5 business roles) genuinely granting `estimator` simulate/line-
+  edit/save-scenario/export access on this page. **This is real, intended
+  server-granted access, not a leak** — confirmed `estimator`'s Build/
+  Submit buttons correctly stay hidden regardless (UI-P2-018).
+- **The actual, still-real finding:** the nav gate (`lead_estimator`/
+  `bd_director`/`managing_director`) doesn't match either role's real
+  permissions: `estimator` has genuine `_LINE_ROLES` access (simulate/
+  edit lines/save scenarios/export/read) and `procurement_head` has
+  genuine `_HEADER_ROLES` access (build draft, update defaults, trade
+  overrides, refresh quantities — only `_SUBMIT_ROLES`/`_OUTCOME_ROLES`,
+  bd/md, are actually restricted the way the nav gate implies). Both roles
+  can only reach real, permitted work here by knowing the direct URL.
+- **Same disposition as UI-P2-022:** this is a product/nav-model decision
+  (should the nav gate widen to match real permissions, given the brief's
+  own goal names "a real estimator, procurement head or director" as the
+  target user?), not a page-scoped bug fix — flagging alongside UI-P2-022
+  rather than guessing.
+- **Regression test:** `admin-audit-permissions.spec.ts` → the
+  `SettlementPage` cross-cutting test now asserts the *correct* behavior
+  (real figures render for `estimator`, Build/Submit stay hidden) instead
+  of the wrong assumption it started with.
+
+### Confirmed correct, not a leak — cross-cutting permission matrix (coverage.md section 4)
+Spot-checked (not exhaustively re-tested — every page already checked its
+own obvious cases while being fixed this phase; this targeted the specific
+open question coverage.md section 4 raised: does a nav-hidden page still
+enforce access when reached by direct URL, since `App.tsx` has no
+route-level role guard, only `RequireAuth` for authentication):
+- `estimator` navigating directly to `/audit` (nav-hidden): page loads
+  (`RequireAuth` only checks authentication), but the list query 403s
+  immediately with a clear message ("Requires one of roles: ...") and no
+  table renders — no data leak.
+- `estimator` navigating directly to `/projects/:id/settlement` (nav-
+  hidden): **not** a leak, see UI-P2-023 — real figures render because
+  this role has genuine server-granted read/simulate/export access there;
+  Build/Submit correctly stay hidden.
+- `lead_estimator`/`procurement_head` reaching `/admin` by direct URL
+  (nav-hidden for both): **not** a leak — see UI-P2-021, their write
+  access on 5 of 6 tabs is real and server-granted, the nav gate just
+  undersells it.
+- Direct API writes independently re-confirmed refused for `estimator`:
+  `POST /taxonomy` (403, via UI-P2-021's test), `POST /vendors` (403,
+  vendor master is lead/proc/bd/md only per coverage.md section 2),
+  `POST /cost-items` (403, cost library write is lead/proc/md only per
+  coverage.md section 2) — these two hadn't been checked from the direct-
+  API angle yet (Vendor master and Cost library both have zero frontend
+  page at all, per coverage.md section 2, so there was no page-level test
+  to derive this from).
+- No route-level 404/role-guard gap found beyond what UI-P2-001 (missing
+  catch-all) and UI-P2-022 (above) already cover.
+
+**Phase 2 is now done.** All 14 routed pages plus AdminPage/AuditPage
+walked live as their relevant roles. Totals across the whole phase: 13 P1s
+found and fixed (UI-P2-001, 002, 003, 004, 007, 008, 009, 011, 012, 015,
+018, 019, 021 — see `docs/ui-qa/log.md`'s per-batch entries for each one's
+detail), 1 confirmed pre-existing gap left for Phase 3 (UI-P2-010, explicit
+brief item), 2 flagged for a product/nav-model decision rather than fixed
+(UI-P2-022 `platform_admin` on Admin/Audit, UI-P2-023 `estimator`/
+`procurement_head` on Settlement — both are "nav gate narrower than real
+server-granted permissions," not security defects), and several P2 polish
+items deferred to Phase 4 (UI-P2-005, 006, 013, 014, 017, 020). New
+regression tests: 8 (pages 1-4) + 6 (pages 5-8) + 1 (backend JsonDecimal
+sweep) + 6 (pages 9-11) + 4 (pages 12-14) + 8 (Admin/Audit/cross-cutting)
+= 33 new tests this phase, all passing.
