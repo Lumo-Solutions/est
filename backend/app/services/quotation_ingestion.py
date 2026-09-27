@@ -61,11 +61,25 @@ def _require_platform_admin(ctx: RequestContext) -> None:
 
 
 async def list_inbound_review_queue(session: AsyncSession) -> list[InboundEmail]:
-    """RLS alone decides what this returns: a platform_admin sees only
+    """RLS alone decides tenant scoping: a platform_admin sees only
     tenant_id IS NULL rows, everyone else sees only their own tenant's --
-    see migration 0016's inbound_emails_read policy."""
+    see migration 0016's inbound_emails_read policy.
+
+    review_status defaults to "open" for EVERY inbound email, including
+    ones that were auto-processed and never needed a human at all (models/
+    quotation_ingestion.py's own comment: needs_review is set even when
+    match_status == matched) -- review_status only moves off "open" once
+    someone actually resolves/dismisses/attaches one. Filtering on
+    review_status alone (found live via Phase 2 UI QA of
+    QuarantineQueuePage, docs/ui-qa/issues.md UI-P2-012) meant the queue
+    kept every ordinary successfully-matched email forever, drowning out
+    the ones that actually need a procurement head's attention. needs_review
+    is the field that means "actually needs review".
+    """
     result = await session.execute(
-        select(InboundEmail).where(InboundEmail.review_status == "open").order_by(InboundEmail.received_at)
+        select(InboundEmail)
+        .where(InboundEmail.review_status == "open", InboundEmail.needs_review.is_(True))
+        .order_by(InboundEmail.received_at)
     )
     return list(result.scalars().all())
 

@@ -133,6 +133,27 @@ async def test_platform_admin_sees_only_unresolved_tenant_emails(rls_session):
     assert unresolved.id not in {r.id for r in other_rows}
 
 
+async def test_review_queue_excludes_auto_processed_emails_that_never_needed_review(rls_session):
+    """Found live via Phase 2 UI QA (docs/ui-qa/issues.md UI-P2-012):
+    review_status defaults to "open" for every inbound email, including ones
+    that were successfully auto-processed and never needed a human
+    (match_status == matched, needs_review == False) -- review_status only
+    moves off "open" once someone resolves/dismisses/attaches a row. Before
+    this fix, list_inbound_review_queue filtered on review_status alone, so
+    QuarantineQueuePage showed every ordinary matched email forever alongside
+    the ones that actually needed attention."""
+    tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
+    auto_processed = await _seed_inbound_email(rls_session, tenant_id=tenant_id, rfq_id=rfq.id, needs_review=False)
+    genuinely_flagged = await _seed_inbound_email(rls_session, tenant_id=tenant_id, rfq_id=rfq.id, needs_review=True)
+
+    ph_ctx = _ctx(frozenset({"procurement_head"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, ph_ctx)
+    rows = await quotation_service.list_inbound_review_queue(rls_session)
+    ids = {r.id for r in rows}
+    assert genuinely_flagged.id in ids
+    assert auto_processed.id not in ids
+
+
 async def test_resolve_inbound_email_tenant_is_platform_admin_only(rls_session):
     tenant_id, _rfq = await _seed_tenant_project_rfq(rls_session)
     unresolved = await _seed_inbound_email(rls_session, tenant_id=None, rfq_id=None, needs_review=True)
