@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Browser, Page } from '@playwright/test'
 import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
 
 // Fixture project app/cli.py::simulate_settlement builds/reuses (see
@@ -102,6 +102,48 @@ export async function csrfHeaders(page: Page): Promise<Record<string, string>> {
   const csrf = cookies.find((c) => c.name === '__Host-ins_csrf')
   if (!csrf) throw new Error('__Host-ins_csrf cookie not found -- not logged in?')
   return { 'X-CSRF-Token': csrf.value }
+}
+
+// None of the CLI's `simulate-*`/`seed-qa-demo-data` fixtures ever add a
+// *real* Keycloak dev user (estimator1, lead1, ...) as a ProjectMember --
+// they all use their own synthetic "_SIM_*"/"_E2E_*" user ids instead (see
+// app/cli.py). app/services/projects.py::assert_can_see_project requires
+// membership for estimator/lead_estimator specifically (bd_director,
+// managing_director, and procurement_head all bypass it via
+// _PROJECT_VISIBLE_WITHOUT_MEMBERSHIP_ROLES) -- so an interactive-login
+// lead1/estimator1 spec hits "Not a member of project ..." on its very
+// first write against any fixture project, not because of a bug in the
+// thing being tested. Confirmed live: docs/ui-qa/issues.md UI-P2-008. This
+// adds `username` as a member of `projectId` (idempotent -- a second add is
+// a harmless 204, add_member has no uniqueness constraint issue in
+// practice for this dev-only use) using a `bd1` session, which bypasses
+// membership entirely and can also call POST /projects/{id}/members.
+export async function ensureProjectMember(
+  browser: Browser,
+  projectId: string,
+  username: 'estimator1' | 'lead1',
+): Promise<void> {
+  const password = username === 'estimator1' ? 'Estimator1Pass!' : 'Lead1Pass!'
+  const userPage = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage()
+  await loginViaKeycloak(userPage, username, password)
+  const me = (await (await userPage.request.get('/api/v1/auth/me')).json()) as { sub: string }
+  await userPage.close()
+
+  const bdPage = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage()
+  await loginViaKeycloak(bdPage, 'bd1', 'Bd1Pass!')
+  const response = await bdPage.request.post(`/api/v1/projects/${projectId}/members`, {
+    headers: await csrfHeaders(bdPage),
+    data: { user_id: me.sub, project_role: null },
+  })
+  await bdPage.close()
+  // (project_id, user_id) is ProjectMember's composite primary key -- a
+  // second add for a user already a member hits that constraint, which
+  // app/core/errors.py's integrity_error_handler turns into a 409, not a
+  // 500. Idempotent from the caller's point of view: already a member is
+  // exactly the state this function is trying to ensure.
+  if (!response.ok() && response.status() !== 409) {
+    throw new Error(`Failed to add ${username} as a member of project ${projectId}: ${response.status()} ${await response.text()}`)
+  }
 }
 
 // Looks the fixture project up by code through the real API (same session
