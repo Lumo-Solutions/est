@@ -6,27 +6,6 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../../../')
 
-// Demo users these specs log in as through the real Keycloak form. Each is
-// seeded by deploy/keycloak/bootstrap.sh with CONFIGURE_TOTP + a temporary
-// password (`make bootstrap-keycloak`) -- dev-prep-login-users.sh clears
-// that so the interactive login here doesn't also have to automate TOTP
-// enrolment, exactly like dev-token.sh already does for a single user
-// before a scripted password-grant request. See docs/keycloak-setup.md's
-// "Interactive browser login in dev" section for the human first-login
-// flow (TOTP included) that this intentionally bypasses.
-//
-// md1 is deliberately NOT in this list: settlement.spec.ts's approve step
-// needs a real MFA step-up (app/security/deps.py::require_mfa_step_up,
-// acr=silver), which needs an actual TOTP credential -- see
-// dev-reset-totp-user.sh and totp.ts below.
-const DEMO_USERS: Record<string, string> = {
-  estimator1: 'Estimator1Pass!',
-  lead1: 'Lead1Pass!',
-  bd1: 'Bd1Pass!',
-}
-
-export const MD1_PASSWORD = 'Md1Pass!'
-
 function loadDotEnv(file: string): Record<string, string> {
   const out: Record<string, string> = {}
   let text: string
@@ -48,13 +27,13 @@ function loadDotEnv(file: string): Record<string, string> {
 export default async function globalSetup(): Promise<void> {
   const env = { ...process.env, ...loadDotEnv(path.join(REPO_ROOT, 'deploy', '.env')) }
 
-  const userArgs = Object.entries(DEMO_USERS).map(([user, pass]) => `${user}:${pass}`)
-  execFileSync('bash', ['deploy/keycloak/dev-prep-login-users.sh', ...userArgs], {
-    cwd: REPO_ROOT,
-    env,
-    stdio: 'inherit',
-  })
-  execFileSync('bash', ['deploy/keycloak/dev-reset-totp-user.sh', 'md1', MD1_PASSWORD], {
+  // Idempotent (see deploy/keycloak/bootstrap.sh) -- ensures the demo
+  // users, their dev-fixed TOTP secrets (totp.ts's DEMO_TOTP_SECRETS,
+  // guarded there by APP_ENV), the auth_time claim mapper, and the
+  // browser-stepup authentication flow (fix/keycloak-step-up) all exist,
+  // regardless of whether a human already ran `make bootstrap-keycloak`
+  // for this stack.
+  execFileSync('bash', ['-lc', 'make bootstrap-keycloak'], {
     cwd: REPO_ROOT,
     env,
     stdio: 'inherit',

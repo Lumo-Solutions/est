@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { generateTotp } from './totp'
+import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
 
 // Fixture project app/cli.py::simulate_settlement builds/reuses (see
 // global-setup.ts) -- one BOQ line with an ACCEPTED quotation line item
@@ -17,53 +17,27 @@ interface ProjectSummary {
 
 // Real Keycloak login form (no mocked /auth/me) -- see
 // docs/keycloak-setup.md's "Interactive browser login in dev" section.
-// Demo users are pre-provisioned by global-setup.ts (permanent password, no
-// pending required actions), so this only exercises the username/password
-// step, not TOTP enrolment -- that's a documented human first-login flow,
-// not something most of these specs need to automate (see that doc for
-// why). loginAndEnrollTotp below is the one exception, for a spec that
-// specifically needs a real MFA step-up.
+// fix/keycloak-step-up's browser-stepup flow requires OTP at EVERY login now
+// (bronze = password + TOTP, not just password -- see
+// deploy/keycloak/bootstrap.sh's ensure_browser_stepup_flow), so this always
+// completes both steps. Every demo user has a dev-fixed TOTP secret seeded
+// by that same bootstrap.sh (see totp.ts's DEMO_TOTP_SECRETS) -- a human
+// wanting to test genuine QR-code enrolment instead runs
+// deploy/keycloak/dev-reset-totp-user.sh first (see docs/keycloak-setup.md).
 export async function loginViaKeycloak(page: Page, username: string, password: string): Promise<void> {
+  const secret = DEMO_TOTP_SECRETS[username]
+  if (!secret) throw new Error(`No dev-fixed TOTP secret known for '${username}' -- see totp.ts's DEMO_TOTP_SECRETS`)
+
   await page.goto('/api/v1/auth/login')
   await page.locator('#username').fill(username)
   await page.locator('#password').fill(password)
   await page.locator('#kc-login').click()
+  // Same form/button id ("kc-login") on the OTP step as the password step.
+  await submitTotpCode(page, '#otp', () => page.locator('#kc-login').click(), secret)
   // Keycloak redirects through /api/v1/auth/callback and lands back on the
   // SPA -- wait for that round trip instead of a fixed path, since `next`
   // can vary.
   await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
-}
-
-// Same login form, but for an account left with CONFIGURE_TOTP pending on
-// purpose (dev-reset-totp-user.sh) so this can enrol a real TOTP
-// credential itself and return its secret for a later real MFA step-up
-// (completeMfaStepUp) -- see settlement.spec.ts.
-export async function loginAndEnrollTotp(page: Page, username: string, password: string): Promise<string> {
-  await page.goto('/api/v1/auth/login')
-  await page.locator('#username').fill(username)
-  await page.locator('#password').fill(password)
-  await page.locator('#kc-login').click()
-  await page.waitForURL(/\/realms\/.*login-actions\/required-action/)
-  const secret = await enrollTotp(page)
-  await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
-  return secret
-}
-
-// Completes Keycloak's CONFIGURE_TOTP required-action page (reached right
-// after loginViaKeycloak's password submit, for an account that still has
-// that required action pending -- see dev-reset-totp-user.sh) the way a
-// person would with an authenticator app: opens the "Unable to scan?"
-// manual-entry view, reads the real human-readable secret out of
-// #kc-totp-secret-key, and submits a freshly computed code. Returns the
-// base32 secret so a later real MFA step-up (completeMfaStepUp) can
-// generate a fresh code from the same now-registered credential --
-// Keycloak never exposes a credential's secret again after enrolment, so
-// this is the only time it's available.
-export async function enrollTotp(page: Page): Promise<string> {
-  await page.getByRole('link', { name: 'Unable to scan?' }).click()
-  const secret = (await page.locator('#kc-totp-secret-key').innerText()).replace(/\s+/g, '')
-  await submitTotpCode(page, '#totp', () => page.locator('#saveTOTPBtn').click(), secret)
-  return secret
 }
 
 // A code generated right before submission can still straddle Keycloak's
@@ -85,11 +59,11 @@ export async function enrollTotp(page: Page): Promise<string> {
 // any brute-force history left over from a PREVIOUS run so this always
 // starts from zero.
 async function submitTotpCode(page: Page, fieldSelector: string, submit: () => Promise<void>, secret: string): Promise<void> {
-  await page.locator(fieldSelector).fill(generateTotp(secret))
+  await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
   if (!(await page.getByText('Invalid authenticator code.').isVisible().catch(() => false))) return
   await page.waitForTimeout(65_000)
-  await page.locator(fieldSelector).fill(generateTotp(secret))
+  await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
 }
 

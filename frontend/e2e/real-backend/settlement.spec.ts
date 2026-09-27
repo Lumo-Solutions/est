@@ -4,10 +4,10 @@ import {
   D1_SIM_PROJECT_CODE,
   findProjectByCode,
   forceZeroDefaults,
-  loginAndEnrollTotp,
   loginViaKeycloak,
   resolveUnresolvedLines,
 } from './helpers'
+import { DEMO_TOTP_SECRETS } from './totp'
 
 // Real backend, real Keycloak logins, no page.route mocks anywhere.
 // global-setup.ts runs `make dev-simulate-settlement` first, which
@@ -63,36 +63,28 @@ test('settlement: build -> simulate -> submit -> approve as a different user', a
 
   // A different real user, in a separate browser context (separate
   // session cookie) -- md1 has the managing_director role this request
-  // actually routed to. md1 is left with CONFIGURE_TOTP pending on purpose
-  // (dev-reset-totp-user.sh, via global-setup.ts) so it enrols a REAL TOTP
-  // credential here, because deciding an approval requires a real MFA
-  // step-up (app/security/deps.py::require_mfa_step_up, acr=silver) --
-  // Approve 403s with urn:installtec:step-up-required the first time,
+  // actually routed to, and a dev-fixed TOTP secret seeded by
+  // deploy/keycloak/bootstrap.sh (see totp.ts's DEMO_TOTP_SECRETS), same as
+  // every other demo user. Approve 403s with urn:installtec:step-up-required
+  // the first time (bd1's own submitter session is bronze-only, and so is
+  // md1's fresh login -- see app/security/deps.py::has_recent_step_up),
   // which lib/api.ts turns into a full-page redirect through Keycloak's
-  // re-authentication (password + a fresh OTP code from that same
-  // credential), not just a UI-level retry.
+  // real re-authentication: a genuine MFA step-up
+  // (deploy/keycloak/realm-installtec.json's browser-stepup flow reattaches
+  // md1's existing bronze session via the Cookie authenticator, so this is
+  // just the incremental OTP step, not password again -- see
+  // docs/build-log.md's fix/keycloak-step-up section), not a UI-level retry.
   const mdContext = await browser.newContext({ ignoreHTTPSErrors: true })
   const mdPage = await mdContext.newPage()
-  const totpSecret = await loginAndEnrollTotp(mdPage, 'md1', 'Md1Pass!')
+  await loginViaKeycloak(mdPage, 'md1', 'Md1Pass!')
   await mdPage.goto(`/projects/${project.id}/settlement`)
 
   const approveButton = mdPage.getByRole('button', { name: 'Approve' })
   await expect(approveButton).toBeEnabled()
   await approveButton.click()
-  await completeMfaStepUp(mdPage, 'Md1Pass!', totpSecret)
+  await completeMfaStepUp(mdPage, 'Md1Pass!', DEMO_TOTP_SECRETS.md1)
 
-  // KNOWN PRE-EXISTING GAP (docs/build-log.md's Phase 10 section, fix
-  // tracked on branch fix/keycloak-step-up): completing this real
-  // Keycloak re-authentication, TOTP and all, still comes back acr=bronze,
-  // not silver -- the realm import defines an acr.loa.map but never binds
-  // an authentication flow that actually grants level 2 for completing
-  // OTP, so require_mfa_step_up's `ctx.acr < silver` check can never be
-  // satisfied by ANY real login today, and decide() 403s again exactly
-  // the same way. This asserts that re-demand (the gate correctly firing
-  // and re-firing) rather than claiming an approval that cannot actually
-  // complete against the current realm config.
-  await mdPage.goto(`/projects/${project.id}/settlement`)
-  await expect(approveButton).toBeEnabled()
-  await Promise.all([mdPage.waitForURL(/acr_values=silver/), approveButton.click()])
+  await approveButton.click()
+  await expect(mdPage.getByText(/^v\d+ -- approved -- /)).toBeVisible()
   await mdContext.close()
 })

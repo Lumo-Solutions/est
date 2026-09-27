@@ -1,36 +1,37 @@
-import { createHmac } from 'node:crypto'
+import { generate } from 'otplib'
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
-function base32Decode(input: string): Buffer {
-  const clean = input.toUpperCase().replace(/[^A-Z2-7]/g, '')
+// deploy/keycloak/bootstrap.sh seeds each demo user's OTP credential with a
+// fixed RAW secret string (dev/test only, guarded by APP_ENV there) and
+// prints this same base32 encoding of it for a real authenticator app --
+// otplib's functional API takes a base32 secret (matching
+// generateSecret()'s own output format), so this mirrors that conversion
+// here rather than duplicating the raw strings in two encodings.
+export function base32Encode(raw: string): string {
+  const bytes = Buffer.from(raw, 'utf-8')
   let bits = ''
-  for (const char of clean) {
-    const value = BASE32_ALPHABET.indexOf(char)
-    if (value === -1) throw new Error(`Invalid base32 character in TOTP secret: ${char}`)
-    bits += value.toString(2).padStart(5, '0')
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, '0')
+  while (bits.length % 5 !== 0) bits += '0'
+  let out = ''
+  for (let i = 0; i < bits.length; i += 5) {
+    out += BASE32_ALPHABET[parseInt(bits.slice(i, i + 5), 2)]
   }
-  const bytes: number[] = []
-  for (let i = 0; i + 8 <= bits.length; i += 8) {
-    bytes.push(parseInt(bits.slice(i, i + 8), 2))
-  }
-  return Buffer.from(bytes)
+  return out
 }
 
-// RFC 6238 TOTP (HMAC-SHA1, 6 digits, 30s step) -- matches
-// deploy/keycloak/realm-installtec.json's otpPolicy for this dev realm
-// import, not a general-purpose implementation. Used to complete a real
-// Keycloak TOTP enrolment/step-up in e2e/real-backend specs without a new
-// dependency (see enrollTotp/completeMfaStepUp in helpers.ts).
-export function generateTotp(base32Secret: string, atMs: number = Date.now(), digits = 6, stepSeconds = 30): string {
-  const key = base32Decode(base32Secret)
-  const counter = Math.floor(atMs / 1000 / stepSeconds)
-  const counterBuffer = Buffer.alloc(8)
-  counterBuffer.writeBigUInt64BE(BigInt(counter))
+// deploy/keycloak/bootstrap.sh's seed_totp() -- same raw strings, same
+// order. Keep in sync if either changes.
+export const DEMO_TOTP_SECRETS: Record<string, string> = {
+  estimator1: 'installtec-dev-estimator1-totp01',
+  lead1: 'installtec-dev-lead1-totp01-secret',
+  procurement1: 'installtec-dev-procurement1-totp1',
+  bd1: 'installtec-dev-bd1-totp-secret1',
+  md1: 'installtec-dev-md1-totp-secret01',
+}
 
-  const hmac = createHmac('sha1', key).update(counterBuffer).digest()
-  const offset = hmac[hmac.length - 1] & 0x0f
-  const binary =
-    ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff)
-  return (binary % 10 ** digits).toString().padStart(digits, '0')
+// realm-installtec.json's otpPolicy is HmacSHA1/6 digits/30s step, which are
+// otplib's own defaults -- no extra options needed.
+export async function generateTotp(rawSecret: string): Promise<string> {
+  return generate({ secret: base32Encode(rawSecret) })
 }
