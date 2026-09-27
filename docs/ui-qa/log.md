@@ -76,7 +76,66 @@ idempotent against its own leftover state. Candidate for Phase 1/2 cleanup
 itself idempotent).
 
 ## Phase 1: inventory and demo data
-Not started.
+
+**Status: done.**
+
+1. **Coverage matrix**: `docs/ui-qa/coverage.md` — every frontend route
+   (from `App.tsx`/`AppShell.tsx`) cross-referenced against every backend
+   endpoint (`backend/app/api/v1/routes/`), by role and action.
+
+2. **No-UI capabilities confirmed** (all 6 of the brief's candidates,
+   verified by grepping `frontend/src` for each resource, not assumed):
+   vendor master + duplicate review, prequalification & certificates, cost
+   library, and Module E all have real backend endpoints and zero frontend
+   page. **Users & roles has no backend endpoint at all yet** — not just
+   missing UI; Phase 3 needs a new read-only endpoint calling Keycloak's
+   admin API. Saved-scenario delete has neither a UI nor a backend
+   endpoint (Phase 3 adds the endpoint, per the brief). Smaller gaps also
+   recorded: project edit/members, quotation attachments viewer,
+   exclusion-flag acknowledge, fx-rate overrides, BOQ item delete,
+   settlement per-trade/per-line overrides — endpoint exists, page exists,
+   action doesn't.
+
+3. Two new findings from the route walk itself (not in the brief's list):
+   **no catch-all/404 route** in `App.tsx` (an already-built but unused
+   `PlaceholderPage.tsx` looks like it was meant for this); and **no
+   route-level role guard** beyond authentication — a nav-hidden page is
+   still fully reachable by direct URL, relying entirely on its own data
+   calls to 403 server-side. Both flagged for a live check in Phase 2.
+
+4. **Demo data seeded**:
+   - `make dev-simulate-e2e` (re-run clean after the auth_time fix below):
+     full lifecycle, `won` outcome, on E2E-SIM.
+   - New `make dev-seed-qa-demo-data` (`python -m app.cli
+     seed-qa-demo-data`): its own QA-DEMO project with a **rejected**
+     settlement and a **lost**-outcome settlement (D1-SIM already
+     accumulates draft/submitted/approved from repeated
+     `simulate-settlement` runs, but never rejected/lost, and reusing
+     D1-SIM risked its documented non-idempotency gap — see below); a
+     vendor **duplicate-candidate pair** (same trade license, near-
+     identical names); and a vendor with **3 certificates** (expired,
+     expiring in 10 days, valid+verified) for Phase 3's future
+     prequalification UI. Idempotent; extended `make dev-clean-demo-data`
+     to remove all of it alongside E2E-SIM. Verified: ran twice, second
+     run correctly skipped already-seeded vendors/certs.
+
+5. **Real regression found and fixed while seeding**: `make
+   dev-simulate-e2e` and `make dev-simulate-settlement` started failing
+   with `StepUpRequiredError` right after Phase 0's merge —
+   `app/cli.py`'s synthetic `acr="silver"` `RequestContext`s never set
+   `auth_time`, which `has_recent_step_up` (correctly) fails closed on.
+   Fixed by adding `auth_time=int(time.time())` alongside every
+   `acr="silver"` construction, plus a static regression test
+   (`test_cli_stepup_contexts.py`) scanning `app/cli.py`'s own source for
+   the same mistake in any future `simulate_*`. Committed directly to
+   `master` (`abd8b94`) since it broke already-merged tooling, not new
+   Phase 1 work. `make test-unit`: 343 passed (342 + 1 new).
+
+### Pre-existing issue re-confirmed, not fixed (already logged under Phase 0)
+D1-SIM's settlement pipeline isn't idempotent against its own leftover
+state (`make dev-simulate-settlement` still fails this way if run without
+a clean start) — this is why Phase 1's new settlement-status coverage
+uses its own QA-DEMO project instead of building on D1-SIM.
 
 ## Phase 2: functional QA
 Not started.
