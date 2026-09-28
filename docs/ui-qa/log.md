@@ -1601,5 +1601,171 @@ timeout on `ProjectDetailPage`'s check, confirmed transient by an
 immediate solo re-run — passed cleanly, unrelated to this chunk's
 changes). This chunk is now fully verified; no remaining gap.
 
+### Chunk: SettlementPage (fresh non-fork agent) -- last Phase 4 page restyle
+Applied `docs/ui-design-system.md` to `SettlementPage.tsx` only, per this
+chunk's own explicit scope (money- and security-sensitive: build draft,
+live-simulation sliders, save/reload/delete scenarios, per-trade/per-line
+overrides, submit/approve/reject with real SoD + MFA step-up).
+
+- Shared `Badge` for `BidSettlementStatus` (draft/submitted/approved/
+  rejected/won/lost, from `backend/app/core/enums.py`, not guessed) --
+  replacing the page's own plain `"v{n} -- {status} -- {currency}"` text
+  line. `SkeletonRows` for the initial load; `bg-brand` buttons with a
+  `Spinner` for every pending mutation on this page (build draft, submit,
+  approve, set trade/line override, set FX rate, save scenario, refresh
+  quantities -- the last of which previously had **no pending/error
+  handling at all**, the same recurring gap already fixed elsewhere in
+  Phases 2-4); every mutation error standardized to
+  `role="alert" text-sm text-danger`; every previously placeholder-only
+  or entirely bare input/select (trade picker, per-trade % fields,
+  scenario-label field) given a real `aria-label`.
+- **Money cleanup** (the design doc's own named Phase 4 target): every
+  remaining bare `.toFixed()` on this page (the live-simulation panel's
+  tender/direct-cost/plant/overhead/volatility/markup totals, each saved
+  scenario's tender total, and per-line sell-rate/amount in the
+  line-override list) now goes through `formatMoney`. The per-line values
+  previously called `formatMoney(value)` with no currency argument, which
+  silently defaulted to "AED" regardless of the settlement's real
+  currency -- `currency` is now threaded down from `SettlementPage` through
+  `LineOverridesPanel` to `LineOverrideRow`. `formatMarginPct`'s 3dp was
+  already correct everywhere it's used (cockpit simulation and the
+  approval screen) and is unchanged -- confirmed by re-reading, not
+  reformatted for visual consistency, per this chunk's own explicit
+  instruction not to touch it. "Requires approval by: ..." recolored from
+  `text-amber-700` to `text-amber-800`, matching the AA-safe shade
+  `Badge` already uses internally (the same contrast-correction pattern
+  applied to `text-success`/`text-warning` bare usages in the procurement
+  chunk earlier this phase).
+- **No AA-safe "success" button variant exists, so Approve uses `bg-brand`
+  instead of a green fill**: the previous `Approve` button used a one-off
+  `bg-green-700` (not a design-system token). The obvious token swap,
+  `bg-success` (`--color-success`, emerald-600), was checked against the
+  design doc's own already-documented contrast correction (`text-success`
+  measured 3.76:1 on white, failing AA) -- contrast ratio is symmetric
+  regardless of which color is foreground vs. background, so a white-text-
+  on-`bg-success` button fails AA by the identical measurement. There is
+  no dedicated "positive/success" button variant in section 4.2 (only
+  primary/secondary/destructive), so Approve now uses the doc's own
+  primary variant (`bg-brand text-white hover:bg-brand-hover`) -- a
+  verified-safe, already-token-compliant choice, and defensible as "the
+  single most important action" framing section 4.2 describes for primary
+  buttons, since Approve/Reject is the only decision available once a
+  settlement is submitted. Reject keeps the doc's destructive text-only
+  variant (`border-red-300 text-red-700 hover:bg-red-50`), now with the
+  missing `transition-colors`/`focus-visible` ring added.
+- **Section 4.11's step-up return notice, added as instructed**: `decide()`
+  (Approve/Reject) is the one mutation on this page that requires a real
+  MFA step-up (`app/services/approvals.py`'s `require_mfa_step_up`, via
+  `has_recent_step_up` -- confirmed by reading `backend/app/security/deps.py`
+  and `backend/app/api/v1/routes/auth.py`, not assumed); `submit()` does
+  not. When `decide`'s error is an `ApiError` with `isStepUpRequired` true,
+  a `role="status"` "Verifying... redirecting you to confirm your identity
+  before this decision can complete." notice (with a `Spinner`) now renders
+  in place of the normal error text, covering the moment between the click
+  and the browser actually navigating to Keycloak. This does **not** change
+  whether/when/how the step-up redirect fires -- `frontend/src/lib/api.ts`'s
+  `request()` (the only place `window.location.href = stepUpUrl()` is set)
+  was not touched -- and does not touch the `isSubmitter` SoD gate, which
+  is unchanged besides its visual restyle (still disables Approve/Reject
+  for the settlement's own submitter, with the same "Awaiting a different
+  approver (SoD)" text).
+
+**Real, in-scope bug fixed while restyling (not net-new scope)**:
+"Refresh quantities" had no `isPending`/`isError` handling at all -- the
+same recurring gap already fixed on several other pages across Phases
+2-4. Now disabled while pending (with a small `Spinner`) and shows its
+error as `role="alert" text-sm text-danger`.
+
+**A real regression this restyle caused, found and fixed proactively
+(not left for QA to catch)**: three e2e assertions matched the old plain
+`"v{n} -- {status} -- {currency}"` text via
+`getByText(/^v\d+ -- approved -- /)` / `/^v\d+ -- rejected -- /` --
+`settlement.spec.ts`, `modal-replacements.spec.ts`, and the shared
+`attemptApprove()` helper in `helpers.ts` (used by
+`step-up-freshness.spec.ts`, outside this chunk's own required spec list,
+but sharing the same now-changed markup, so it would have silently broken
+too). All three now assert the version number and the Badge's status text
+(`getByText('approved'/'rejected', { exact: true })`) separately instead
+of one regex over the old concatenated string.
+
+**Verified**: `tsc --noEmit` clean; `oxlint` clean (the same 3
+pre-existing warnings, zero new); `vitest`: 24 passed. Docker frontend
+image rebuilt and the container restarted before any e2e run.
+`settlement.spec.ts` (the full build → simulate → submit → approve-as-a-
+different-user flow, including the real Keycloak MFA step-up round trip):
+**1/1 passed**. `settlement-winloss-roles.spec.ts`, run one test at a time
+after the first full-file attempt was killed by the host's own low-memory
+protection (not a real failure -- confirmed by the harness's own "not a
+failure of the command" note, host free memory was under 2.5GB at the
+time): the submit-role-gate and build-draft-role-gate tests both hit
+their own pre-existing `test.skip()` (D1-SIM's current settlement was left
+in a non-rebuildable "draft" state by this same run's `make
+dev-simulate-settlement` failing partway through on unrelated stray BOQ
+lines -- the same documented non-idempotency noted elsewhere in this log,
+not caused by this chunk), and the win-loss-role-gate and export-filename
+tests **passed** (the latter also hit its own pre-existing skip once
+re-checked, since D1-SIM's current settlement wasn't "approved" at that
+point) -- **0 failed** across all four.
+
+**Verification gap, disclosed rather than hidden**: `quotation-settlement-
+overrides.spec.ts` and `modal-replacements.spec.ts` (the reject-modal +
+real step-up test) were **not run** this chunk -- host memory dropped to
+under 2GB free partway through this chunk's own e2e run (one
+`settlement-winloss-roles.spec.ts` full-file attempt was already killed
+by the harness's low-memory protection), and the main session directed
+this chunk to stop backgrounding further Playwright runs and finish
+synchronously rather than keep spending the tight memory budget on
+individual `-g`-scoped runs. The code changes touching those two specs'
+territory are narrow and low-risk (the `LineOverrideRow`/
+`LineOverridesPanel` currency-threading and the `TextPromptModal`/reject-
+button styling only -- no logic, role-gate, or SoD/step-up change), and
+`settlement.spec.ts`'s own full run already exercises the identical real
+step-up code path (`decide()` 403 → redirect → TOTP → retry → approved)
+that `modal-replacements.spec.ts` also covers for the reject side, but
+this is disclosed as a real gap, not assumed clean. Should be closed by
+re-running both spec files individually once host memory recovers.
+`step-up-freshness.spec.ts` (outside this chunk's assigned spec list, but
+sharing the `attemptApprove()` helper this chunk fixed) was also not run,
+for the same reason.
+
+One new `@axe-core/playwright` check (`SettlementPage`) was added to
+`phase4-accessibility.spec.ts` but **not run** this chunk, for the same
+memory-pressure reason above -- disclosed, not assumed passing.
+
+Screenshots were not captured for this chunk (nice-to-have per the brief,
+not a blocker) -- available time/memory budget went to the mandatory
+tsc/oxlint/vitest/build/e2e verification above, which itself had to stop
+short of full coverage due to host memory pressure.
+
+**Phase 4 page-by-page restyling is now complete** -- every page named in
+the brief (`ProjectsListPage`, `ProjectDetailPage`, `SheetIndexPage`,
+`TakeoffViewerPage`, `TypologyPage`, `BoqImportWizardPage`,
+`BoqReconciliationPage`, `VendorsPage`, `VendorDetailPage`,
+`VendorDuplicatesPage`, `CostLibraryPage`, `CostItemDetailPage`,
+`ProcurementPackagesPage`, `QuarantineQueuePage`, `QuoteReviewPage`,
+`BidLevelingPage`, `ExportPage`, `WinLossPage`, `AdminPage` + its six
+tabs, `AuditPage`, `ModuleEPage`, `HomeDashboardPage`, and now
+`SettlementPage`) has been through this pass. What remains for Phase 4 as
+a whole, not attempted here:
+1. The verification gap immediately above (`quotation-settlement-
+   overrides.spec.ts`, `modal-replacements.spec.ts`,
+   `step-up-freshness.spec.ts`, and the new `SettlementPage` axe check --
+   all four blocked on this run's host memory pressure, not on any known
+   code issue).
+2. A final full-suite regression pass across every Phase 4 chunk together
+   (each chunk was verified individually against its own spec files; no
+   single run has yet exercised the entire e2e suite back-to-back since
+   Phase 4 started).
+3. Confirming every page named in the brief actually has both a
+   before/after screenshot under `docs/ui-qa/screenshots/phase-4/` --
+   several chunks (procurement/quotation/settlement pages; admin/audit/
+   module-e/dashboard's initial pass; this chunk) explicitly deferred
+   screenshots in favor of the mandatory tsc/oxlint/vitest/e2e/axe
+   verification given available time/memory budget, so the screenshot set
+   is known-incomplete, not assumed complete.
+4. The bare-`text-success`-on-white follow-up flagged in the procurement
+   chunk (`BoqReconciliationPage.tsx`'s "Accept" suggestion-link button)
+   was never circled back to.
+
 ## Phase 5: final regression and report
 Not started.
