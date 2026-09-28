@@ -14,6 +14,7 @@
     "e2e:real-backend": "playwright test --config=playwright.real-backend.config.ts"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@tanstack/react-query": "^5.104.0",
     "ag-grid-community": "^36.2.0",
     "ag-grid-react": "^36.2.0",
