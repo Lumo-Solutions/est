@@ -1767,5 +1767,65 @@ a whole, not attempted here:
    chunk (`BoqReconciliationPage.tsx`'s "Accept" suggestion-link button)
    was never circled back to.
 
+## Finish run (docs/finish-brief.md): steps 1-2
+
+Subagent rules (brief section A) in force. No subagent has been used so far:
+steps 1-2 were done entirely in the main session, so there are no agent
+branches to verify yet.
+
+### Step 1: dev MFA switch saved (`feat/dev-mfa-switch`)
+The uncommitted `DEV_DISABLE_MFA` work was moved to its own branch off the
+Phase 4 HEAD and committed in logical pieces: backend switch + tests
+(`7a94914`), deploy/keycloak + make targets (`735d2dd`), frontend banner
+(`372bdf1`), e2e + docs (`3a7849b`), `docs/v2.md` and the brief (`928f01d`).
+`.claude/` and `.playwright-mcp/` not committed (`.playwright-mcp/` is now in
+`.gitignore`). Verified: backend unit 359 passed; vitest 26 passed; `tsc`
+clean; `oxlint` the same 3 pre-existing warnings. Stack (frontend image
+rebuilt from the branch): `make dev-mfa-off` + `login.spec.ts` 2/2;
+`make dev-mfa-on` + `settlement.spec.ts` 1/1; `step-up-freshness` via
+`deploy/keycloak/test-stepup-freshness.sh`: **first run FAILED**, cause
+found: `submitSettlementForApproval` used a non-waiting `isVisible()` and so
+raced the settlement fetch, skipped the Build click on an already-approved
+settlement and waited forever for a Submit button (`4bd309b`). Second run
+passed 1/1. Deviation from the brief: I did not run `make dev-mfa-off` at
+the end of step 1, because step 2 needs MFA on; MFA is switched off at the
+very end (Phase 5).
+
+### Step 2: Phase 4 closed
+Run one at a time, `--workers=1`, MFA on, frontend image rebuilt:
+- `step-up-freshness` (script) 1/1, `quotation-settlement-overrides` 4/4,
+  `modal-replacements` 2/2 (this closes the verification gap logged for the
+  SettlementPage chunk).
+- `phase4-accessibility.spec.ts`: first full run 16/18. Two failures, both
+  root-caused, neither dismissed:
+  1. BidLevelingPage: `Invalid authenticator code` at login. **Root cause:**
+     the realm has `otpPolicyCodeReusable=false`, so Keycloak rejects a TOTP
+     code from a 30s step the same user already logged in with. Two logins by
+     one user in the same step fail the first attempt; the helper's 65s retry
+     then succeeds late in a step that the next login shares, so the failure
+     cascaded through the run (tests 3-7 each took ~1.1 min instead of ~3s,
+     and one ran out of its 180s budget). Fix: `helpers.ts` records the last
+     TOTP step per secret in a temp file and waits for a strictly later step
+     before generating a code. Same file also holds the earlier
+     `submitSettlementForApproval` fix.
+  2. My new BoqReconciliation axe test: the row selector was wrong
+     (AG Grid); now clicks the gridcell by name.
+  Re-run: **18/18 passed** (7.7 min, down from 18.5).
+- `BoqReconciliationPage`: bare `text-success` on Accept replaced by
+  `text-emerald-700`; the same 3.76:1 problem existed on `VendorsPage`
+  ("No likely duplicates found") and `DrawingUpload` (status), also fixed.
+  The new axe check stubs only the measurement-suggestions response so the
+  Accept link is really rendered and scanned.
+- Layouts: new `layout-widths.spec.ts` visits 23 pages at 1440/1280/1024
+  and fails on page-level horizontal overflow: passed. 72 screenshots in
+  `docs/ui-qa/screenshots/phase-4/layout-*`; I read the complex pages at 1024
+  by eye (settlement, quote review, BOQ, takeoff viewer, procurement
+  packages, admin, vendor detail, project detail). Findings: no breakage.
+  Two observations carried to step 3 / noted: the takeoff-viewer sidebar
+  highlights both "Overview" and "Drawings" (the known NavLink `end` bug), and
+  the BOQ grid at 1024 shows ~4 columns with the rest reached by in-grid
+  horizontal scroll (Item No is pinned), which I judged acceptable for a data
+  grid rather than breakage.
+
 ## Phase 5: final regression and report
 Not started.
