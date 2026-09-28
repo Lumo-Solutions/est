@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { Badge, type BadgeTone } from '../components/Badge'
+import { SkeletonRows } from '../components/Skeleton'
 import {
   useAddCertificate,
   useCertificateTypes,
@@ -19,12 +21,24 @@ const PREQUAL_WRITE_ROLES = [Role.PROCUREMENT_HEAD, Role.LEAD_ESTIMATOR, Role.MA
 
 const EXPIRY_WARNING_DAYS = 30
 
-function expiryBadge(expiryDate: string | null): { label: string; className: string } | null {
+// docs/ui-design-system.md section 4.8. Same VendorStatus mapping as
+// VendorsPage.tsx -- kept as its own local const per-page, matching this
+// app's existing convention of a per-page status->tone map rather than a
+// shared cross-page import for a 5-line table.
+const VENDOR_STATUS_TONE: Record<string, BadgeTone> = {
+  draft: 'warning',
+  active: 'success',
+  on_hold: 'warning',
+  blacklisted: 'danger',
+  merged: 'neutral',
+}
+
+function expiryBadge(expiryDate: string | null): { label: string; tone: BadgeTone } | null {
   if (!expiryDate) return null
   const days = Math.floor((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-  if (days < 0) return { label: `Expired ${Math.abs(days)}d ago`, className: 'bg-red-100 text-red-700' }
-  if (days <= EXPIRY_WARNING_DAYS) return { label: `Expires in ${days}d`, className: 'bg-amber-100 text-amber-800' }
-  return { label: `Valid to ${expiryDate}`, className: 'bg-emerald-100 text-emerald-700' }
+  if (days < 0) return { label: `Expired ${Math.abs(days)}d ago`, tone: 'danger' }
+  if (days <= EXPIRY_WARNING_DAYS) return { label: `Expires in ${days}d`, tone: 'warning' }
+  return { label: `Valid to ${expiryDate}`, tone: 'success' }
 }
 
 function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrite: boolean }) {
@@ -34,12 +48,22 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
   const verifyCertificate = useVerifyCertificate(vendorId)
   const [certTypeId, setCertTypeId] = useState('')
   const [expiryDate, setExpiryDate] = useState('')
+  const certTypeSelectId = useId()
+  const expiryDateId = useId()
 
   return (
     <div className="mt-6">
       <h2 className="text-sm font-semibold text-slate-800">Certificates</h2>
-      {isLoading && <p className="mt-2 text-sm text-slate-500">Loading...</p>}
-      {isError && <p className="mt-2 text-sm text-red-600">{error.message}</p>}
+      {isLoading && (
+        <div className="mt-2">
+          <SkeletonRows count={2} />
+        </div>
+      )}
+      {isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {error.message}
+        </p>
+      )}
       {certs && certs.length === 0 && <p className="mt-2 text-sm text-slate-500">No certificates on file.</p>}
       {certs && certs.length > 0 && (
         <ul className="mt-2 space-y-1">
@@ -52,14 +76,14 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
                   {c.certificate_no ? ` — ${c.certificate_no}` : ''}
                 </span>
                 <span className="flex items-center gap-2">
-                  {badge && <span className={`rounded px-1.5 py-0.5 text-xs ${badge.className}`}>{badge.label}</span>}
+                  {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
                   <span className="text-xs text-slate-500">{c.status}</span>
                   {canWrite && c.status !== 'valid' && (
                     <button
                       type="button"
                       disabled={verifyCertificate.isPending}
                       onClick={() => verifyCertificate.mutate(c.id)}
-                      className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50"
+                      className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Verify
                     </button>
@@ -70,7 +94,11 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
           })}
         </ul>
       )}
-      {verifyCertificate.isError && <p className="mt-1 text-sm text-red-600">{verifyCertificate.error.message}</p>}
+      {verifyCertificate.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {verifyCertificate.error.message}
+        </p>
+      )}
 
       {canWrite && (
         <form
@@ -84,33 +112,49 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
             )
           }}
         >
-          <select
-            required
-            value={certTypeId}
-            onChange={(e) => setCertTypeId(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
-          >
-            <option value="">-- Certificate type --</option>
-            {(certTypes ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="date"
-            value={expiryDate}
-            onChange={(e) => setExpiryDate(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
-          />
+          <div>
+            <label htmlFor={certTypeSelectId} className="block text-xs text-slate-500">
+              Certificate type
+            </label>
+            <select
+              id={certTypeSelectId}
+              required
+              value={certTypeId}
+              onChange={(e) => setCertTypeId(e.target.value)}
+              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            >
+              <option value="">-- Certificate type --</option>
+              {(certTypes ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={expiryDateId} className="block text-xs text-slate-500">
+              Expiry date
+            </label>
+            <input
+              id={expiryDateId}
+              type="date"
+              value={expiryDate}
+              onChange={(e) => setExpiryDate(e.target.value)}
+              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+          </div>
           <button
             type="submit"
             disabled={addCertificate.isPending}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Add certificate
           </button>
-          {addCertificate.isError && <span className="text-sm text-red-600">{addCertificate.error.message}</span>}
+          {addCertificate.isError && (
+            <span role="alert" className="text-sm text-danger">
+              {addCertificate.error.message}
+            </span>
+          )}
         </form>
       )}
     </div>
@@ -122,6 +166,7 @@ function PrequalificationSection({ vendorId, canWrite }: { vendorId: string; can
   const { data: prequal, isError, error } = useVendorPrequalification(vendorId, today)
   const decide = useDecidePrequalification(vendorId)
   const [status, setStatus] = useState('approved')
+  const statusSelectId = useId()
 
   return (
     <div className="mt-6">
@@ -145,23 +190,33 @@ function PrequalificationSection({ vendorId, canWrite }: { vendorId: string; can
             decide.mutate({ status, effective_from: today })
           }}
         >
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
-          >
-            <option value="approved">Approved</option>
-            <option value="suspended">Suspended</option>
-            <option value="rejected">Rejected</option>
-          </select>
+          <div>
+            <label htmlFor={statusSelectId} className="block text-xs text-slate-500">
+              Decision
+            </label>
+            <select
+              id={statusSelectId}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            >
+              <option value="approved">Approved</option>
+              <option value="suspended">Suspended</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
           <button
             type="submit"
             disabled={decide.isPending}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Record decision (effective today)
           </button>
-          {decide.isError && <span className="text-sm text-red-600">{decide.error.message}</span>}
+          {decide.isError && (
+            <span role="alert" className="text-sm text-danger">
+              {decide.error.message}
+            </span>
+          )}
         </form>
       )}
     </div>
@@ -177,14 +232,32 @@ export function VendorDetailPage() {
   const { data: regions } = useVendorServiceRegions(vendorId)
   const scanDuplicates = useScanDuplicates(vendorId)
 
-  if (isLoading) return <p className="p-6 text-slate-500">Loading...</p>
+  const backLink = (
+    <Link
+      to="/vendors"
+      className="rounded text-sm text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+    >
+      ← Vendors
+    </Link>
+  )
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        {backLink}
+        <div className="mt-4">
+          <SkeletonRows count={5} />
+        </div>
+      </div>
+    )
+  }
   if (isError) {
     return (
       <div className="p-6">
-        <Link to="/vendors" className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
-          ← Vendors
-        </Link>
-        <p className="mt-4 text-red-600">{error.message}</p>
+        {backLink}
+        <p role="alert" className="mt-4 text-danger">
+          {error.message}
+        </p>
       </div>
     )
   }
@@ -192,9 +265,7 @@ export function VendorDetailPage() {
 
   return (
     <div className="p-6">
-      <Link to="/vendors" className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
-        ← Vendors
-      </Link>
+      {backLink}
       <div className="mt-2 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-800">{vendor.legal_name}</h1>
         {canWriteVendor && (
@@ -202,7 +273,7 @@ export function VendorDetailPage() {
             type="button"
             disabled={scanDuplicates.isPending}
             onClick={() => scanDuplicates.mutate()}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Scan for duplicates
           </button>
@@ -215,7 +286,11 @@ export function VendorDetailPage() {
             : `${scanDuplicates.data.length} candidate(s) found — see Vendor duplicate review.`}
         </p>
       )}
-      {scanDuplicates.isError && <p className="mt-1 text-sm text-red-600">{scanDuplicates.error.message}</p>}
+      {scanDuplicates.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {scanDuplicates.error.message}
+        </p>
+      )}
 
       <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
         <dt className="text-slate-500">Trade license</dt>
@@ -231,7 +306,9 @@ export function VendorDetailPage() {
         <dt className="text-slate-500">Phone</dt>
         <dd>{vendor.primary_phone ?? '--'}</dd>
         <dt className="text-slate-500">Status</dt>
-        <dd>{vendor.status}</dd>
+        <dd>
+          <Badge tone={VENDOR_STATUS_TONE[vendor.status] ?? 'neutral'}>{vendor.status}</Badge>
+        </dd>
         <dt className="text-slate-500">Service regions</dt>
         <dd>{regions && regions.length > 0 ? regions.join(', ') : '--'}</dd>
       </dl>

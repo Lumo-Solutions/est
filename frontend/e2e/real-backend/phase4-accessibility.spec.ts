@@ -41,3 +41,26 @@ test.describe('Phase 4 accessibility -- core project pages', () => {
     expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
   })
 })
+
+test.describe('Phase 4 accessibility -- vendor and typology/BOQ pages', () => {
+  test('VendorsPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
+    await page.goto('/vendors')
+    await expect(page.getByRole('heading', { name: 'Vendors' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+
+  test('TypologyPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
+    const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+    await page.goto(`/projects/${project.id}/typology`)
+    await expect(page.getByRole('heading', { name: 'Typology cluster review' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+})
