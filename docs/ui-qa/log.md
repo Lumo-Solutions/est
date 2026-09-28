@@ -1209,16 +1209,83 @@ since neither `NavLink` has `end` set) — visible in the after-screenshot.
 Pre-existing behavior inherited unchanged, not something this restyle
 pass introduced; worth a `NavLink` `end`-prop audit in a future pass.
 
-Remaining Phase 4 work: the rest of the ~30-page design-system rollout
-(procurement, settlement, admin, vendors, cost library, etc.) with Sonnet
-subagents under main-session review per the brief's 0.3, fixing every
-Phase 2 P2 item along the way; the 5,000-row grid re-benchmark; the
-remaining accessibility pass; more before/after screenshots.
-
 **Process note**: this chunk was executed directly by the main session
 (not delegated) to establish the sidebar-layout pattern safely first,
 given its blast radius — future chunks can delegate to Sonnet subagents
 against this now-proven pattern.
+
+### Chunk: Typology, BOQ, Vendor pages (main-session work — see note below)
+Applied `docs/ui-design-system.md` to `TypologyPage.tsx`,
+`BoqImportWizardPage.tsx`, `BoqReconciliationPage.tsx` (+
+`BoqReconciliationGrid.tsx`'s AG Grid theme), `VendorsPage.tsx`,
+`VendorDetailPage.tsx`, `VendorDuplicatesPage.tsx`.
+
+**Process note**: this was meant to be delegated to a Sonnet subagent
+(the brief's own 0.3 guidance for mechanical page-by-page restyle work),
+but attempting to launch one from inside this session returned "Fork is
+not available inside a forked worker" — the main session itself was
+still executing inside a forked-worker context from resolving the
+earlier Phase 3/4 handoff race (see that entry above). Executed directly
+instead rather than block on it.
+
+- **`BoqReconciliationGrid.tsx`**: `themeQuartz.withParams(...)` exactly
+  as specified (accent color, header/row colors, font) — Theming API
+  params only, confirmed by diff before committing that no row/column
+  virtualization or other perf setting was touched. Re-ran the 5,000-row
+  benchmark (`frontend/e2e/boq-reconciliation.spec.ts`) after the change:
+  still passes, row count still well under the full 5,000 (virtualization
+  intact).
+- Shared `Badge` used for cluster/drawing/vendor/certificate statuses
+  (`VendorStatus`, `TypologyClusterStatus` enums mapped per-page, matching
+  the design doc's own guidance that the mapping differs per page but the
+  component is shared). Every certificate/prequal `<select>`/date input
+  that only had implicit context now has a real `<label>`; the typology
+  confirm-form's radio buttons and text/number inputs (previously fully
+  unlabeled) get `aria-label`s.
+- **Two real, in-scope bugs fixed while restyling** (not net-new scope —
+  found on pages already being touched, not gone looking elsewhere):
+  `TypologyPage` had no empty-state message at all; `BoqReconciliationPage`'s
+  Reconcile button had no `isError` display (both match the exact pattern
+  already fixed on every other page in Phases 2-3).
+- **Also fixed**: `VendorsPage`'s status filter dropdown offered "Draft/
+  Active/Suspended", but the real `VendorStatus` enum is
+  draft/active/on_hold/blacklisted/merged — "Suspended" isn't a real
+  status and silently returned zero rows. Corrected the options to match
+  the server exactly, in the same edit as adding the `Badge`
+  tone-mapping for the identical enum right next to it.
+- **A real regression this restyle caused, found and fixed**: one e2e
+  test (`typology-boq-procurement.spec.ts`) located an error message via
+  a hardcoded `.text-red-600` CSS class selector; that element's class
+  became `text-danger` (same color, new token name), breaking the
+  locator. Switched to `getByRole('alert')` — stable across any future
+  color/token change, and matches the role already present on that
+  element from the `role="alert"` pattern used throughout this phase.
+
+**Verified**: `tsc --noEmit` clean, `oxlint` clean, `vitest` 24 passed,
+`typology-boq-procurement.spec.ts`'s Typology and BOQ-import tests pass;
+`vendors-prequal.spec.ts` (all 4) passes; 2 new `@axe-core/playwright`
+checks (VendorsPage, TypologyPage) added to `phase4-accessibility.spec.ts`
+— zero serious/critical violations, no fixes needed this time (the
+sidebar contrast/label lessons from the previous chunk already carried
+forward).
+
+**Observed, not fixed (unrelated to this chunk, pre-existing fixture-state
+brittleness)**: `typology-boq-procurement.spec.ts`'s ProcurementPackagesPage
+test fails independently of everything above — confirmed via diff that
+`ProcurementPackagesPage.tsx` was not touched by this or any prior Phase 4
+chunk. Root-caused (not just assumed): the test's `page.locator('select')
+.nth(0)` is DOM-order-dependent, and this session's own accumulated
+Phase 2/3 testing has left QA-DEMO with enough packages that a different
+`<select>` (a BOQ-items multi-select inside an already-rendered package
+row, not the create-form's trade-node dropdown the test intends) now
+sometimes resolves to index 0 instead. Same class of shared-fixture-state
+brittleness as D1-SIM's already-documented settlement non-idempotency —
+flagging for whoever next touches `ProcurementPackagesPage`, not fixed
+here since the page itself is unmodified and correct.
+
+Remaining Phase 4 work: the rest of the ~30-page design-system rollout
+(procurement, settlement, admin, module E, dashboard, etc.); the
+remaining accessibility pass; more before/after screenshots.
 
 ## Phase 5: final regression and report
 Not started.
