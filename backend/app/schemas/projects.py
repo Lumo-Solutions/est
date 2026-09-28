@@ -36,6 +36,11 @@ class ProjectMemberAdd(BaseModel):
     project_role: str | None = None
 
 
+class ProjectMemberOut(ORMModel):
+    user_id: UUID
+    project_role: str | None
+
+
 class ProjectLocationUpdate(BaseModel):
     emirate: str | None = None
     area: str | None = None

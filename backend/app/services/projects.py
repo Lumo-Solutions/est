@@ -103,6 +103,17 @@ async def update_location(
     return project
 
 
+async def list_members(session: AsyncSession, project_id: UUID) -> list[ProjectMember]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): an add-member form with no
+    way to see who's already on a project isn't a usable screen. Calls
+    get_project first so an unauthorized/nonexistent project 404s the same
+    way add_member's own 404 does, rather than silently returning an empty
+    list for a project the caller can't actually see."""
+    await get_project(session, project_id)
+    result = await session.execute(select(ProjectMember).where(ProjectMember.project_id == project_id))
+    return list(result.scalars().all())
+
+
 async def add_member(session: AsyncSession, ctx: RequestContext, project_id: UUID, user_id: UUID, role: str | None) -> None:
     await get_project(session, project_id)  # 404s if missing / not visible under RLS
     session.add(ProjectMember(project_id=project_id, user_id=user_id, tenant_id=ctx.tenant_id, project_role=role))
