@@ -8,6 +8,10 @@ export interface NavItem {
   label: string
   to: string
   requiresRoles?: string[]
+  // Match only the exact path. Needed on any item whose path is a prefix of
+  // its siblings' (Projects '/', a project's Overview) or it stays highlighted
+  // alongside them on every sub-page.
+  end?: boolean
 }
 
 export function filterVisibleNavItems(items: NavItem[], hasRole: (...roles: string[]) => boolean): NavItem[] {
@@ -18,7 +22,7 @@ export function filterVisibleNavItems(items: NavItem[], hasRole: (...roles: stri
 // real enforcement (see docs/preconstruction-build-brief.md Phase 8).
 function projectNavItems(projectId: string): NavItem[] {
   return [
-    { label: 'Overview', to: `/projects/${projectId}` },
+    { label: 'Overview', to: `/projects/${projectId}`, end: true },
     { label: 'Drawings', to: `/projects/${projectId}/drawings` },
     { label: 'Typology', to: `/projects/${projectId}/typology` },
     { label: 'BOQ', to: `/projects/${projectId}/boq` },
@@ -88,7 +92,7 @@ function NavList({ items, hasRole }: { items: NavItem[]; hasRole: (...roles: str
         <NavLink
           key={item.to}
           to={item.to}
-          end={item.to === '/'}
+          end={item.end ?? item.to === '/'}
           className={({ isActive }) =>
             `block rounded px-3 py-1.5 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
               isActive
@@ -148,7 +152,7 @@ export function AppShell() {
         <DevMfaBanner active={user?.mfaDisabledDev === true} />
         <header className="flex h-14 shrink-0 items-center justify-end border-b border-slate-200 bg-white px-4">
           <div className="flex items-center gap-3 text-sm text-slate-500">
-            {user && <span>{user.sub}</span>}
+            {user && <span title={user.sub}>{user.username ?? user.sub}</span>}
             <button
               type="button"
               onClick={() => logout()}

@@ -4,6 +4,8 @@ import { ApiError, api } from '../lib/api'
 
 export interface AuthUser {
   sub: string
+  // Login name for display (Keycloak preferred_username); null if the token has none.
+  username: string | null
   tenantId: string
   roles: string[]
   acr: string | null
@@ -13,6 +15,7 @@ export interface AuthUser {
 
 interface AuthMeResponse {
   sub: string
+  username?: string | null
   tenant_id: string
   roles: string[]
   acr: string | null
@@ -37,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const me = await api.get<AuthMeResponse>('/auth/me')
       setUser({
         sub: me.sub,
+        username: me.username ?? null,
         tenantId: me.tenant_id,
         roles: me.roles,
         acr: me.acr,
