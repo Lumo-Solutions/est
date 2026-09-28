@@ -1,15 +1,22 @@
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
+import { TextPromptModal } from '../components/TextPromptModal'
 import { useAttachInboundEmail, useDismissInboundEmail, useInboundReviewQueue, useResolveInboundTenant } from '../features/quotations/api'
 import { Role } from '../lib/roles'
+import type { InboundEmailOut } from '../types/api'
 
-function ReviewRow({ email }: { email: import('../types/api').InboundEmailOut }) {
+type OpenPrompt = { kind: 'resolve-tenant' | 'attach' | 'dismiss'; email: InboundEmailOut; extra: string } | null
+
+function ReviewRow({
+  email,
+  onOpenPrompt,
+}: {
+  email: InboundEmailOut
+  onOpenPrompt: (kind: 'resolve-tenant' | 'attach' | 'dismiss', email: InboundEmailOut, extra: string) => void
+}) {
   const { hasRole } = useAuth()
   const [tenantId, setTenantId] = useState('')
   const [rfqId, setRfqId] = useState('')
-  const resolveTenant = useResolveInboundTenant()
-  const dismiss = useDismissInboundEmail()
-  const attach = useAttachInboundEmail()
 
   return (
     <tr className="border-b border-slate-100">
@@ -30,10 +37,7 @@ function ReviewRow({ email }: { email: import('../types/api').InboundEmailOut })
             />
             <button
               type="button"
-              onClick={() => {
-                const note = window.prompt('Note (required)')
-                if (note) resolveTenant.mutate(email.id, { tenant_id: tenantId, note })
-              }}
+              onClick={() => onOpenPrompt('resolve-tenant', email, tenantId)}
               className="text-xs text-slate-600 underline"
             >
               Resolve tenant
@@ -49,10 +53,7 @@ function ReviewRow({ email }: { email: import('../types/api').InboundEmailOut })
           />
           <button
             type="button"
-            onClick={() => {
-              const reason = window.prompt('Reason (required)')
-              if (reason) attach.mutate(email.id, { rfq_id: rfqId, reason })
-            }}
+            onClick={() => onOpenPrompt('attach', email, rfqId)}
             className="text-xs text-slate-600 underline"
           >
             Attach to RFQ
@@ -60,10 +61,7 @@ function ReviewRow({ email }: { email: import('../types/api').InboundEmailOut })
         </div>
         <button
           type="button"
-          onClick={() => {
-            const note = window.prompt('Dismiss note (required)')
-            if (note) dismiss.mutate(email.id, { note })
-          }}
+          onClick={() => onOpenPrompt('dismiss', email, '')}
           className="text-xs text-red-600 underline"
         >
           Dismiss
@@ -75,6 +73,10 @@ function ReviewRow({ email }: { email: import('../types/api').InboundEmailOut })
 
 export function QuarantineQueuePage() {
   const { data: queue, isLoading, isError, error } = useInboundReviewQueue()
+  const [openPrompt, setOpenPrompt] = useState<OpenPrompt>(null)
+  const resolveTenant = useResolveInboundTenant()
+  const dismiss = useDismissInboundEmail()
+  const attach = useAttachInboundEmail()
 
   return (
     <div className="p-6">
@@ -95,11 +97,46 @@ export function QuarantineQueuePage() {
           </thead>
           <tbody>
             {queue.map((email) => (
-              <ReviewRow key={email.id} email={email} />
+              <ReviewRow
+                key={email.id}
+                email={email}
+                onOpenPrompt={(kind, email, extra) => setOpenPrompt({ kind, email, extra })}
+              />
             ))}
           </tbody>
         </table>
       )}
+      <TextPromptModal
+        open={openPrompt?.kind === 'resolve-tenant'}
+        title="Resolve tenant"
+        message="Note (required)"
+        onCancel={() => setOpenPrompt(null)}
+        onSubmit={(note) => {
+          if (openPrompt) resolveTenant.mutate(openPrompt.email.id, { tenant_id: openPrompt.extra, note })
+          setOpenPrompt(null)
+        }}
+      />
+      <TextPromptModal
+        open={openPrompt?.kind === 'attach'}
+        title="Attach to RFQ"
+        message="Reason (required)"
+        onCancel={() => setOpenPrompt(null)}
+        onSubmit={(reason) => {
+          if (openPrompt) attach.mutate(openPrompt.email.id, { rfq_id: openPrompt.extra, reason })
+          setOpenPrompt(null)
+        }}
+      />
+      <TextPromptModal
+        open={openPrompt?.kind === 'dismiss'}
+        title="Dismiss"
+        message="Dismiss note (required)"
+        submitLabel="Dismiss"
+        onCancel={() => setOpenPrompt(null)}
+        onSubmit={(note) => {
+          if (openPrompt) dismiss.mutate(openPrompt.email.id, { note })
+          setOpenPrompt(null)
+        }}
+      />
     </div>
   )
 }

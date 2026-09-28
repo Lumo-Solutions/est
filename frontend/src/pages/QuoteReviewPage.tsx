@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { TextPromptModal } from '../components/TextPromptModal'
 import { useProcurementPackages, useRfqs } from '../features/procurement/api'
 import {
   attachmentDownloadHref,
@@ -69,6 +70,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
   const [currency, setCurrency] = useState(quotation.currency ?? '')
   const [fxRate, setFxRateInput] = useState('')
   const [attachmentsOpen, setAttachmentsOpen] = useState(false)
+  const [rejectPromptOpen, setRejectPromptOpen] = useState(false)
 
   return (
     <div className={`rounded border p-3 ${quotation.is_current ? 'border-slate-400' : 'border-slate-200'}`}>
@@ -105,10 +107,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
           </button>
           <button
             type="button"
-            onClick={() => {
-              const reason = window.prompt('Reject reason?')
-              if (reason) rejectQuotation.mutate({ quotationId: quotation.id, reason })
-            }}
+            onClick={() => setRejectPromptOpen(true)}
             className="text-xs text-red-600 underline"
           >
             Reject quotation
@@ -117,6 +116,17 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
       )}
       {resolveCurrencyVat.isError && <p className="mt-1 text-xs text-red-600">{resolveCurrencyVat.error.message}</p>}
       {rejectQuotation.isError && <p className="mt-1 text-xs text-red-600">{rejectQuotation.error.message}</p>}
+      <TextPromptModal
+        open={rejectPromptOpen}
+        title="Reject quotation"
+        message="Reject reason?"
+        submitLabel="Reject"
+        onCancel={() => setRejectPromptOpen(false)}
+        onSubmit={(reason) => {
+          rejectQuotation.mutate({ quotationId: quotation.id, reason })
+          setRejectPromptOpen(false)
+        }}
+      />
 
       {canReview && (
         <div className="mt-2 flex items-end gap-2">

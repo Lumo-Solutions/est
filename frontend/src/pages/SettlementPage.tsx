@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { TextPromptModal } from '../components/TextPromptModal'
 import { useTaxonomyNodes } from '../features/admin/api'
 import {
   useBuildSettlementDraft,
@@ -403,6 +404,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
   const submit = useSubmitSettlement(projectId, settlement.id)
   const decide = useDecideSettlement(projectId, settlement.id)
   const isSubmitter = user?.sub === settlement.submitted_by
+  const [rejectPromptOpen, setRejectPromptOpen] = useState(false)
 
   if (settlement.status === 'draft') {
     if (!hasRole(...SUBMIT_ROLES)) return null
@@ -449,10 +451,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           <button
             type="button"
             disabled={isSubmitter || decide.isPending}
-            onClick={() => {
-              const note = window.prompt('Rejection note?')
-              if (note) decide.mutate({ approve: false, note })
-            }}
+            onClick={() => setRejectPromptOpen(true)}
             className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
           >
             Reject
@@ -460,6 +459,17 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
         </div>
         {decide.isError && <p className="text-xs text-red-600">{decide.error.message}</p>}
+        <TextPromptModal
+          open={rejectPromptOpen}
+          title="Reject settlement"
+          message="Rejection note?"
+          submitLabel="Reject"
+          onCancel={() => setRejectPromptOpen(false)}
+          onSubmit={(note) => {
+            decide.mutate({ approve: false, note })
+            setRejectPromptOpen(false)
+          }}
+        />
       </div>
     )
   }
