@@ -612,12 +612,60 @@ after Phase 2's merge.
    2 new api tests (lowest allowed role + denied role), `make test-unit`:
    347 passed, `make test-api`: 21 passed.
 
+3. **Vendor master, duplicate review, prequalification & certificates UI**
+   (two more of the confirmed "no UI at all" capabilities). Built:
+   - `GET /vendors/{id}/certificates` (new, `backend/app/api/v1/routes/prequal.py`)
+     -- only single-cert add/verify existed before; a certificates screen
+     needs to list all of them. Read-only, any role. 2 integration tests +
+     1 api test.
+   - `VendorsPage` (`/vendors`, nav-visible to every role -- reading the
+     directory is useful to everyone, matching `GET /vendors`'s own "any
+     authenticated user" server check): browse/search, create-vendor form
+     with a "check for duplicates" preflight (`POST /vendors:check-duplicates`),
+     link to duplicate review. Create is role-gated
+     (lead/proc/bd/md, mirroring `_WRITE_ROLES`).
+   - `VendorDetailPage` (`/vendors/:id`): full vendor info, service
+     regions shown read-only (editing stays on `AdminPage`'s existing tab
+     -- deliberately not duplicated here), certificates with **expiry
+     badges** (expired / expiring within 30 days / valid -- the brief's
+     explicit ask), add/verify certificate and prequalification
+     status+decision (role-gated to `procurement_head`/`lead_estimator`/
+     `managing_director`, mirroring `prequal.py`'s own `_WRITE_ROLES` --
+     notably NOT `bd_director`, unlike vendor-master writes), a "scan for
+     duplicates" trigger (`POST /vendors/{id}/duplicate-scan`).
+   - `VendorDuplicatesPage` (`/vendors/duplicates`): open candidates, the
+     three resolution actions, role-gated.
+   - Judgment calls: duplicate review is its own page, not a tab (kept
+     `VendorsPage` focused on browsing); `scope_trade_node_id` on a
+     prequalification decision is omitted from the form (not exposed) --
+     every decision made through this UI is realm-wide, not
+     trade-scoped, which is a reasonable default and matches how the
+     brief describes the capability, but a trade-scoped decision still
+     requires a direct API call today; noted here rather than treated as
+     a blocking gap.
+   - Every write control role-gated client-side against the real
+     server-side role list (read from the route files, not guessed), with
+     an `isError` display on every mutation -- the same recurring pattern
+     from Phase 2. No new P0/P1 found in this new UI itself.
+   - Pre-existing issue noticed, not fixed here (out of scope for new UI,
+     flagging for the record): `VendorPrequalificationOut.max_award_value`
+     is a bare `float` on both the request and response schema -- a
+     different, older issue than Phase 2's JsonDecimal-string sweep (this
+     one is `float` in the schema's own type, not a serialization
+     mismatch), not touched since it's pre-existing and out of this
+     chunk's scope.
+   - 4 new real-backend Playwright tests, all passing against the rebuilt
+     frontend image (including a live check that the expiry badge
+     actually renders using a real certificate type seeded into the dev
+     DB for this verification). `tsc --noEmit` clean, `oxlint` clean,
+     `vitest`: 24 passed.
+
 Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
-before the next starts): vendor master + duplicate review + prequalification
-UI; cost library + Module E read-view UI; project location/members UI +
-saved-scenario delete; quotation attachments/exclusion-ack/fx-rate UI +
-settlement per-trade/per-line override UI; shared modal component +
-window.prompt replacement; taxonomy tree editor; home dashboard per role.
+before the next starts): cost library + Module E read-view UI; project
+location/members UI + saved-scenario delete; quotation
+attachments/exclusion-ack/fx-rate UI + settlement per-trade/per-line
+override UI; shared modal component + window.prompt replacement; taxonomy
+tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
