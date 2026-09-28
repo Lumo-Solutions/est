@@ -82,6 +82,14 @@ export function useSaveScenario(settlementId: string | undefined) {
   })
 }
 
+export function useDeleteScenario(settlementId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (scenarioId: string) => api.delete<void>(`/bid-settlements/${settlementId}/scenarios/${scenarioId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bid-settlements', settlementId, 'scenarios'] }),
+  })
+}
+
 export function useSubmitSettlement(projectId: string | undefined, settlementId: string | undefined) {
   const queryClient = useQueryClient()
   return useMutation({

@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import {
   useBuildSettlementDraft,
   useDecideSettlement,
+  useDeleteScenario,
   useRefreshQuantities,
   useSaveScenario,
   useScenarios,
@@ -25,6 +26,41 @@ import type { BidSettlementOut, SimulateRequest, SimulateResult } from '../types
 // (server still enforces it correctly either way; see docs/ui-qa/issues.md).
 const BUILD_DRAFT_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const SUBMIT_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+// Mirrors _LINE_ROLES exactly (same roles that can save a scenario in the
+// first place) -- every business role except platform_admin.
+const SCENARIO_DELETE_ROLES = [Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+
+function ScenarioDeleteButton({ settlementId, scenarioId }: { settlementId: string; scenarioId: string }) {
+  const { hasRole } = useAuth()
+  const [confirming, setConfirming] = useState(false)
+  const deleteScenario = useDeleteScenario(settlementId)
+
+  if (!hasRole(...SCENARIO_DELETE_ROLES)) return null
+
+  if (!confirming) {
+    return (
+      <button type="button" onClick={() => setConfirming(true)} className="ml-2 text-xs text-red-600 underline">
+        Delete
+      </button>
+    )
+  }
+  return (
+    <span className="ml-2 text-xs">
+      <button
+        type="button"
+        disabled={deleteScenario.isPending}
+        onClick={() => deleteScenario.mutate(scenarioId, { onSettled: () => setConfirming(false) })}
+        className="text-red-700 underline disabled:opacity-50"
+      >
+        Confirm delete?
+      </button>{' '}
+      <button type="button" onClick={() => setConfirming(false)} className="text-slate-500 underline">
+        Cancel
+      </button>
+      {deleteScenario.isError && <span className="ml-1 text-red-600">{deleteScenario.error.message}</span>}
+    </span>
+  )
+}
 
 const SLIDERS: { key: keyof Pick<SimulateRequest, 'default_plant_pct' | 'default_overhead_pct' | 'default_volatility_pct' | 'default_markup_pct'>; label: string }[] = [
   { key: 'default_plant_pct', label: 'Plant %' },
@@ -148,6 +184,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
                 {s.label}
               </button>{' '}
               -- tender total {s.result.tender_total?.toFixed(2)}
+              <ScenarioDeleteButton settlementId={settlement.id} scenarioId={s.id} />
             </li>
           ))}
         </ul>

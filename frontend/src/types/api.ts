@@ -31,6 +31,25 @@ export interface ProjectLocationUpdate {
   longitude?: number | null
 }
 
+export interface ProjectMemberAdd {
+  user_id: string
+  project_role?: string | null
+}
+
+export interface ProjectMemberOut {
+  user_id: string
+  project_role: string | null
+}
+
+// Mirrors backend/app/schemas/users.py exactly.
+export interface UserOut {
+  id: string
+  username: string
+  email: string | null
+  enabled: boolean
+  roles: string[]
+}
+
 // backend/app/core/enums.py::DrawingStatus
 export type DrawingStatus =
   | 'uploaded'
