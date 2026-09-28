@@ -919,6 +919,17 @@ export interface VendorCertificateOut {
   verified_at: string | null
 }
 
+// Mirrors backend/app/schemas/prequal.py's ExpiringVendorCertificateOut
+// exactly (Phase 3 gap-fill, docs/ui-qa-brief.md: home dashboard).
+export interface ExpiringVendorCertificateOut {
+  id: string
+  vendor_id: string
+  vendor_name: string
+  certificate_type_id: string
+  expiry_date: string
+  status: string
+}
+
 export interface PrequalificationDecision {
   status: string
   grade?: string | null
@@ -1130,6 +1141,34 @@ export interface ApprovalPolicyOut {
   mode: string
   is_active: boolean
   tiers: ApprovalPolicyTierOut[]
+}
+
+// Mirrors backend/app/schemas/approvals.py's ApprovalStepOut/ApprovalRequestOut
+// exactly (Phase 3 gap-fill, docs/ui-qa-brief.md: home dashboard's
+// "approvals waiting for me" tile).
+export interface ApprovalStepOut {
+  id: string
+  seq: number
+  required_role: string
+  status: string
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
+}
+
+export interface ApprovalRequestOut {
+  id: string
+  project_id: string | null
+  entity_type: string
+  entity_id: string
+  amount: number
+  currency: string
+  status: string
+  current_seq: number
+  requested_by: string
+  requested_at: string
+  completed_at: string | null
+  steps: ApprovalStepOut[]
 }
 
 export interface ApprovalPolicySetActive {

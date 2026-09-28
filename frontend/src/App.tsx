@@ -12,6 +12,7 @@ import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
 import { CostItemDetailPage } from './pages/CostItemDetailPage'
 import { CostLibraryPage } from './pages/CostLibraryPage'
 import { ExportPage } from './pages/ExportPage'
+import { HomeDashboardPage } from './pages/HomeDashboardPage'
 import { ModuleEPage } from './pages/ModuleEPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
@@ -52,6 +53,7 @@ function AppRoutes() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<ProjectsListPage />} />
+        <Route path="/dashboard" element={<HomeDashboardPage />} />
         <Route path="/vendors" element={<VendorsPage />} />
         <Route path="/vendors/duplicates" element={<VendorDuplicatesPage />} />
         <Route path="/vendors/:vendorId" element={<VendorDetailPage />} />
