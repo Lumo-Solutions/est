@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.common import ORMModel
+from app.schemas.common import JsonDecimal, ORMModel
 
 
 class CostRateComponentIn(BaseModel):
@@ -24,10 +24,10 @@ class CostRateComponentOut(ORMModel):
     component_type: str
     description: str
     resource_code: str | None
-    quantity_per_uom: float
-    unit_cost: float
-    waste_factor: float
-    amount: float
+    quantity_per_uom: JsonDecimal
+    unit_cost: JsonDecimal
+    waste_factor: JsonDecimal
+    amount: JsonDecimal
     sort_order: int
 
 
@@ -67,8 +67,8 @@ class CostItemRateOut(ORMModel):
     cost_item_id: UUID
     scope_key: str
     currency: str
-    total_rate: float
+    total_rate: JsonDecimal
     source: str
     source_ref: str | None
-    confidence: float | None
+    confidence: JsonDecimal | None
     components: list[CostRateComponentOut] = []
