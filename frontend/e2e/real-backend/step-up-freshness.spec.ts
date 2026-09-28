@@ -5,6 +5,7 @@ import {
   D1_SIM_PROJECT_CODE,
   findProjectByCode,
   loginViaKeycloak,
+  skipLoudlyIfMfaDisabled,
   submitSettlementForApproval,
 } from './helpers'
 import { DEMO_TOTP_SECRETS } from './totp'
@@ -27,6 +28,7 @@ test.setTimeout(600_000)
 
 test('step-up freshness: auth_time behaviour across a real Keycloak step-up', async ({ page, browser }) => {
   await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
+  await skipLoudlyIfMfaDisabled(page)
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
 
   const mdContext = await browser.newContext({ ignoreHTTPSErrors: true })

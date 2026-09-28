@@ -1,4 +1,4 @@
-import type { Browser, Page } from '@playwright/test'
+import { test, type Browser, type Page } from '@playwright/test'
 import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
 
 // Fixture project app/cli.py::simulate_settlement builds/reuses (see
@@ -17,27 +17,63 @@ interface ProjectSummary {
 
 // Real Keycloak login form (no mocked /auth/me) -- see
 // docs/keycloak-setup.md's "Interactive browser login in dev" section.
-// fix/keycloak-step-up's browser-stepup flow requires OTP at EVERY login now
-// (bronze = password + TOTP, not just password -- see
-// deploy/keycloak/bootstrap.sh's ensure_browser_stepup_flow), so this always
-// completes both steps. Every demo user has a dev-fixed TOTP secret seeded
-// by that same bootstrap.sh (see totp.ts's DEMO_TOTP_SECRETS) -- a human
+// Real Keycloak login. With MFA on (the default), the browser-stepup flow's
+// bronze level is password + TOTP, so this completes both steps using the
+// dev-fixed secret bootstrap.sh seeded (totp.ts's DEMO_TOTP_SECRETS). With
+// DEV_DISABLE_MFA=true (dev/test only -- `make dev-mfa-off`) the password
+// step redirects straight back and no OTP form ever appears. Which of the
+// two happened is returned (true = the OTP form was shown and completed) so
+// a spec can assert Keycloak and the backend agree about the mode. A human
 // wanting to test genuine QR-code enrolment instead runs
 // deploy/keycloak/dev-reset-totp-user.sh first (see docs/keycloak-setup.md).
-export async function loginViaKeycloak(page: Page, username: string, password: string): Promise<void> {
-  const secret = DEMO_TOTP_SECRETS[username]
-  if (!secret) throw new Error(`No dev-fixed TOTP secret known for '${username}' -- see totp.ts's DEMO_TOTP_SECRETS`)
-
+export async function loginViaKeycloak(page: Page, username: string, password: string): Promise<boolean> {
   await page.goto('/api/v1/auth/login')
   await page.locator('#username').fill(username)
   await page.locator('#password').fill(password)
   await page.locator('#kc-login').click()
-  // Same form/button id ("kc-login") on the OTP step as the password step.
-  await submitTotpCode(page, '#otp', () => page.locator('#kc-login').click(), secret)
+  const landed = page
+    .waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
+    .then(() => 'landed' as const)
+    .catch(() => 'landed' as const)
+  const otpShown = page
+    .locator('#otp')
+    .waitFor()
+    .then(() => 'otp' as const)
+    .catch(() => 'landed' as const)
+  const otpPrompted = (await Promise.race([landed, otpShown])) === 'otp'
+  if (otpPrompted) {
+    const secret = DEMO_TOTP_SECRETS[username]
+    if (!secret) throw new Error(`No dev-fixed TOTP secret known for '${username}' -- see totp.ts's DEMO_TOTP_SECRETS`)
+    // Same form/button id ("kc-login") on the OTP step as the password step.
+    await submitTotpCode(page, '#otp', () => page.locator('#kc-login').click(), secret)
+  }
   // Keycloak redirects through /api/v1/auth/callback and lands back on the
   // SPA -- wait for that round trip instead of a fixed path, since `next`
   // can vary.
   await page.waitForURL((url) => !url.pathname.startsWith('/realms/') && !url.pathname.startsWith('/api/v1/auth/'))
+  return otpPrompted
+}
+
+// True when the backend reports DEV_DISABLE_MFA is active (GET /auth/me ->
+// mfa_disabled_dev; only ever true in dev/test). Needs a logged-in page.
+export async function isMfaDisabledDev(page: Page): Promise<boolean> {
+  const me = await page.request.get('/api/v1/auth/me')
+  return ((await me.json()) as { mfa_disabled_dev?: boolean }).mfa_disabled_dev === true
+}
+
+// For specs whose whole point is a REAL Keycloak step-up: with MFA off there
+// is nothing to prove, so skip -- loudly (console + skip reason in the
+// report), never silently pass. Turn MFA on with `make dev-mfa-on`
+// (deploy/keycloak/test-stepup-freshness.sh does it itself).
+export async function skipLoudlyIfMfaDisabled(page: Page): Promise<void> {
+  if (!(await isMfaDisabledDev(page))) return
+  const reason = 'SKIPPED: DEV_DISABLE_MFA is on, so no real MFA step-up happens -- run `make dev-mfa-on` to run this test.'
+  console.error(`
+${'!'.repeat(78)}
+!! ${reason}
+${'!'.repeat(78)}
+`)
+  test.skip(true, reason)
 }
 
 // A code generated right before submission can still straddle Keycloak's
