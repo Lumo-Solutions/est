@@ -153,3 +153,64 @@ test.describe('Phase 4 accessibility -- procurement, quotation and settlement pa
     expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
   })
 })
+
+// Phase 4 (docs/ui-qa-brief.md): AdminPage (all six tabs) + AuditPage +
+// ModuleEPage + HomeDashboardPage -- the platform-admin/read-heavy chunk.
+// managing_director has write access on every Admin tab (see
+// admin-audit-permissions.spec.ts), so scanning as md1 exercises each tab's
+// write controls, not just its read-only fallback text.
+test.describe('Phase 4 accessibility -- admin, audit, Module E and dashboard pages', () => {
+  test('AdminPage has no serious/critical axe violations on any of its six tabs', async ({ page }) => {
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    await page.goto('/admin')
+    await expect(page.getByRole('heading', { name: 'Admin' })).toBeVisible()
+
+    for (const tabName of [
+      'Taxonomy',
+      'Approval policies',
+      'Tolerances',
+      'Layer/trade mapping',
+      'Reason codes',
+      'Vendor regions',
+    ]) {
+      await page.getByRole('button', { name: tabName }).click()
+      const results = await new AxeBuilder({ page }).analyze()
+      const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+      expect(serious, `${tabName}: ${JSON.stringify(serious, null, 2)}`).toEqual([])
+    }
+  })
+
+  test('AuditPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    await page.goto('/audit')
+    await expect(page.getByRole('heading', { name: 'Audit viewer' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+
+  test('ModuleEPage has no serious/critical axe violations on any of its four tabs', async ({ page }) => {
+    await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
+    const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+    await page.goto(`/projects/${project.id}/module-e`)
+    await expect(page.getByRole('heading', { name: 'Post-award (Module E)' })).toBeVisible()
+
+    for (const tabName of ['Contracts', 'BOQ revisions', 'Exclusion register', 'Outturn costs']) {
+      await page.getByRole('button', { name: tabName }).click()
+      const results = await new AxeBuilder({ page }).analyze()
+      const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+      expect(serious, `${tabName}: ${JSON.stringify(serious, null, 2)}`).toEqual([])
+    }
+  })
+
+  test('HomeDashboardPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+})
