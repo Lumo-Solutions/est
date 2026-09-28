@@ -167,6 +167,16 @@ async def list_scenarios_endpoint(
     return [BidSettlementScenarioOut.model_validate(s) for s in scenarios]
 
 
+@router.delete("/bid-settlements/{settlement_id}/scenarios/{scenario_id}", status_code=204, response_model=None)
+async def delete_scenario_endpoint(
+    settlement_id: UUID,
+    scenario_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_LINE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    await settlement_service.delete_scenario(session, ctx, settlement_id, scenario_id)
+
+
 @router.post("/bid-settlements/{settlement_id}/submit", response_model=BidSettlementOut)
 async def submit_settlement_endpoint(
     settlement_id: UUID,

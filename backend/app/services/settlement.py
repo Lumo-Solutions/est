@@ -584,6 +584,30 @@ async def list_scenarios(session: AsyncSession, settlement_id: UUID) -> list[Bid
     return list(result.scalars().all())
 
 
+async def delete_scenario(session: AsyncSession, ctx: RequestContext, settlement_id: UUID, scenario_id: UUID) -> None:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): scenarios are "purely a UI
+    convenience" (BidSettlementScenario's own docstring) with no way to
+    remove one once saved -- confirmed no endpoint existed. Same
+    _LINE_ROLES as saving one. Scoped to settlement_id, not just the
+    scenario's own id, so a scenario belonging to a DIFFERENT settlement
+    404s instead of silently deleting -- mirrors delete_line_item's own
+    404-not-silent-noop shape (app/services/boq.py)."""
+    _require_role(ctx, _LINE_ROLES, "Deleting a settlement scenario")
+    result = await session.execute(
+        select(BidSettlementScenario).where(
+            BidSettlementScenario.id == scenario_id, BidSettlementScenario.settlement_id == settlement_id
+        )
+    )
+    scenario = result.scalar_one_or_none()
+    if scenario is None:
+        raise NotFoundError(f"Scenario {scenario_id} not found on settlement {settlement_id}")
+    await session.delete(scenario)
+    await audit.record(
+        session, ctx, action=AuditAction.DELETE, entity_type="bid_settlement_scenario", entity_id=scenario_id,
+        project_id=scenario.project_id, payload={"label": scenario.label},
+    )
+
+
 # --------------------------------------------------------------------------
 # submit / decide (§5a, §5c)
 # --------------------------------------------------------------------------
