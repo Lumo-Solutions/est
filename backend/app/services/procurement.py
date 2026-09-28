@@ -38,7 +38,7 @@ from app.models.procurement import ProcurementPackage, ProcurementPackageItem, R
 from app.models.tenancy import Project
 from app.models.vendors import Vendor, VendorContact, VendorTrade
 from app.schemas.procurement import MatchedVendorOut, ProcurementPackageCreate, RfqCreateRequest
-from app.security.deps import has_recent_step_up
+from app.security.deps import has_recent_step_up, mfa_audit_payload
 from app.services import audit
 from app.services import prequal as prequal_service
 from app.services import vendors as vendors_service
@@ -360,7 +360,7 @@ async def _queue(session: AsyncSession, ctx: RequestContext, rfq: Rfq, *, resend
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="rfq", entity_id=rfq.id, project_id=rfq.project_id,
-        payload={"status": "queued", "resend": resend, "reason": reason},
+        payload={"status": "queued", "resend": resend, "reason": reason, **mfa_audit_payload(ctx, get_settings())},
     )
     task = dispatch_rfq_task.delay(
         str(rfq.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles)

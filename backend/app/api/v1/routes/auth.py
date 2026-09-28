@@ -5,7 +5,7 @@ import secrets
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, mfa_bypass_active
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import UnauthorizedError
@@ -110,12 +110,15 @@ async def auth_logout(request: Request, settings: Settings = Depends(get_setting
 
 
 @router.get("/me")
-async def auth_me(ctx: RequestContext = CurrentUser) -> dict:
+async def auth_me(ctx: RequestContext = CurrentUser, settings: Settings = Depends(get_settings)) -> dict:
     return {
         "sub": ctx.sub,
         "tenant_id": str(ctx.tenant_id),
         "roles": sorted(ctx.roles),
         "acr": ctx.acr,
+        # Drives the frontend's "DEV: MFA disabled" banner; only ever true in
+        # dev/test (config.mfa_bypass_active).
+        "mfa_disabled_dev": mfa_bypass_active(settings),
     }
 
 

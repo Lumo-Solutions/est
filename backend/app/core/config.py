@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # auth_time against this independently for exactly that reason. Matches
     # Keycloak's own loa-max-age for the same acr level by default.
     step_up_max_age_s: int = Field(default=300, alias="STEP_UP_MAX_AGE_S")
+    # DEV/TEST ONLY switch that turns MFA off: deploy/keycloak/bootstrap.sh
+    # drops the login OTP, and app/security/deps.py::has_recent_step_up
+    # passes without a step-up. Honoured only when APP_ENV is exactly "dev" or
+    # "test" (see mfa_bypass_active); anywhere else, setting it true makes the
+    # settings fail to load, so the backend and workers refuse to start
+    # rather than silently running with MFA off.
+    dev_disable_mfa: bool = Field(default=False, alias="DEV_DISABLE_MFA")
 
     # --- session / cookies ---
     session_secret: str = Field(default="", alias="SESSION_SECRET")
@@ -145,6 +152,20 @@ class Settings(BaseSettings):
     )
     quotation_max_pdf_pages: int = Field(default=60, alias="QUOTATION_MAX_PDF_PAGES")
 
+    @model_validator(mode="after")
+    def _refuse_mfa_bypass_outside_dev_test(self) -> Settings:
+        """Fail closed: DEV_DISABLE_MFA=true is only legal when APP_ENV was
+        explicitly set to exactly "dev" or "test". app_env's own default is
+        "dev", so an unset APP_ENV is checked via model_fields_set rather
+        than taken at face value."""
+        if self.dev_disable_mfa and not _app_env_allows_mfa_bypass(self):
+            raise ValueError(
+                "DEV_DISABLE_MFA=true is only allowed with APP_ENV explicitly set to 'dev' or 'test' "
+                f"(APP_ENV={self.app_env!r}, explicitly set: {'app_env' in self.model_fields_set}); "
+                "refusing to start with MFA disabled."
+            )
+        return self
+
     @field_validator("vllm_api_base")
     @classmethod
     def _assert_vllm_is_private(cls, v: str) -> str:
@@ -158,6 +179,17 @@ class Settings(BaseSettings):
                 "this platform must only call a self-hosted vLLM instance."
             )
         return v
+
+
+def _app_env_allows_mfa_bypass(settings: Settings) -> bool:
+    return "app_env" in settings.model_fields_set and settings.app_env in ("dev", "test")
+
+
+def mfa_bypass_active(settings: Settings) -> bool:
+    """True only when DEV_DISABLE_MFA=true AND APP_ENV is exactly dev/test.
+    The single definition shared by has_recent_step_up, /auth/me (the
+    frontend's "DEV: MFA disabled" banner) and the startup validator."""
+    return settings.dev_disable_mfa and _app_env_allows_mfa_bypass(settings)
 
 
 @lru_cache
