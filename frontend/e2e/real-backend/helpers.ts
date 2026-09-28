@@ -275,8 +275,11 @@ export async function attemptApprove(page: Page): Promise<'blocked' | 'approved'
       () => true,
       () => false,
     ),
+    // SettlementPage.tsx's Phase 4 restyle renders the status as a shared
+    // Badge (docs/ui-design-system.md section 4.8), whose text is exactly
+    // the status word with no surrounding " -- " literal.
     page
-      .getByText(/^v\d+ -- approved -- /)
+      .getByText('approved', { exact: true })
       .waitFor({ state: 'visible', timeout: 15_000 })
       .then(
         () => true,
