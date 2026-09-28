@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test'
-import { csrfHeaders, D1_SIM_PROJECT_CODE, ensureProjectMember, findProjectByCode, loginViaKeycloak } from './helpers'
+import {
+  csrfHeaders,
+  D1_SIM_PROJECT_CODE,
+  driveSettlementTo,
+  ensureProjectMember,
+  findProjectByCode,
+  loginViaKeycloak,
+} from './helpers'
 
 // Phase 3 gap-fill (docs/ui-qa-brief.md): project location/members had no
 // UI (endpoints existed, GET /projects/{id}/members newly added), and
@@ -52,16 +59,18 @@ test('saved-scenario delete: lead_estimator can save then delete via the two-ste
 }) => {
   await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+  // Never skipped: isVisible() ignores its timeout option and returned before the page
+  // had loaded, so this used to skip on a perfectly good fixture. Put the
+  // settlement in a known state, then require the cockpit.
+  await driveSettlementTo(page, browser, project.id, 'draft')
   await page.goto(`/projects/${project.id}/settlement`)
-
-  const hasCockpit = await page.getByText(/Tender total:/i).isVisible({ timeout: 15_000 }).catch(() => false)
-  test.skip(!hasCockpit, 'D1-SIM has no current settlement this run -- scenario save/delete needs one to exist.')
+  await expect(page.getByText(/Tender total:/i)).toBeVisible({ timeout: 15_000 })
 
   await page.getByPlaceholder('Scenario label').fill('E2E delete-me')
   await page.getByRole('button', { name: 'Save scenario' }).click()
   await expect(page.getByText('E2E delete-me')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Delete' }).first().click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).first().click()
   await page.getByRole('button', { name: 'Confirm delete?' }).click()
   await expect(page.getByText('E2E delete-me')).not.toBeVisible()
 

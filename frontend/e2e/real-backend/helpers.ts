@@ -1,4 +1,4 @@
-import { test, type Browser, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
 import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -431,7 +431,9 @@ export async function driveSettlementTo(
     if (status !== 'draft') {
       await page.goto(`/projects/${projectId}/settlement`)
       await page.getByRole('button', { name: /^Build( new)? settlement draft$/ }).click()
-      await page.getByRole('button', { name: 'Submit for approval' }).waitFor({ state: 'visible' })
+      // Role-agnostic wait (only bd/md can see "Submit for approval"): the
+      // server reports the new draft as current.
+      await expect.poll(() => currentSettlementStatus(page, projectId), { timeout: 30_000 }).toBe('draft')
     }
     return
   }
