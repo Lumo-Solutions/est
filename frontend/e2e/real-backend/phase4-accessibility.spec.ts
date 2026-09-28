@@ -152,6 +152,23 @@ test.describe('Phase 4 accessibility -- procurement, quotation and settlement pa
     const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
     expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
   })
+
+  // SettlementPage.tsx -- last Phase 4 page-restyle chunk. bd1 has read/
+  // submit access to D1-SIM's current settlement (whatever lifecycle state
+  // it's in from other specs run this session), which is enough to render
+  // the cockpit's status badge, live-simulation panel, and (role-permitting)
+  // the trade/line override panels -- exercising the real restyled markup,
+  // not just an empty shell.
+  test('SettlementPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
+    const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+    await page.goto(`/projects/${project.id}/settlement`)
+    await expect(page.getByRole('heading', { name: 'Settlement cockpit' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
 })
 
 // Phase 4 (docs/ui-qa-brief.md): AdminPage (all six tabs) + AuditPage +
