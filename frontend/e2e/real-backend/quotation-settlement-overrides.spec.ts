@@ -34,7 +34,14 @@ test.describe('QuoteReviewPage: attachments and fx-rate', () => {
     // would be a real failure, and isError would render red text instead.
     await expect(page.getByText(/No attachments\.|KB/).first()).toBeVisible()
 
-    const fxInput = page.getByPlaceholder(/FX rate/).first()
+    // QuoteReviewPage.tsx's FX input placeholder is dynamic: "FX rate to
+    // base" when quotation.fx_rate_to_base is unset, or "Current: <value>"
+    // once a rate has already been recorded -- matching only /FX rate/
+    // (as this test originally did) breaks the moment any prior run
+    // (including this same test, re-run) has already set one, which is
+    // exactly what happened here: a real test-authoring bug, not a product
+    // bug or flakiness. Match both states.
+    const fxInput = page.getByPlaceholder(/FX rate|Current:/).first()
     await expect(fxInput).toBeVisible()
     await fxInput.fill('3.6725')
     await page.getByRole('button', { name: 'Set FX rate' }).first().click()
