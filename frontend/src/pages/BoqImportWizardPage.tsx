@@ -77,7 +77,7 @@ export function BoqImportWizardPage() {
                   [key]: key === 'header_row' ? Number(e.target.value) : e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
           </div>
         ))}
@@ -91,7 +91,7 @@ export function BoqImportWizardPage() {
             if (!file) return
             preview.mutate({ file, mapping: cleanMapping(mapping) }, { onSuccess: () => setPreviewedKey(currentKey) })
           }}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           Preview
         </button>
@@ -105,13 +105,21 @@ export function BoqImportWizardPage() {
               { onSuccess: () => navigate(`/projects/${projectId}/boq`) },
             )
           }}
-          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
         >
           Commit
         </button>
       </div>
-      {preview.isError && <p className="mt-2 text-sm text-red-600">{preview.error.message}</p>}
-      {commit.isError && <p className="mt-2 text-sm text-red-600">{commit.error.message}</p>}
+      {preview.isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {preview.error.message}
+        </p>
+      )}
+      {commit.isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {commit.error.message}
+        </p>
+      )}
 
       {preview.data && (
         <div className="mt-4">
@@ -121,21 +129,24 @@ export function BoqImportWizardPage() {
           <table className="mt-2 w-full text-left text-sm">
             <thead className="border-b border-slate-200 text-slate-500">
               <tr>
-                <th>Row</th>
-                <th>Item No</th>
-                <th>Description</th>
-                <th>Qty</th>
-                <th>Errors</th>
+                <th className="py-2 font-medium">Row</th>
+                <th className="font-medium">Item No</th>
+                <th className="font-medium">Description</th>
+                <th className="font-medium">Qty</th>
+                <th className="font-medium">Errors</th>
               </tr>
             </thead>
             <tbody>
               {preview.data.rows.map((row) => (
-                <tr key={row.row_number} className={row.errors.length > 0 ? 'bg-red-50' : ''}>
-                  <td>{row.row_number}</td>
+                <tr
+                  key={row.row_number}
+                  className={`border-b border-slate-100 ${row.errors.length > 0 ? 'bg-danger-subtle' : 'hover:bg-slate-50'}`}
+                >
+                  <td className="py-2 tabular-nums">{row.row_number}</td>
                   <td>{row.item_no ?? '--'}</td>
                   <td>{row.description ?? '--'}</td>
-                  <td>{row.boq_quantity ?? '--'}</td>
-                  <td className="text-red-600">{row.errors.join('; ')}</td>
+                  <td className="tabular-nums">{row.boq_quantity ?? '--'}</td>
+                  <td className="text-danger">{row.errors.join('; ')}</td>
                 </tr>
               ))}
             </tbody>

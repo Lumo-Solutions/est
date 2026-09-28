@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { Badge, type BadgeTone } from '../components/Badge'
+import { SkeletonRows } from '../components/Skeleton'
 import { useBoqItems } from '../features/boq/api'
 import {
   useConfirmTypologyCluster,
@@ -14,10 +16,11 @@ import {
 import { Role } from '../lib/roles'
 import type { ConfirmClusterDeltaIn, ConfirmClusterGroupIn, TypologyClusterStatus } from '../types/api'
 
-const STATUS_STYLES: Record<TypologyClusterStatus, string> = {
-  proposed: 'bg-amber-100 text-amber-800',
-  confirmed: 'bg-green-100 text-green-800',
-  rejected: 'bg-slate-100 text-slate-500',
+// docs/ui-design-system.md section 4.8.
+const STATUS_TONE: Record<TypologyClusterStatus, BadgeTone> = {
+  proposed: 'warning',
+  confirmed: 'success',
+  rejected: 'neutral',
 }
 
 // Mirrors backend/app/api/v1/routes/typology.py's _STRUCTURE_ROLES --
@@ -63,13 +66,21 @@ function ConfirmForm({
           {groups.map((g, i) => (
             <tr key={i}>
               <td>
-                <input type="radio" name="master" checked={masterIndex === i} onChange={() => setMasterIndex(i)} />
+                <input
+                  type="radio"
+                  name="master"
+                  aria-label={`Use "${labels[i]}" as the master group`}
+                  checked={masterIndex === i}
+                  onChange={() => setMasterIndex(i)}
+                  className="accent-brand"
+                />
               </td>
               <td>
                 <input
+                  aria-label={`Group label ${i + 1}`}
                   value={labels[i]}
                   onChange={(e) => setLabels((prev) => prev.map((l, j) => (j === i ? e.target.value : l)))}
-                  className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
                 />
               </td>
               <td>{g.handles.length}</td>
@@ -82,9 +93,10 @@ function ConfirmForm({
       {deltas.map((delta, i) => (
         <div key={i} className="mt-1 flex flex-wrap items-end gap-2">
           <select
+            aria-label="Variant delta group label"
             value={delta.group_label}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, group_label: e.target.value } : d)))}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           >
             {labels.map((l) => (
               <option key={l} value={l}>
@@ -93,17 +105,19 @@ function ConfirmForm({
             ))}
           </select>
           <input
+            aria-label="Variant delta description"
             placeholder="Description"
             value={delta.description}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, description: e.target.value } : d)))}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           />
           <select
+            aria-label="Variant delta BOQ item"
             value={delta.boq_line_item_id ?? ''}
             onChange={(e) =>
               setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, boq_line_item_id: e.target.value || null } : d)))
             }
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           >
             <option value="">-- BOQ item --</option>
             {(boqItems ?? []).map((item) => (
@@ -113,6 +127,7 @@ function ConfirmForm({
             ))}
           </select>
           <input
+            aria-label="Variant delta quantity"
             type="number"
             step="any"
             placeholder="Qty delta"
@@ -120,17 +135,22 @@ function ConfirmForm({
             onChange={(e) =>
               setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, quantity_delta: Number(e.target.value) } : d)))
             }
-            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-24 rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           />
           <input
+            aria-label="Variant delta unit"
             placeholder="Unit"
             value={delta.unit ?? ''}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, unit: e.target.value } : d)))}
-            className="w-16 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-16 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           />
         </div>
       ))}
-      <button type="button" onClick={addDelta} className="mt-1 text-xs text-slate-600 underline">
+      <button
+        type="button"
+        onClick={addDelta}
+        className="mt-1 rounded text-xs text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      >
         + add delta
       </button>
 
@@ -148,11 +168,15 @@ function ConfirmForm({
               { onSuccess: onDone },
             )
           }
-          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
         >
           Confirm cluster
         </button>
-        {confirm.isError && <p className="mt-1 text-sm text-red-600">{confirm.error.message}</p>}
+        {confirm.isError && (
+          <p role="alert" className="mt-1 text-sm text-danger">
+            {confirm.error.message}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -195,7 +219,7 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
           <button
             type="button"
             onClick={() => setConfirming((v) => !v)}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {confirming ? 'Cancel' : 'Review and confirm'}
           </button>
@@ -203,13 +227,17 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
             type="button"
             disabled={reject.isPending}
             onClick={() => reject.mutate()}
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
+            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Reject
           </button>
         </div>
       )}
-      {reject.isError && <p className="mt-1 text-sm text-red-600">{reject.error.message}</p>}
+      {reject.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {reject.error.message}
+        </p>
+      )}
 
       {confirming && instances && (
         <ConfirmForm
@@ -224,19 +252,19 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
         <div className="mt-3">
           <h3 className="text-sm font-semibold text-slate-800">Rollup ({rollup.total_instance_count} instances)</h3>
           <table className="mt-1 w-full text-left text-sm">
-            <thead className="text-slate-500">
+            <thead className="border-b border-slate-200 text-slate-500">
               <tr>
-                <th>Item</th>
-                <th>Master qty</th>
-                <th>Total</th>
+                <th className="font-medium">Item</th>
+                <th className="font-medium">Master qty</th>
+                <th className="font-medium">Total</th>
               </tr>
             </thead>
             <tbody>
               {rollup.items.map((item) => (
-                <tr key={item.boq_line_item_id}>
+                <tr key={item.boq_line_item_id} className="border-b border-slate-100 hover:bg-slate-50">
                   <td>{item.item_no}</td>
-                  <td>{item.master_quantity}</td>
-                  <td>{item.total}</td>
+                  <td className="tabular-nums">{item.master_quantity}</td>
+                  <td className="tabular-nums">{item.total}</td>
                 </tr>
               ))}
             </tbody>
@@ -265,32 +293,47 @@ export function TypologyPage() {
             type="button"
             onClick={() => detect.mutate()}
             disabled={detect.isPending}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Detect clusters
           </button>
         )}
       </div>
-      {detect.isError && <p className="mt-2 text-sm text-red-600">{detect.error.message}</p>}
-      {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
+      {detect.isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {detect.error.message}
+        </p>
+      )}
+      {isLoading && (
+        <div className="mt-4">
+          <SkeletonRows count={4} />
+        </div>
+      )}
       {/* Regression guard (UI-P2-007): this used to fall straight through to
           `(clusters ?? []).map(...)` on a fetch error, rendering an empty
           list indistinguishable from "no clusters yet". */}
-      {isError && <p className="mt-4 text-red-600">{error.message}</p>}
+      {isError && (
+        <p role="alert" className="mt-4 text-danger">
+          {error.message}
+        </p>
+      )}
+      {!isLoading && !isError && (clusters ?? []).length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No typology clusters yet.</p>
+      )}
       <ul className="mt-4 space-y-1">
         {(clusters ?? []).map((c) => (
           <li key={c.id}>
             <button
               type="button"
               onClick={() => setSelectedClusterId(c.id)}
-              className={`flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm ${
-                c.id === selectedClusterId ? 'bg-slate-100' : 'hover:bg-slate-50'
+              className={`flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+                c.id === selectedClusterId ? 'bg-brand-subtle font-medium text-brand' : 'hover:bg-slate-50'
               }`}
             >
               <span>
                 {c.detection_method} / {c.detection_key}
               </span>
-              <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[c.status]}`}>{c.status}</span>
+              <Badge tone={STATUS_TONE[c.status]}>{c.status}</Badge>
             </button>
           </li>
         ))}

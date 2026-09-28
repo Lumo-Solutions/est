@@ -54,8 +54,11 @@ test.describe('BoqImportWizardPage', () => {
     // Whatever the exact backend message is, it must show up as text, not a
     // silently-stuck button or a blank page -- preview.isError is already
     // wired up, this just proves the whole path (bad file -> server 4xx ->
-    // visible message) actually works end to end.
-    await expect(page.locator('.text-red-600')).toBeVisible({ timeout: 10_000 })
+    // visible message) actually works end to end. role="alert" (not a
+    // hardcoded color class, which Phase 4's design-token restyle changed
+    // from text-red-600 to text-danger -- same color, different class name)
+    // is the stable, semantic way to find it.
+    await expect(page.getByRole('alert').first()).toBeVisible({ timeout: 10_000 })
   })
 })
 
