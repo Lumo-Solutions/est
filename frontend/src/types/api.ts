@@ -754,13 +754,130 @@ export interface DrawingLayerTradeMappingOut {
   trade_node_id: string
 }
 
-// Mirrors backend/app/schemas/vendors.py (fields needed for the admin
-// vendor-regions picker only, not the full duplicate-detection surface).
+// Mirrors backend/app/schemas/vendors.py exactly (expanded from the
+// admin vendor-regions picker's original 4-field subset for Phase 3's
+// vendor master page -- existing callers only used the fields kept here,
+// so this is purely additive).
 export interface VendorOut {
   id: string
   legal_name: string
   trading_name: string | null
+  trade_license_no: string | null
+  license_authority: string | null
+  trn_vat_no: string | null
+  country: string | null
+  emirate: string | null
+  address_line: string | null
+  primary_email: string | null
+  primary_phone: string | null
+  website_domain: string | null
   status: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VendorCreate {
+  legal_name: string
+  trading_name?: string | null
+  trade_license_no?: string | null
+  license_authority?: string | null
+  trn_vat_no?: string | null
+  country?: string | null
+  emirate?: string | null
+  address_line?: string | null
+  primary_email?: string | null
+  primary_phone?: string | null
+  website_domain?: string | null
+  notes?: string | null
+}
+
+export interface DuplicateCandidateOut {
+  id: string
+  vendor_a_id: string
+  vendor_b_id: string
+  score: number
+  signals: Record<string, number> | null
+  status: string
+  detected_at: string
+}
+
+export interface DuplicateCandidatePreview {
+  existing_vendor_id: string
+  existing_vendor_name: string
+  score: number
+  signals: Record<string, number>
+}
+
+export interface DuplicateCheckResult {
+  candidates: DuplicateCandidatePreview[]
+  highest_score: number
+}
+
+export interface DuplicateResolveRequest {
+  resolution: 'confirmed_duplicate' | 'not_duplicate' | 'merged'
+  resolution_note?: string | null
+}
+
+// Mirrors backend/app/schemas/prequal.py exactly.
+export interface AuthorityOut {
+  id: string
+  code: string
+  name: string
+  jurisdiction: string | null
+}
+
+export interface CertificateTypeOut {
+  id: string
+  authority_id: string
+  code: string
+  name: string
+  validity_months: number | null
+  is_mandatory: boolean
+  warn_days_before: number
+}
+
+export interface VendorCertificateCreate {
+  vendor_id: string
+  certificate_type_id: string
+  certificate_no?: string | null
+  issue_date?: string | null
+  expiry_date?: string | null
+  document_object_key?: string | null
+  document_sha256?: string | null
+}
+
+export interface VendorCertificateOut {
+  id: string
+  vendor_id: string
+  certificate_type_id: string
+  certificate_no: string | null
+  issue_date: string | null
+  expiry_date: string | null
+  status: string
+  verified_by: string | null
+  verified_at: string | null
+}
+
+export interface PrequalificationDecision {
+  status: string
+  grade?: string | null
+  max_award_value?: number | null
+  scope_trade_node_id?: string | null
+  effective_from: string
+  decision_note?: string | null
+}
+
+export interface VendorPrequalificationOut {
+  id: string
+  vendor_id: string
+  status: string
+  grade: string | null
+  max_award_value: number | null
+  scope_trade_node_id: string | null
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
 }
 
 export interface Page<T> {

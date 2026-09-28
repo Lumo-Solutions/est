@@ -58,6 +58,10 @@ function projectNavItems(projectId: string): NavItem[] {
 // guaranteed 403 on load (docs/ui-qa/issues.md UI-P2-022).
 const GLOBAL_NAV_ITEMS: NavItem[] = [
   { label: 'Projects', to: '/' },
+  // No requiresRoles: reading the vendor directory is useful to every role
+  // (matches GET /vendors's own "any authenticated user" server check) --
+  // only the write actions inside VendorsPage/VendorDetailPage are gated.
+  { label: 'Vendors', to: '/vendors' },
   { label: 'Admin', to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
   { label: 'Audit', to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
 ]

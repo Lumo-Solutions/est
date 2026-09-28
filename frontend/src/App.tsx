@@ -20,6 +20,9 @@ import { SettlementPage } from './pages/SettlementPage'
 import { SheetIndexPage } from './pages/SheetIndexPage'
 import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 import { TypologyPage } from './pages/TypologyPage'
+import { VendorDetailPage } from './pages/VendorDetailPage'
+import { VendorDuplicatesPage } from './pages/VendorDuplicatesPage'
+import { VendorsPage } from './pages/VendorsPage'
 import { WinLossPage } from './pages/WinLossPage'
 
 // A 4xx (not found, forbidden, validation) is never transient -- retrying it
@@ -46,6 +49,9 @@ function AppRoutes() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<ProjectsListPage />} />
+        <Route path="/vendors" element={<VendorsPage />} />
+        <Route path="/vendors/duplicates" element={<VendorDuplicatesPage />} />
+        <Route path="/vendors/:vendorId" element={<VendorDetailPage />} />
         <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
         <Route path="/projects/:projectId/drawings/:drawingId" element={<SheetIndexPage />} />
         <Route
