@@ -64,3 +64,15 @@ test.describe('Phase 4 accessibility -- vendor and typology/BOQ pages', () => {
     expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
   })
 })
+
+test.describe('Phase 4 accessibility -- cost library pages', () => {
+  test('CostLibraryPage has no serious/critical axe violations', async ({ page }) => {
+    await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
+    await page.goto('/cost-library')
+    await expect(page.getByRole('heading', { name: 'Cost library' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+})

@@ -42,7 +42,14 @@ test.describe('CostLibraryPage', () => {
     await page.getByLabel('Unit cost').fill('42.50')
     await page.getByRole('button', { name: 'Save rate' }).click()
 
-    await expect(page.getByText('AED 42.50')).toBeVisible()
+    // Phase 4 design-system pass (docs/ui-design-system.md) started using
+    // the shared formatMoney helper for the component table's unit
+    // cost/amount too, not just the rate summary -- both now correctly
+    // show "AED 42.50", not just a bare "42.50" as before, which is the
+    // right behavior but means the summary line is no longer the only
+    // match for this text. Scope to the summary paragraph specifically.
+    await expect(page.getByText('AED 42.50').first()).toBeVisible()
+    await expect(page.getByText('AED 42.50')).toHaveCount(3) // summary + unit cost + amount cells
     await expect(page.getByText('E2E component')).toBeVisible()
   })
 })
