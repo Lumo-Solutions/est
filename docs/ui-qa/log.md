@@ -1135,10 +1135,90 @@ from this point forward.
    warnings, zero new), `vitest`: 24 passed, `npm run build`: succeeds
    with all 20 font files present in `dist/assets/` (verified directly).
 
-Remaining Phase 4 work: apply the design system page-by-page (~30 pages)
-with Sonnet subagents under main-session review per the brief's 0.3,
-fixing every Phase 2 P2 item along the way; the 5,000-row grid
-re-benchmark; the accessibility pass; before/after screenshots.
+### Chunk: AppShell + core project pages (main-session work)
+Applied `docs/ui-design-system.md` to `AppShell.tsx`, `ProjectsListPage.tsx`,
+`ProjectDetailPage.tsx`, `SheetIndexPage.tsx`, `TakeoffViewerPage.tsx`
+(chrome/layout only on the last one — the canvas/measurement rendering
+itself was not touched, per the design doc's own performance constraint).
+
+- **`AppShell.tsx`**: converted the single horizontal top-nav bar into the
+  design doc's sidebar layout (240px, `--color-brand`-tinted active item,
+  focus-visible rings) — the single highest-blast-radius change in this
+  phase, since every page renders inside it. Verified safe: every nav
+  link's text/href/role-gating logic is byte-for-byte unchanged (only the
+  container markup/CSS changed), and 5 existing e2e spec files that locate
+  nav via `getByRole('link', {name})` (layout-agnostic) all still pass —
+  ran all of them, not just spot-checked one. Deliberately did **not**
+  add a project-name header block above the project nav (the design doc's
+  own suggestion) — that needs a new `useProject(projectId)` fetch running
+  on every single page in the app, a real new data dependency with its own
+  loading shape, not a pure style change; left as a follow-up. Also did
+  not add a shared breadcrumb component in the top bar, consistent with
+  Phases 2/3's existing per-page-back-link decision.
+- **`ProjectsListPage.tsx`**: fixed its own Phase 2 P2 item (UI-P2-006) —
+  added a real empty state (message + CTA) — but left true pagination
+  undone: `GET /projects` has no `Page`-wrapper/limit-offset shape at all
+  today (unlike vendors/cost-items), and changing an existing endpoint's
+  response shape is a backend contract change, not a restyle; flagging for
+  a decision rather than doing it reflexively in a styling pass. Status
+  column now uses the shared `Badge` (backend `ProjectStatus` enum → tone
+  mapping).
+- **`ProjectDetailPage.tsx`**: drawing status → `Badge`; loading state →
+  `SkeletonRows` (named in the design doc as a slow/jarring-transition
+  candidate); every input that only had a `placeholder` (the member-add
+  user `<select>` and its project-role text input) now has a real
+  `<label>`.
+- **`SheetIndexPage.tsx`**: drawing/extraction status → `Badge`; table
+  header `font-medium`; tabular-nums on the sheet index/scale columns.
+- **`TakeoffViewerPage.tsx`**: chrome only (back link, headers, measurement
+  list selected-state now uses `--color-brand` instead of plain slate) —
+  confirmed the canvas/PDF viewport code was not touched by re-reading the
+  diff before committing.
+
+**Two real accessibility bugs found by actually running `@axe-core/playwright`
+against these pages (not assumed clean), both fixed and reverified**:
+1. The sidebar's "Project" section label used `text-slate-400`, measured
+   by axe at 2.63:1 contrast on white — fails AA's 4.5:1 text minimum.
+   Fixed to `text-slate-600` (a safe margin above the boundary, not
+   `slate-500`, which is too close to trust without a precise measurement).
+2. `DrawingUpload.tsx`'s file `<input type="file">` had no label at all
+   (not introduced by this chunk, but newly surfaced by being the first
+   time this page was axe-checked) — added a real `<label htmlFor>`, and
+   tokenized its success/error text to the shared `success`/`danger`
+   tokens with `role="status"`/`role="alert"` while there.
+
+**Verified, not just claimed**: `tsc --noEmit` clean; `oxlint` clean (1
+pre-existing `AppShell.tsx` warning, unchanged); `vitest`: 24 passed;
+`npx playwright test project-pages.spec.ts` (all 8, including a flaky
+failure on the first run that a clean re-run — same code — passed 8/8,
+confirming it wasn't caused by this chunk); `admin-audit-permissions.spec.ts`,
+`costlib-module-e.spec.ts`, `home-dashboard.spec.ts`, `vendors-prequal.spec.ts`
+(all pages that render inside the new `AppShell`, 14 tests total, all
+passing); 3 new `@axe-core/playwright` checks (`phase4-accessibility.spec.ts`),
+zero serious/critical violations after the two fixes above. Before/after
+screenshots: `docs/ui-qa/screenshots/phase-4/{projects-list,project-detail,
+sheet-index,takeoff-viewer}-{before,after}.png` (captured by stashing this
+chunk's changes, rebuilding, screenshotting, then restoring and rebuilding
+again — not mocked).
+
+**Observed, not fixed (pre-existing, not introduced by this chunk)**: on
+`SheetIndexPage`, both "Overview" and "Drawings" nav items highlight as
+active simultaneously when viewing a drawing (`/projects/:id/drawings/:did`
+matches both `/projects/:id` and `/projects/:id/drawings` as prefixes,
+since neither `NavLink` has `end` set) — visible in the after-screenshot.
+Pre-existing behavior inherited unchanged, not something this restyle
+pass introduced; worth a `NavLink` `end`-prop audit in a future pass.
+
+Remaining Phase 4 work: the rest of the ~30-page design-system rollout
+(procurement, settlement, admin, vendors, cost library, etc.) with Sonnet
+subagents under main-session review per the brief's 0.3, fixing every
+Phase 2 P2 item along the way; the 5,000-row grid re-benchmark; the
+remaining accessibility pass; more before/after screenshots.
+
+**Process note**: this chunk was executed directly by the main session
+(not delegated) to establish the sidebar-layout pattern safely first,
+given its blast radius — future chunks can delegate to Sonnet subagents
+against this now-proven pattern.
 
 ## Phase 5: final regression and report
 Not started.
