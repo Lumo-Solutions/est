@@ -7,6 +7,8 @@ export interface AuthUser {
   tenantId: string
   roles: string[]
   acr: string | null
+  // Backend's DEV_DISABLE_MFA is active (dev/test only) -- drives the banner.
+  mfaDisabledDev: boolean
 }
 
 interface AuthMeResponse {
@@ -14,6 +16,7 @@ interface AuthMeResponse {
   tenant_id: string
   roles: string[]
   acr: string | null
+  mfa_disabled_dev?: boolean
 }
 
 interface AuthContextValue {
@@ -32,7 +35,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const me = await api.get<AuthMeResponse>('/auth/me')
-      setUser({ sub: me.sub, tenantId: me.tenant_id, roles: me.roles, acr: me.acr })
+      setUser({
+        sub: me.sub,
+        tenantId: me.tenant_id,
+        roles: me.roles,
+        acr: me.acr,
+        mfaDisabledDev: me.mfa_disabled_dev === true,
+      })
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setUser(null)

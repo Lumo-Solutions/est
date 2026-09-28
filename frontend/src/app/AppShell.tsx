@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { DevMfaBanner } from '../components/DevMfaBanner'
 import { logout } from '../lib/api'
 import { Role } from '../lib/roles'
 
@@ -144,6 +145,7 @@ export function AppShell() {
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
+        <DevMfaBanner active={user?.mfaDisabledDev === true} />
         <header className="flex h-14 shrink-0 items-center justify-end border-b border-slate-200 bg-white px-4">
           <div className="flex items-center gap-3 text-sm text-slate-500">
             {user && <span>{user.sub}</span>}
