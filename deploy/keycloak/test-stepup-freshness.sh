@@ -2,6 +2,10 @@
 # TEST-ONLY orchestration for the fix/keycloak-step-up freshness proof
 # (docs/keycloak-setup.md, docs/build-log.md). Against the real dev stack
 # (`make up` already running), this:
+#   0. turns MFA ON (DEV_DISABLE_MFA=false, via dev-set-mfa.sh) -- this proof
+#      needs a real Keycloak step-up, which does not exist while the dev/test
+#      MFA bypass is on -- and puts DEV_DISABLE_MFA back to whatever it was
+#      when the script exits,
 #   1. lowers Keycloak's Level 2 ("silver") step-up loa-max-age to ~20s
 #      (set-stepup-loa-max-age.sh), instead of the real 300s default,
 #   2. recreates the backend container with STEP_UP_MAX_AGE_S=20 to match,
@@ -22,6 +26,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."  # repo root
 test -f deploy/.env || { echo "deploy/.env not found -- run: cp deploy/.env.example deploy/.env" >&2; exit 1; }
 set -a; . deploy/.env; set +a
 
+PRIOR_DEV_DISABLE_MFA="${DEV_DISABLE_MFA:-false}"
 TEST_MAX_AGE_S=20
 REAL_MAX_AGE_S=300
 COMPOSE="docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env"
@@ -51,9 +56,16 @@ restore() {
     bash deploy/keycloak/set-stepup-loa-max-age.sh "$REAL_MAX_AGE_S" || echo "WARNING: failed to restore Keycloak's loa-max-age -- fix by hand before trusting any other step-up test." >&2
     STEP_UP_MAX_AGE_S="$REAL_MAX_AGE_S" $COMPOSE up -d backend
     wait_backend_healthy || echo "WARNING: backend did not report healthy after restore -- check 'docker logs installtec_backend'." >&2
+    if [ "$PRIOR_DEV_DISABLE_MFA" != "false" ]; then
+        echo "Restoring DEV_DISABLE_MFA=${PRIOR_DEV_DISABLE_MFA}..."
+        bash deploy/keycloak/dev-set-mfa.sh "$PRIOR_DEV_DISABLE_MFA" || echo "WARNING: failed to restore DEV_DISABLE_MFA -- run 'make dev-mfa-off' by hand if you want it back." >&2
+    fi
     exit "$status"
 }
 trap restore EXIT
+
+echo "Turning MFA ON for the real step-up proof (was DEV_DISABLE_MFA=${PRIOR_DEV_DISABLE_MFA})..."
+bash deploy/keycloak/dev-set-mfa.sh false
 
 echo "Lowering Level 2 (silver) step-up's loa-max-age to ${TEST_MAX_AGE_S}s..."
 bash deploy/keycloak/set-stepup-loa-max-age.sh "$TEST_MAX_AGE_S"

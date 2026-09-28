@@ -178,6 +178,44 @@ ensure_browser_stepup_flow() {
     echo "  'browser-stepup' created."
 }
 ensure_browser_stepup_flow
+
+# Login OTP (Level 1's auth-otp-form) and CONFIGURE_TOTP-as-default-action.
+# The realm file (realm-installtec.json) is shared with production and always
+# ships them SECURE (OTP REQUIRED, CONFIGURE_TOTP default). This is the ONLY
+# place MFA is turned off, and only when APP_ENV is exactly "dev" or "test"
+# AND DEV_DISABLE_MFA=true -- anything else (any other APP_ENV, APP_ENV
+# unset, DEV_DISABLE_MFA unset/false/typo'd) fails CLOSED to OTP REQUIRED,
+# and re-running this script restores that on an already-configured realm
+# (this is what `make dev-mfa-on` relies on). Step-up (Level 2) is never
+# touched here: with MFA off, the backend's has_recent_step_up bypasses it
+# under the same switch (app/security/deps.py).
+if dev_mfa_disabled; then
+    login_otp_requirement=DISABLED
+    configure_totp_default=false
+    echo "DEV: MFA DISABLED -- login OTP turned OFF (APP_ENV=${APP_ENV}, DEV_DISABLE_MFA=true)."
+else
+    login_otp_requirement=REQUIRED
+    configure_totp_default=true
+    if [ "${DEV_DISABLE_MFA:-}" = "true" ]; then
+        echo "DEV_DISABLE_MFA=true ignored: APP_ENV='${APP_ENV:-<unset>}' is not exactly 'dev' or 'test' -- login OTP stays REQUIRED." >&2
+    fi
+fi
+LEVEL1_OTP_ID=$(run get "authentication/flows/Level%201/executions" -r "$REALM" --fields id,providerId --format csv --noquotes \
+        | tr -d '\r' | awk -F, '$2=="auth-otp-form"{print $1}')
+if [ -z "$LEVEL1_OTP_ID" ]; then
+    echo "Could not find Level 1's auth-otp-form execution -- refusing to continue with an unknown login-OTP state." >&2
+    exit 1
+fi
+# priority 2 is restated on purpose (same as set_requirement's creation-time
+# call): an update body without it resets the OTP step's priority to 0, which
+# sorts it BEFORE the password form -- login then dies with "Invalid username
+# or password" because there is no user yet when the OTP form runs.
+echo "Setting login (Level 1) OTP requirement to ${login_otp_requirement}, CONFIGURE_TOTP defaultAction=${configure_totp_default}..."
+run update "authentication/flows/Level%201/executions" -r "$REALM" \
+    -b "{\"id\":\"${LEVEL1_OTP_ID}\",\"requirement\":\"${login_otp_requirement}\",\"providerId\":\"auth-otp-form\",\"level\":0,\"index\":2,\"priority\":2}"
+run update "authentication/required-actions/CONFIGURE_TOTP" -r "$REALM" \
+    -b "{\"alias\":\"CONFIGURE_TOTP\",\"enabled\":true,\"defaultAction\":${configure_totp_default}}"
+
 echo "Binding 'browser-stepup' as the realm's browser flow..."
 run update "realms/${REALM}" -s browserFlow=browser-stepup
 
