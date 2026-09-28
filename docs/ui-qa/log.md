@@ -1346,5 +1346,113 @@ prompts from here, specifically so they don't inherit this conversation's
 standing "continue autonomously through every phase" instruction the way
 a fork does.
 
+### Chunk: Procurement/quotation/settlement pages (fresh non-fork agent)
+Applied `docs/ui-design-system.md` to `ProcurementPackagesPage.tsx`,
+`QuarantineQueuePage.tsx`, `QuoteReviewPage.tsx`, `BidLevelingPage.tsx`,
+`ExportPage.tsx`, and `WinLossPage.tsx` — dispatched as a fresh,
+self-contained (non-fork) agent per the process note above.
+
+- Shared `Badge` used for every real status enum on these pages, mapped
+  from `backend/app/core/enums.py` (not guessed): `ProcurementPackageStatus`
+  (draft/sent/closed), `RfqStatus` (draft/queued/sent/failed/responded/
+  expired), `QuotationStatus` (proposed/needs_review/extraction_empty/
+  rejected), `QuotationLineItemStatus` (proposed/needs_review/accepted/
+  rejected), `ExclusionFlagStatus` (open/acknowledged/dismissed),
+  `AttachmentSafetyStatus` (accepted/pending/rejected_*), `AuthCheckResult`
+  (pass/fail/none/unknown, for the inbound email SPF/DKIM/DMARC verdicts),
+  and `SettlementOutcome` (won/lost).
+- `formatMoney` applied to the remaining ad-hoc money display on these
+  pages (QuoteReviewPage's stated-total/unit-price, BidLevelingPage's
+  vendor-cell unit prices, WinLossPage's recorded our/winning price) —
+  the design doc's own named example of Phase 4 cleanup work.
+- Every mutation error display standardized to `role="alert"
+  text-sm text-danger`; every placeholder-only input given a real label
+  (`sr-only` where a visible one would be redundant); button/table/link
+  conventions matched to the already-restyled reference pages
+  (`VendorsPage.tsx`, `TypologyPage.tsx`, `BoqReconciliationPage.tsx`).
+  `TextPromptModal.tsx`'s submit button re-skinned to `bg-brand`
+  (design doc §4.6) — it's used by three of these six pages
+  (Procurement's Resend, Quarantine's three prompts, Quote Review's
+  Reject quotation); `Modal.tsx` and `ConfirmModal.tsx` were left alone
+  (the latter isn't used by any of these six pages).
+
+**Real, in-scope bugs found and fixed while restyling (found on these six
+pages only, not gone looking elsewhere)**:
+1. `QuarantineQueuePage`'s resolve-tenant/attach/dismiss mutations had no
+   `isError` display at all — the same recurring gap already fixed
+   elsewhere in Phases 2–3 (e.g. `BoqReconciliationPage`'s Reconcile
+   button before this phase).
+2. `ExportPage`'s "Accept and download original .xlsx" (`exportOriginal`)
+   mutation had no `isError` display at all — same gap, same fix shape.
+
+**Real accessibility bugs found by actually running `@axe-core/playwright`
+against these pages (not assumed clean), all fixed and reverified**:
+1. `QuoteReviewPage`'s two top-level package/RFQ `<select>` pickers had no
+   accessible name at all (`implicit-label`/`explicit-label`/`aria-label`
+   all failing) — added `aria-label` to both, and the same to
+   `BidLevelingPage`'s package picker (identical shape, same fix
+   proactively applied before it was independently caught).
+2. `QuarantineQueuePage`'s inline "SPF"/"DKIM"/"DMARC" labels used
+   `text-slate-400` — the *exact* 2.63:1 contrast failure already found on
+   the sidebar in the AppShell chunk — fixed to `text-slate-600` again.
+   Also proactively fixed the same pre-existing `text-slate-400` pattern
+   found while in these files on `ProcurementPackagesPage` (ineligible-
+   vendor list text) and `QuoteReviewPage` (attachment "(primary)" tag).
+3. **A real gap in the design doc's own token table**: §2.1 claims
+   `--color-success` (`#059669`) is 4.5:1 on white as text — axe measured
+   a real `<button class="text-success">` at **3.76:1**, failing AA.
+   This only affects the token used as *plain foreground text on white*;
+   the `Badge` component's own `text-emerald-700`-on-`bg-success-subtle`
+   pairing (§2.1's "text-on-tint" case) is unaffected and still verified
+   safe. Fixed the three bare `text-success`/`text-warning` usages outside
+   `Badge` on these pages (`QuoteReviewPage`'s Accept button,
+   `BidLevelingPage`'s citation-verified text, `ExportPage`'s fidelity-ok
+   text) to the same darker shade `Badge` already uses internally
+   (`text-emerald-700` / `text-amber-800`), and reverified live via axe
+   that this actually fixes the measured ratio, not just asserted it would.
+
+**Flagged, not fixed (genuinely out of this chunk's scope)**: 
+`BoqReconciliationPage.tsx`'s own "Accept" suggestion-link button uses the
+identical bare `text-success` pattern (from the earlier Typology/BOQ/
+Vendor chunk) and would very likely fail the same axe check — but that
+page's own `phase4-accessibility.spec.ts` check never opens a BOQ item's
+detail panel, so this latent issue has never actually been exercised by
+axe. Not fixed here since `BoqReconciliationPage.tsx` is not one of this
+chunk's six pages; worth a follow-up pass across every already-restyled
+page for the same bare-`text-success`-on-white pattern.
+
+**Verified, not just claimed**: `tsc --noEmit` clean; `oxlint` clean (the
+same 3 pre-existing warnings, zero new); `vitest`: 24 passed; Docker
+frontend image rebuilt and the container restarted before every e2e run
+below. `quarantine-quotes-bidleveling.spec.ts` (6/6),
+`typology-boq-procurement.spec.ts` (6/6 — including the
+`ProcurementPackagesPage` tests the previous chunk's log flagged as
+DOM-order-brittle; both passed cleanly on every run this chunk made),
+`modal-replacements.spec.ts` (2/2, confirming the `TextPromptModal`
+re-skin didn't change its behavior), `quotation-settlement-overrides.spec.ts`
+(4/4), and `settlement-winloss-roles.spec.ts` (2 passed relevant to
+`WinLossPage`'s role gate, 2 pre-existing `test.skip()`s hit due to
+D1-SIM's already-documented non-idempotent lifecycle state, 0 failed) all
+green. One transient failure (a Keycloak login timeout inside the shared
+`loginViaKeycloak` helper, on `BoqReconciliationPage`'s unrelated,
+untouched delete-gap test) occurred once during a full-file run and
+passed cleanly on an immediate solo re-run — confirmed not caused by this
+chunk's changes before moving on, per the brief's own guidance on this
+exact class of flakiness. 6 new `@axe-core/playwright` checks added to
+`phase4-accessibility.spec.ts` (one per page); all 12 checks in that file
+(this chunk's 6 plus the 6 from earlier chunks) pass with zero serious/
+critical violations after the fixes above.
+
+Before/after screenshots were skipped for this chunk (nice-to-have per
+the brief, not a blocker) — the mandatory verification above (tsc/oxlint/
+vitest/e2e/axe, each re-run at least twice as fixes landed) already used
+the available time budget; captured screenshots for these six pages are a
+reasonable follow-up, not a gap in the functional/accessibility QA itself.
+
+Remaining Phase 4 work: the rest of the ~30-page design-system rollout
+(settlement cockpit, admin, module E, dashboard, etc.); a follow-up pass
+for the bare-`text-success`-on-white pattern flagged above on already-
+restyled pages.
+
 ## Phase 5: final regression and report
 Not started.
