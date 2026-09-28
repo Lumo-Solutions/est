@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useAuth } from '../../auth/AuthContext'
 import { ConfirmModal } from '../../components/ConfirmModal'
+import { SkeletonRows } from '../../components/Skeleton'
 import { Role } from '../../lib/roles'
 import type { TradeNodeOut } from '../../types/api'
 import { useCreateTaxonomyNode, useMoveTaxonomyNode, useTaxonomyNodes, useUpdateTaxonomyNode } from './api'
@@ -54,23 +55,32 @@ function AddNodeForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (
       }}
     >
       <input
+        aria-label="Code"
         placeholder="Code"
         value={code}
         onChange={(e) => setCode(e.target.value)}
         required
-        className="rounded border border-slate-300 px-2 py-1 text-sm"
+        className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
       />
       <input
+        aria-label="Name"
         placeholder="Name"
         value={name}
         onChange={(e) => setName(e.target.value)}
         required
-        className="rounded border border-slate-300 px-2 py-1 text-sm"
+        className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
       />
-      <button type="submit" className="rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white">
+      <button
+        type="submit"
+        className="rounded bg-brand px-2 py-1 text-xs font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      >
         Add
       </button>
-      <button type="button" onClick={onCancel} className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600">
+      <button
+        type="button"
+        onClick={onCancel}
+        className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      >
         Cancel
       </button>
     </form>
@@ -124,8 +134,9 @@ function TaxonomyTreeNode({
           <button
             type="button"
             onClick={() => onToggle(node.id)}
+            aria-expanded={!isCollapsed}
             aria-label={isCollapsed ? `Expand ${node.name}` : `Collapse ${node.name}`}
-            className="w-4 text-xs text-slate-500"
+            className="w-4 text-xs text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {isCollapsed ? '▸' : '▾'}
           </button>
@@ -142,27 +153,35 @@ function TaxonomyTreeNode({
             }}
           >
             <input
+              aria-label={`Rename ${node.name}`}
               autoFocus
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
-              className="rounded border border-slate-300 px-1 py-0.5 text-sm"
+              className="rounded border border-slate-300 px-1 py-0.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
-            <button type="submit" className="text-xs text-slate-600 underline">
+            <button
+              type="submit"
+              className="rounded text-xs text-slate-600 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
               Save
             </button>
-            <button type="button" onClick={() => setRenamingId(null)} className="text-xs text-slate-500 underline">
+            <button
+              type="button"
+              onClick={() => setRenamingId(null)}
+              className="rounded text-xs text-slate-500 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
               Cancel
             </button>
           </form>
         ) : (
           <span
             title={node.path}
-            className={`text-sm ${node.is_active ? 'text-slate-800' : 'text-slate-400 line-through'}`}
+            className={`text-sm ${node.is_active ? 'text-slate-800' : 'text-slate-600 line-through'}`}
           >
             {node.name}
           </span>
         )}
-        <span className="text-xs text-slate-400">({node.code})</span>
+        <span className="text-xs text-slate-500">({node.code})</span>
 
         {canWrite && !isRenaming && (
           <div className="ml-2 flex flex-wrap items-center gap-2 text-xs">
@@ -172,18 +191,31 @@ function TaxonomyTreeNode({
                 setRenameValue(node.name)
                 setRenamingId(node.id)
               }}
-              className="text-slate-600 underline"
+              className="rounded text-slate-600 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Rename
             </button>
             <label className="flex items-center gap-1 text-slate-600">
-              <input type="checkbox" checked={node.is_active} onChange={(e) => onToggleActive(node.id, e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={node.is_active}
+                onChange={(e) => onToggleActive(node.id, e.target.checked)}
+                className="accent-brand"
+              />
               Active
             </label>
-            <button type="button" onClick={() => setAddingChildOf(node.id)} className="text-slate-600 underline">
+            <button
+              type="button"
+              onClick={() => setAddingChildOf(node.id)}
+              className="rounded text-slate-600 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
               Add child
             </button>
+            <label className="sr-only" htmlFor={`move-node-${node.id}`}>
+              Move {node.name} to
+            </label>
             <select
+              id={`move-node-${node.id}`}
               value=""
               onChange={(e) => {
                 const raw = e.target.value
@@ -193,7 +225,7 @@ function TaxonomyTreeNode({
                 onRequestMove(node.id, newParentId, label)
                 e.target.value = ''
               }}
-              className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+              className="rounded border border-slate-300 px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             >
               <option value="">Move to...</option>
               {node.parent_id !== null && <option value="__root__">-- root (no parent) --</option>}
@@ -283,18 +315,55 @@ export function TaxonomyAdmin() {
             )
           }}
         >
-          <input placeholder="Code" value={rootCode} onChange={(e) => setRootCode(e.target.value)} required className="rounded border border-slate-300 px-2 py-1 text-sm" />
-          <input placeholder="Name" value={rootName} onChange={(e) => setRootName(e.target.value)} required className="rounded border border-slate-300 px-2 py-1 text-sm" />
-          <button type="submit" className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">
+          <input
+            aria-label="Code"
+            placeholder="Code"
+            value={rootCode}
+            onChange={(e) => setRootCode(e.target.value)}
+            required
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+          <input
+            aria-label="Name"
+            placeholder="Name"
+            value={rootName}
+            onChange={(e) => setRootName(e.target.value)}
+            required
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+          <button
+            type="submit"
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             Add root node
           </button>
         </form>
       )}
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading...</p>}
-      {isError && <p className="mt-4 text-sm text-red-600">{error.message}</p>}
-      {createNode.isError && <p className="mt-1 text-sm text-red-600">{createNode.error.message}</p>}
-      {updateNode.isError && <p className="mt-1 text-sm text-red-600">{updateNode.error.message}</p>}
-      {moveNode.isError && <p className="mt-1 text-sm text-red-600">{moveNode.error.message}</p>}
+      {isLoading && (
+        <div className="mt-4">
+          <SkeletonRows count={4} />
+        </div>
+      )}
+      {isError && (
+        <p role="alert" className="mt-4 text-sm text-danger">
+          {error.message}
+        </p>
+      )}
+      {createNode.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {createNode.error.message}
+        </p>
+      )}
+      {updateNode.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {updateNode.error.message}
+        </p>
+      )}
+      {moveNode.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {moveNode.error.message}
+        </p>
+      )}
 
       {!isLoading && !isError && (
         <ul className="mt-3">

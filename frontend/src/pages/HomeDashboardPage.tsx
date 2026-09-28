@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { SkeletonRows } from '../components/Skeleton'
 import {
   useExpiringCertificatesForDashboard,
   useOpenVendorDuplicatesForDashboard,
@@ -49,10 +50,21 @@ function Tile({
   return (
     <div className="rounded border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-800">
-        {title} {!isLoading && !isError && <span className="text-slate-400">({count})</span>}
+        {/* text-slate-400 measured 2.63:1 via axe on the sidebar's own
+            section label in an earlier Phase 4 chunk (AppShell) -- same
+            failure mode here, same fix. */}
+        {title} {!isLoading && !isError && <span className="text-slate-600">({count})</span>}
       </h2>
-      {isLoading && <p className="mt-2 text-sm text-slate-500">Loading...</p>}
-      {isError && <p className="mt-2 text-sm text-red-600">{errorMessage ?? 'Failed to load.'}</p>}
+      {isLoading && (
+        <div className="mt-2">
+          <SkeletonRows count={2} />
+        </div>
+      )}
+      {isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {errorMessage ?? 'Failed to load.'}
+        </p>
+      )}
       {!isLoading && !isError && count === 0 && <p className="mt-2 text-sm text-slate-500">{emptyLabel}</p>}
       {!isLoading && !isError && count > 0 && <ul className="mt-2 space-y-1 text-sm">{children}</ul>}
     </div>
@@ -95,7 +107,10 @@ function QuarantineTile() {
     >
       {data?.slice(0, 5).map((e) => (
         <li key={e.id}>
-          <Link to="/projects" className="text-slate-700 hover:underline">
+          <Link
+            to="/projects"
+            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             {e.subject ?? e.from_address}
           </Link>
         </li>
@@ -117,7 +132,10 @@ function VendorDuplicatesTile() {
     >
       {data?.slice(0, 5).map((d) => (
         <li key={d.id}>
-          <Link to="/vendors/duplicates" className="text-slate-700 hover:underline">
+          <Link
+            to="/vendors/duplicates"
+            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             Candidate pair (score {d.score.toFixed(2)})
           </Link>
         </li>
@@ -139,7 +157,10 @@ function ExpiringCertificatesTile() {
     >
       {data?.slice(0, 5).map((c) => (
         <li key={c.id}>
-          <Link to={`/vendors/${c.vendor_id}`} className="text-slate-700 hover:underline">
+          <Link
+            to={`/vendors/${c.vendor_id}`}
+            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             {c.vendor_name}
           </Link>{' '}
           <span className="text-xs text-slate-500">expires {c.expiry_date}</span>
@@ -164,7 +185,10 @@ export function HomeDashboardPage() {
       {!showAnyTile && (
         <p className="mt-4 text-sm text-slate-500">
           Nothing project-independent needs your attention right now -- check{' '}
-          <Link to="/" className="underline">
+          <Link
+            to="/"
+            className="rounded text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             your projects
           </Link>{' '}
           for BOQ reconciliation, drawing ingestion, and quote review items (there is no cross-project summary of
