@@ -13,7 +13,7 @@ from app.core.enums import AuditAction
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier, ApprovalRequest, ApprovalStep
 from app.schemas.approvals import ApprovalPolicyCreate, ApprovalRequestCreate
-from app.security.deps import has_recent_step_up
+from app.security.deps import has_recent_step_up, mfa_audit_payload
 from app.services import audit
 
 
@@ -280,7 +280,8 @@ async def decide(
     # underlying auth_time is actually recent -- acr=silver alone can
     # persist on a still-valid session/token long after the OTP entry that
     # earned it. See fix/keycloak-step-up.
-    if not has_recent_step_up(ctx, get_settings()):
+    settings = get_settings()
+    if not has_recent_step_up(ctx, settings):
         raise StepUpRequiredError("This approval decision requires a recent MFA step-up")
 
     current_step.status = "approved" if approve else "rejected"
@@ -303,6 +304,6 @@ async def decide(
     await audit.record(
         session, ctx, action=AuditAction.APPROVE if approve else AuditAction.REJECT,
         entity_type="approval_request", entity_id=request.id, project_id=request.project_id,
-        payload={"step_seq": current_step.seq, "note": note},
+        payload={"step_seq": current_step.seq, "note": note, **mfa_audit_payload(ctx, settings)},
     )
     return request

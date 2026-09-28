@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   completeMfaStepUp,
+  isMfaDisabledDev,
   D1_SIM_PROJECT_CODE,
   findProjectByCode,
   loginViaKeycloak,
@@ -83,14 +84,19 @@ test.describe('SettlementPage: reject uses a modal, not window.prompt', () => {
     // bronze-only, same as every other decide() call in this suite) --
     // lib/api.ts turns that into a full-page redirect through Keycloak's
     // real re-authentication, not a UI-level retry.
-    await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
+    //
+    // With DEV_DISABLE_MFA on (dev/test only) that first submit already
+    // rejected -- there is no step-up to complete or retry.
+    if (!(await isMfaDisabledDev(mdPage))) {
+      await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
 
-    // The dialog closed on the first submit attempt (before the step-up
-    // redirect); the retry after step-up needs the same action taken again
-    // from the now-reloaded page.
-    await mdPage.getByRole('button', { name: 'Reject' }).click()
-    await mdPage.getByRole('dialog', { name: 'Reject settlement' }).locator('textarea').fill(note)
-    await mdPage.getByRole('dialog', { name: 'Reject settlement' }).getByRole('button', { name: 'Reject' }).click()
+      // The dialog closed on the first submit attempt (before the step-up
+      // redirect); the retry after step-up needs the same action taken again
+      // from the now-reloaded page.
+      await mdPage.getByRole('button', { name: 'Reject' }).click()
+      await mdPage.getByRole('dialog', { name: 'Reject settlement' }).locator('textarea').fill(note)
+      await mdPage.getByRole('dialog', { name: 'Reject settlement' }).getByRole('button', { name: 'Reject' }).click()
+    }
 
     // SettlementPage.tsx's Phase 4 restyle renders the status as a shared
     // Badge (docs/ui-design-system.md section 4.8) rather than plain

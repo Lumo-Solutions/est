@@ -4,6 +4,7 @@ import {
   D1_SIM_PROJECT_CODE,
   findProjectByCode,
   forceZeroDefaults,
+  isMfaDisabledDev,
   loginViaKeycloak,
   resolveUnresolvedLines,
 } from './helpers'
@@ -30,6 +31,10 @@ test('settlement: build -> simulate -> submit -> approve as a different user', a
   // -- rebuilding over an existing draft isn't offered by the UI, on
   // purpose (see build_settlement_draft's docstring).
   const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
+  // Wait for the page to settle on one of the two states first: a bare
+  // isVisible() doesn't wait, so on a fast load (e.g. right after another
+  // spec left a rejected settlement current) it skipped the build click.
+  await expect(buildButton.or(page.getByRole('button', { name: 'Submit for approval' }))).toBeVisible()
   if (await buildButton.isVisible().catch(() => false)) {
     await buildButton.click()
   }
@@ -82,9 +87,12 @@ test('settlement: build -> simulate -> submit -> approve as a different user', a
   const approveButton = mdPage.getByRole('button', { name: 'Approve' })
   await expect(approveButton).toBeEnabled()
   await approveButton.click()
-  await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
-
-  await approveButton.click()
+  // With DEV_DISABLE_MFA on (dev/test only) that first click already
+  // approved -- there is no step-up to complete or retry.
+  if (!(await isMfaDisabledDev(mdPage))) {
+    await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
+    await approveButton.click()
+  }
   // SettlementPage.tsx's Phase 4 restyle renders the status as a shared
   // Badge (docs/ui-design-system.md section 4.8) rather than plain
   // " -- approved -- " text, so the version number and the status badge are

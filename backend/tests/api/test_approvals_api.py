@@ -176,3 +176,70 @@ async def test_pending_for_me_only_shows_requests_the_caller_can_actually_decide
 
     own_resp = await creator.get("/api/v1/approvals/pending-for-me")
     assert lead_request_id not in {r["id"] for r in own_resp.json()}  # SoD: never your own request
+
+
+@pytest.fixture
+def dev_mfa_off(monkeypatch):
+    """DEV_DISABLE_MFA=true with APP_ENV=test, applied on top of the already
+    built app (services call get_settings() per request)."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DEV_DISABLE_MFA", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+async def _audit_payloads(app_engine, request_id: str) -> list[dict]:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async with AsyncSession(app_engine) as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.tenant_id', :t, false), set_config('app.is_system', 'on', false)"),
+            {"t": TENANT},
+        )
+        rows = await session.execute(
+            text("SELECT payload FROM audit_events WHERE entity_id = :e AND action IN ('approve', 'reject')"),
+            {"e": request_id},
+        )
+        return [r[0] for r in rows]
+
+
+async def test_decide_without_step_up_passes_and_is_audited_when_dev_mfa_is_off(
+    authed_client, dev_mfa_off, app_engine
+):
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    create_resp = await creator.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 10000, "currency": "AED"},
+    )
+    request_id = create_resp.json()["id"]
+
+    approver = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))  # bronze/None: no step-up
+    resp = await approver.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+    payloads = await _audit_payloads(app_engine, request_id)
+    assert len(payloads) == 1
+    assert payloads[0]["mfa_bypassed_dev"] is True
+
+
+async def test_genuine_step_up_is_not_flagged_as_bypassed_when_dev_mfa_is_off(
+    authed_client, dev_mfa_off, app_engine
+):
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    create_resp = await creator.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 10000, "currency": "AED"},
+    )
+    request_id = create_resp.json()["id"]
+
+    approver = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), acr="silver")
+    resp = await approver.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})
+    assert resp.status_code == 200
+
+    payloads = await _audit_payloads(app_engine, request_id)
+    assert len(payloads) == 1
+    assert "mfa_bypassed_dev" not in payloads[0]

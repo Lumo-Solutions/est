@@ -7,7 +7,10 @@
 
 - Realm `installtec`, TOTP MFA policy (`otpPolicyType: totp`), and
   `requiredActions.CONFIGURE_TOTP` with `defaultAction: true` — every new
-  user is forced to enrol an authenticator app on first login.
+  user is forced to enrol an authenticator app on first login. The realm
+  file is shared with production, so it always ships this **secure** default
+  (Level 1 `auth-otp-form` `REQUIRED`); see "Turning MFA off in dev/test"
+  below for the only way MFA is ever switched off.
 - The 5 SRS roles (`estimator`, `lead_estimator`, `procurement_head`,
   `bd_director`, `managing_director`) as **realm roles**.
 - A `/tenants/demo` group carrying the `tenant_id` user attribute
@@ -214,6 +217,38 @@ real login could ever reach `acr=silver` at all before this).
 disables the `account`/`account-console` clients) — this app has its own
 frontend and never links to it, and it would otherwise let a user delete
 their only OTP credential and step around the step-up requirement.
+
+## Turning MFA off in dev/test (`DEV_DISABLE_MFA`)
+
+A dev/test-only switch, off by default (`DEV_DISABLE_MFA=false` in
+`deploy/.env.example`). It turns off **both** MFA layers together:
+
+- **Login OTP** — `deploy/keycloak/bootstrap.sh` sets Level 1's
+  `auth-otp-form` to `DISABLED` and `CONFIGURE_TOTP`'s `defaultAction` to
+  `false`, but **only** when `APP_ENV` is exactly `dev` or `test` **and**
+  `DEV_DISABLE_MFA=true`. Any other `APP_ENV`, `APP_ENV` unset, or any other
+  value of the flag fails closed: OTP `REQUIRED`, `CONFIGURE_TOTP` default —
+  and re-running the script restores that on an already-configured realm.
+  `realm-installtec.json` is never changed by the switch.
+- **Step-up** — `has_recent_step_up` (`backend/app/security/deps.py`) passes
+  without a genuine step-up, logs a `mfa_step_up_bypassed` WARNING, and the
+  audit event of the guarded action (approval decision, RFQ dispatch/resend)
+  gets `mfa_bypassed_dev: true` in its payload. A genuine step-up is never
+  flagged. The backend and every worker **refuse to start** if
+  `DEV_DISABLE_MFA=true` while `APP_ENV` is not explicitly `dev`/`test`.
+- The frontend shows a persistent **"DEV: MFA disabled"** banner (from
+  `GET /auth/me` → `mfa_disabled_dev`).
+
+Flip it with `make dev-mfa-off` / `make dev-mfa-on`
+(`deploy/keycloak/dev-set-mfa.sh`: sets the key in `deploy/.env`, re-runs the
+Keycloak bootstrap, recreates the backend/workers). The seeded dev TOTP
+secrets stay, so turning MFA back on needs no re-enrolment.
+
+Tests: `login.spec.ts` fails if Keycloak and the backend disagree about the
+mode. Specs that complete a step-up adapt (`settlement.spec.ts`,
+`modal-replacements.spec.ts`); `step-up-freshness.spec.ts` skips loudly with
+MFA off, and `deploy/keycloak/test-stepup-freshness.sh` turns MFA on for its
+run and restores the previous value afterwards.
 
 ## Admin runbook: lost TOTP / password reset (account console disabled)
 

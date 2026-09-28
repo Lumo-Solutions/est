@@ -297,6 +297,10 @@ services:
       # without editing this file or deploy/.env by hand. See that script
       # and docs/keycloak-setup.md.
       - STEP_UP_MAX_AGE_S=${STEP_UP_MAX_AGE_S:-300}
+      # DEV/TEST ONLY MFA switch (see deploy/.env.example). Defaults to false;
+      # the backend and every worker refuse to start if it is true while
+      # APP_ENV is not exactly dev/test (app/core/config.py).
+      - DEV_DISABLE_MFA=${DEV_DISABLE_MFA:-false}
       - SESSION_SECRET=${SESSION_SECRET}
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN:-localhost}

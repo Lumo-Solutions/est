@@ -45,3 +45,6 @@ build/
 
 # Dev bearer token written by deploy/keycloak/dev-token.sh
 .dev-token
+
+# Playwright MCP session scratch (snapshots, console logs)
+.playwright-mcp/

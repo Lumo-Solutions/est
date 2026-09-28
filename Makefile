@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
+.PHONY: dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
 
 COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
@@ -71,6 +71,16 @@ seed:
 
 bootstrap-keycloak:
 	set -a; . deploy/.env; set +a; bash deploy/keycloak/bootstrap.sh
+
+# DEV ONLY -- turns MFA off / back on: sets DEV_DISABLE_MFA in deploy/.env,
+# re-runs bootstrap-keycloak (login OTP) and recreates the backend/workers
+# (step-up bypass). Refuses to turn it off unless APP_ENV is exactly dev/test.
+# See deploy/keycloak/dev-set-mfa.sh and docs/keycloak-setup.md.
+dev-mfa-off:
+	bash deploy/keycloak/dev-set-mfa.sh true
+
+dev-mfa-on:
+	bash deploy/keycloak/dev-set-mfa.sh false
 
 # DEV ONLY -- prints a bearer token for a seeded demo user (default
 # estimator1) into .dev-token, e.g. `make dev-token`, or

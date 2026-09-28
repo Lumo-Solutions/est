@@ -12,3 +12,11 @@ is_dev_or_test_env() {
         *) return 1 ;;
     esac
 }
+
+# The ONLY switch for turning MFA off (login OTP here; the backend applies
+# the same rule to step-up, app/core/config.py::mfa_bypass_active): APP_ENV
+# exactly dev/test AND DEV_DISABLE_MFA exactly "true". Anything else --
+# unset, "True", "1", any other APP_ENV -- is "MFA stays on".
+dev_mfa_disabled() {
+    is_dev_or_test_env && [ "${DEV_DISABLE_MFA:-}" = "true" ]
+}
