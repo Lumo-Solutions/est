@@ -92,6 +92,12 @@ ensure_mapper acr oidc-acr-mapper \
 ensure_mapper auth_time oidc-usersessionmodel-note-mapper \
     -s 'config."user.session.note"=AUTH_TIME' -s 'config."claim.name"=auth_time' -s 'config."jsonType.label"=long' \
     -s 'config."id.token.claim"=true' -s 'config."access.token.claim"=true' -s 'config."userinfo.token.claim"=true'
+# The login name, for DISPLAY only (the header shows it instead of the raw
+# subject UUID; GET /auth/me returns it). Same "no built-in profile scope"
+# reason as above. Never used for authorization or as an identity key.
+ensure_mapper preferred_username oidc-usermodel-property-mapper \
+    -s 'config."user.attribute"=username' -s 'config."claim.name"=preferred_username' -s 'config."jsonType.label"=String' \
+    -s 'config."id.token.claim"=true' -s 'config."access.token.claim"=true' -s 'config."userinfo.token.claim"=true'
 # Phase 3: same "we don't have the built-in scopes" reason sub/acr/auth_time
 # need their own mappers above -- without this, a client_credentials token
 # for installtec-backend's own service account (used by
@@ -256,6 +262,19 @@ for client_id in account account-console; do
     [ -n "$uuid" ] && run update "clients/${uuid}" -r "$REALM" -s enabled=false
 done
 
+# realm-installtec.json is only IMPORTED once, so a role added to it later
+# (platform_admin) never reaches an already-imported realm -- and
+# `add-roles` then fails with "Role not found". Create it if missing.
+ensure_realm_role() {
+    local name="$1" description="$2"
+    if run get "roles/${name}" -r "$REALM" >/dev/null 2>&1; then
+        return
+    fi
+    echo "Creating missing realm role '$name'..."
+    run create roles -r "$REALM" -s name="$name" -s "description=${description}"
+}
+ensure_realm_role platform_admin "Platform operator (not tenant staff); reviews inbound mail whose tenant could not be resolved (Module C2)"
+
 seed_user() {
     local username="$1" role="$2" password="$3"
     if run get users -r "$REALM" -q username="$username" --fields id --format csv --noquotes | grep -q .; then
@@ -266,8 +285,10 @@ seed_user() {
             -s emailVerified=true -s email="${username}@demo.installtec.local" \
             -s 'groups=["/tenants/demo"]'
         run set-password -r "$REALM" --username "$username" --new-password "$password"
-        run add-roles -r "$REALM" --uusername "$username" --rolename "$role"
     fi
+    # Outside the create branch so a run that died between create and this
+    # line (or a role added later) is repaired on the next run. Idempotent.
+    run add-roles -r "$REALM" --uusername "$username" --rolename "$role"
 }
 
 # DEV/TEST ONLY -- fixed TOTP secrets so both a human (any authenticator
@@ -316,6 +337,9 @@ if is_dev_or_test_env; then
     seed_user procurement1 procurement_head "Procurement1Pass!"
     seed_user bd1 bd_director "Bd1Pass!"
     seed_user md1 managing_director "Md1Pass!"
+    # platform_admin: the only role that can resolve an unknown-tenant quarantined
+    # email (QuarantineQueuePage). Same guard, same dev-fixed TOTP as the rest.
+    seed_user admin1 platform_admin "Admin1Pass!"
 
     echo "Seeding dev-fixed TOTP secrets (APP_ENV=${APP_ENV})..."
     seed_totp estimator1 "installtec-dev-estimator1-totp01"
@@ -323,6 +347,7 @@ if is_dev_or_test_env; then
     seed_totp procurement1 "installtec-dev-procurement1-totp1"
     seed_totp bd1 "installtec-dev-bd1-totp-secret1"
     seed_totp md1 "installtec-dev-md1-totp-secret01"
+    seed_totp admin1 "installtec-dev-admin1-totp-secret1"
 
     echo
     echo "Demo users seeded (permanent passwords, dev-fixed TOTP already enrolled -- see docs/keycloak-setup.md)."

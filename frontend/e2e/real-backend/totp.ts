@@ -28,6 +28,7 @@ export const DEMO_TOTP_SECRETS: Record<string, string> = {
   procurement1: 'installtec-dev-procurement1-totp1',
   bd1: 'installtec-dev-bd1-totp-secret1',
   md1: 'installtec-dev-md1-totp-secret01',
+  admin1: 'installtec-dev-admin1-totp-secret1',
 }
 
 // realm-installtec.json's otpPolicy is HmacSHA1/6 digits/30s step, which are

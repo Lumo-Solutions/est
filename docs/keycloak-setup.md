@@ -181,6 +181,11 @@ raw TOTP secret and its base32 form (for a real authenticator app, or
 which must match `bootstrap.sh`'s `seed_totp` calls) are dev/test only,
 guarded there by `APP_ENV`, and printed by `bootstrap.sh`'s own output.
 
+`admin1` / `Admin1Pass!` is the `platform_admin` demo user (dev/test only, same
+`APP_ENV` guard and dev-fixed TOTP as the others). It exists so the one action
+only that role has -- resolving the tenant of a quarantined email whose tenant
+could not be determined -- can be exercised.
+
 **To instead test genuine QR-code enrolment** as a human would (the SRS's
 actual first-login experience): run
 `deploy/keycloak/dev-reset-totp-user.sh <user> <pass>` first, which removes
