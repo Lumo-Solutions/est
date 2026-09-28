@@ -1,14 +1,24 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { Badge, type BadgeTone } from '../components/Badge'
 import { useProcurementPackages } from '../features/procurement/api'
 import { useAcknowledgeExclusionFlag, useBidLevelingMatrix, useQuotationExclusionFlags, useQuotationTotals } from '../features/quotations/api'
+import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 
 // Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
 // same roles as every other quotation-review action (accept/reject line,
 // reject quotation, promote, fx-rate).
 const ACKNOWLEDGE_ROLES = [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+
+// docs/ui-design-system.md section 4.8. backend/app/core/enums.py's
+// ExclusionFlagStatus (open/acknowledged/dismissed).
+const FLAG_STATUS_TONE: Record<string, BadgeTone> = {
+  open: 'warning',
+  acknowledged: 'success',
+  dismissed: 'neutral',
+}
 
 function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
   const { hasRole } = useAuth()
@@ -20,25 +30,24 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
       {flags && flags.length === 0 && <p className="mt-1 text-sm text-slate-500">None flagged.</p>}
       <ul className="mt-1 space-y-2">
         {(flags ?? []).map((f) => (
-          <li key={f.id} className="rounded border border-amber-200 bg-amber-50 p-2 text-sm">
+          <li key={f.id} className="rounded border border-warning-subtle bg-warning-subtle p-2 text-sm">
             <p className="font-medium text-amber-900">{f.flag_text}</p>
             <p className="mt-1 text-xs text-slate-600">
               "{f.source_quote_text}" {f.source_location && `(${f.source_location})`}
             </p>
-            <p className="mt-1 flex items-center gap-2 text-xs">
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-xs">
               {f.citation_verified ? (
-                <span className="text-green-700">Citation verified</span>
+                <span className="text-success">Citation verified</span>
               ) : (
-                <span className="text-amber-700">Citation not verified -- review the source</span>
+                <span className="text-warning">Citation not verified -- review the source</span>
               )}
-              {' · '}
-              {f.status}
+              <Badge tone={FLAG_STATUS_TONE[f.status] ?? 'neutral'}>{f.status}</Badge>
               {f.status !== 'acknowledged' && hasRole(...ACKNOWLEDGE_ROLES) && (
                 <button
                   type="button"
                   disabled={acknowledge.isPending}
                   onClick={() => acknowledge.mutate(f.id)}
-                  className="text-slate-600 underline disabled:opacity-50"
+                  className="rounded text-slate-500 underline hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                 >
                   Acknowledge
                 </button>
@@ -47,7 +56,11 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
           </li>
         ))}
       </ul>
-      {acknowledge.isError && <p className="mt-1 text-xs text-red-600">{acknowledge.error.message}</p>}
+      {acknowledge.isError && (
+        <p role="alert" className="mt-1 text-xs text-danger">
+          {acknowledge.error.message}
+        </p>
+      )}
     </div>
   )
 }
@@ -68,7 +81,7 @@ export function BidLevelingPage() {
       <select
         value={packageId ?? ''}
         onChange={(e) => setPackageId(e.target.value || null)}
-        className="mt-4 rounded border border-slate-300 px-2 py-1 text-sm"
+        className="mt-4 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
       >
         <option value="">-- Package --</option>
         {(packages ?? []).map((p) => (
@@ -78,17 +91,21 @@ export function BidLevelingPage() {
         ))}
       </select>
 
+      {packageId && rows && rows.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No bid-leveling rows for this package yet.</p>
+      )}
+
       {rows && rows.length > 0 && (
         <table className="mt-4 w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-slate-500">
             <tr>
-              <th>BOQ item</th>
-              <th>Vendor cells</th>
+              <th className="py-2 font-medium">BOQ item</th>
+              <th className="font-medium">Vendor cells</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.boq_line_item_id} className="border-b border-slate-100 align-top">
+              <tr key={row.boq_line_item_id} className="border-b border-slate-100 align-top hover:bg-slate-50">
                 <td className="py-2">{row.boq_line_item_id.slice(0, 8)}</td>
                 <td className="flex flex-wrap gap-2 py-2">
                   {row.cells.map((cell) => {
@@ -98,18 +115,22 @@ export function BidLevelingPage() {
                         key={cell.quotation_id}
                         type="button"
                         onClick={() => setSelectedQuotationId(cell.quotation_id)}
-                        className={`rounded border px-2 py-1 text-left text-xs ${
-                          cell.quotation_id === selectedQuotationId ? 'border-slate-500 bg-slate-100' : 'border-slate-200'
+                        className={`rounded border px-2 py-1 text-left text-xs tabular-nums transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+                          cell.quotation_id === selectedQuotationId
+                            ? 'border-brand bg-brand-subtle'
+                            : 'border-slate-200 hover:bg-slate-50'
                         }`}
                       >
                         <div>
-                          {cell.unit_price} {cell.currency}
-                          {cell.normalized_unit_price && <div className="text-slate-500">norm: {cell.normalized_unit_price}</div>}
+                          {formatMoney(cell.unit_price, cell.currency)}
+                          {cell.normalized_unit_price != null && (
+                            <div className="text-slate-500">norm: {formatMoney(cell.normalized_unit_price, cell.currency)}</div>
+                          )}
                         </div>
                         {(cell.arithmetic_mismatch || cell.quantity_mismatch || cell.uom_mismatch) && (
-                          <div className="text-red-600">mismatch</div>
+                          <div className="text-danger">mismatch</div>
                         )}
-                        {total?.total_mismatch && <div className="text-red-600">total mismatch</div>}
+                        {total?.total_mismatch && <div className="text-danger">total mismatch</div>}
                       </button>
                     )
                   })}
