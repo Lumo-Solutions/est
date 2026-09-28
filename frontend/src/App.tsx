@@ -9,7 +9,10 @@ import { AuditPage } from './pages/AuditPage'
 import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
+import { CostItemDetailPage } from './pages/CostItemDetailPage'
+import { CostLibraryPage } from './pages/CostLibraryPage'
 import { ExportPage } from './pages/ExportPage'
+import { ModuleEPage } from './pages/ModuleEPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ProcurementPackagesPage } from './pages/ProcurementPackagesPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
@@ -52,6 +55,8 @@ function AppRoutes() {
         <Route path="/vendors" element={<VendorsPage />} />
         <Route path="/vendors/duplicates" element={<VendorDuplicatesPage />} />
         <Route path="/vendors/:vendorId" element={<VendorDetailPage />} />
+        <Route path="/cost-library" element={<CostLibraryPage />} />
+        <Route path="/cost-library/:costItemId" element={<CostItemDetailPage />} />
         <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
         <Route path="/projects/:projectId/drawings/:drawingId" element={<SheetIndexPage />} />
         <Route
@@ -68,6 +73,7 @@ function AppRoutes() {
         <Route path="/projects/:projectId/settlement" element={<SettlementPage />} />
         <Route path="/projects/:projectId/export" element={<ExportPage />} />
         <Route path="/projects/:projectId/win-loss" element={<WinLossPage />} />
+        <Route path="/projects/:projectId/module-e" element={<ModuleEPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="*" element={<NotFoundPage />} />

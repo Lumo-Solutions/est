@@ -887,6 +887,149 @@ export interface Page<T> {
   offset: number
 }
 
+// Mirrors backend/app/schemas/costlib.py exactly. unit_cost/amount/
+// total_rate/confidence are bare `number` here because the backend itself
+// uses plain float, not Decimal/JsonDecimal, for cost-library money fields
+// end to end (a pre-existing, different issue from the JsonDecimal-string
+// bug fixed elsewhere -- flagged in docs/ui-qa/log.md Phase 3 for the main
+// session, not something this UI can fix on its own).
+export interface CostItemOut {
+  id: string
+  code: string
+  description: string
+  uom: string
+  trade_node_id: string | null
+  item_type: string
+  is_active: boolean
+}
+
+export interface CostItemCreate {
+  code: string
+  description: string
+  long_description?: string | null
+  uom: string
+  trade_node_id?: string | null
+  item_type?: string
+  attributes?: Record<string, unknown> | null
+}
+
+export interface CostRateComponentIn {
+  component_type: string
+  description: string
+  resource_code?: string | null
+  quantity_per_uom?: number
+  unit_cost: number
+  waste_factor?: number
+  productivity?: number | null
+  sort_order?: number
+}
+
+export interface CostRateComponentOut {
+  id: string
+  component_type: string
+  description: string
+  resource_code: string | null
+  quantity_per_uom: number
+  unit_cost: number
+  waste_factor: number
+  amount: number
+  sort_order: number
+}
+
+export interface RecordRateRequest {
+  scope_key?: string
+  currency?: string
+  valid_from: string
+  valid_to?: string | null
+  source?: string
+  source_ref?: string | null
+  confidence?: number | null
+  components: CostRateComponentIn[]
+}
+
+export interface CostItemRateOut {
+  id: string
+  cost_item_id: string
+  scope_key: string
+  currency: string
+  total_rate: number
+  source: string
+  source_ref: string | null
+  confidence: number | null
+  components: CostRateComponentOut[]
+}
+
+// Mirrors backend/app/schemas/module_e.py exactly.
+export interface ContractOut {
+  id: string
+  project_id: string
+  settlement_id: string
+  contract_ref: string | null
+  status: string
+  awarded_at: string | null
+  created_at: string
+}
+
+export interface BoqRevisionOut {
+  id: string
+  project_id: string
+  revision_no: number
+  parent_revision_id: string | null
+  import_batch_id: string | null
+  reason: string | null
+  created_at: string
+}
+
+export interface ContractRevisionOut {
+  id: string
+  project_id: string
+  contract_id: string
+  revision_no: number
+  parent_revision_id: string | null
+  reason: string | null
+  created_at: string
+}
+
+export interface ContractVariationOut {
+  id: string
+  project_id: string
+  contract_id: string
+  revision_id: string
+  variation_ref: string | null
+  description: string
+  delta_amount: number | null
+  status: string
+  created_at: string
+}
+
+export interface ExclusionRegisterEntryOut {
+  id: string
+  project_id: string
+  contract_id: string | null
+  source_exclusion_flag_id: string | null
+  description: string
+  status: string
+  resolution_note: string | null
+  resolved_by: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface OutturnCostObservationOut {
+  id: string
+  project_id: string
+  contract_id: string
+  boq_line_item_id: string | null
+  cost_item_id: string | null
+  observed_unit_cost: number
+  observed_quantity: number | null
+  currency: string
+  observed_at: string
+  source_note: string | null
+  written_back_rate_id: string | null
+  created_at: string
+}
+
 // Mirrors backend/app/schemas/approvals.py.
 export interface ApprovalPolicyTierIn {
   seq: number
