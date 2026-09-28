@@ -22,14 +22,15 @@ export function AdminPage() {
   return (
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Admin</h1>
+      {/* docs/ui-design-system.md section 4.5. */}
       <nav className="mt-3 flex gap-1 border-b border-slate-200">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key)}
-            className={`rounded-t px-3 py-1.5 text-sm ${
-              tab.key === activeTab ? 'border-b-2 border-slate-800 font-medium text-slate-800' : 'text-slate-500 hover:text-slate-700'
+            className={`px-3 py-2 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+              tab.key === activeTab ? '-mb-px border-b-2 border-brand text-brand' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             {tab.label}

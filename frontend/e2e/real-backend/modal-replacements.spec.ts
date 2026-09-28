@@ -92,7 +92,12 @@ test.describe('SettlementPage: reject uses a modal, not window.prompt', () => {
     await mdPage.getByRole('dialog', { name: 'Reject settlement' }).locator('textarea').fill(note)
     await mdPage.getByRole('dialog', { name: 'Reject settlement' }).getByRole('button', { name: 'Reject' }).click()
 
-    await expect(mdPage.getByText(/^v\d+ -- rejected -- /)).toBeVisible()
+    // SettlementPage.tsx's Phase 4 restyle renders the status as a shared
+    // Badge (docs/ui-design-system.md section 4.8) rather than plain
+    // " -- rejected -- " text, so the version number and the status badge
+    // are asserted separately instead of as one literal string.
+    await expect(mdPage.getByText(/^v\d+$/)).toBeVisible()
+    await expect(mdPage.getByText('rejected', { exact: true })).toBeVisible()
     await mdContext.close()
   })
 })

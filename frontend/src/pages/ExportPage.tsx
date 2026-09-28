@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useExportOriginalSettlement, useExportSettlement, usePreviewOriginalExport } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
@@ -10,6 +10,7 @@ export function ExportPage() {
   const exportGenerated = useExportSettlement(current?.id)
   const previewOriginal = usePreviewOriginalExport(current?.id)
   const exportOriginal = useExportOriginalSettlement(current?.id)
+  const includeVatId = useId()
 
   return (
     <div className="p-6">
@@ -21,19 +22,29 @@ export function ExportPage() {
         <div className="mt-4 space-y-6">
           <div>
             <h2 className="text-sm font-semibold text-slate-800">Generated export</h2>
-            <label className="mt-1 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={includeVat} onChange={(e) => setIncludeVat(e.target.checked)} />
+            <label htmlFor={includeVatId} className="mt-1 flex items-center gap-2 text-sm">
+              <input
+                id={includeVatId}
+                type="checkbox"
+                checked={includeVat}
+                onChange={(e) => setIncludeVat(e.target.checked)}
+                className="accent-brand"
+              />
               Include VAT (5%)
             </label>
             <button
               type="button"
               onClick={() => exportGenerated.mutate({ include_vat: includeVat, vat_pct: 5.0 })}
               disabled={exportGenerated.isPending}
-              className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="mt-2 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Download generated .xlsx
             </button>
-            {exportGenerated.isError && <p className="mt-1 text-sm text-red-600">{exportGenerated.error.message}</p>}
+            {exportGenerated.isError && (
+              <p role="alert" className="mt-1 text-sm text-danger">
+                {exportGenerated.error.message}
+              </p>
+            )}
           </div>
 
           <div>
@@ -42,15 +53,19 @@ export function ExportPage() {
               type="button"
               onClick={() => previewOriginal.mutate()}
               disabled={previewOriginal.isPending}
-              className="mt-1 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              className="mt-1 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Preview fidelity report
             </button>
-            {previewOriginal.isError && <p className="mt-1 text-sm text-red-600">{previewOriginal.error.message}</p>}
+            {previewOriginal.isError && (
+              <p role="alert" className="mt-1 text-sm text-danger">
+                {previewOriginal.error.message}
+              </p>
+            )}
 
             {previewOriginal.data && (
               <div className="mt-2 rounded border border-slate-200 p-3 text-sm">
-                <p className={previewOriginal.data.ok ? 'text-green-700' : 'text-amber-700'}>
+                <p className={previewOriginal.data.ok ? 'text-emerald-700' : 'text-amber-800'}>
                   {previewOriginal.data.ok ? 'No fidelity loss detected.' : 'Fidelity loss detected -- review below.'}
                 </p>
                 {previewOriginal.data.lost_features.length > 0 && (
@@ -77,10 +92,15 @@ export function ExportPage() {
                   type="button"
                   onClick={() => exportOriginal.mutate()}
                   disabled={exportOriginal.isPending}
-                  className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                  className="mt-2 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                 >
                   Accept and download original .xlsx
                 </button>
+                {exportOriginal.isError && (
+                  <p role="alert" className="mt-1 text-sm text-danger">
+                    {exportOriginal.error.message}
+                  </p>
+                )}
               </div>
             )}
           </div>

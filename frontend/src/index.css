@@ -1,1 +1,26 @@
 @import "tailwindcss";
+
+/* docs/ui-design-system.md section 2/3 -- Phase 4's token set. Self-hosted
+   font (no CDN, air-gapped constraint), one brand accent distinct from the
+   slate neutral scale every page already uses, four semantic colors each
+   chosen to hit 4.5:1 as TEXT on white, not just as a fill. */
+@theme {
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+
+  --color-brand: #1D4ED8;
+  --color-brand-hover: #1E40AF;
+  --color-brand-subtle: #EFF6FF;
+
+  --color-success: #059669;
+  --color-success-subtle: #D1FAE5;
+  --color-warning: #D97706;
+  --color-warning-subtle: #FEF3C7;
+  --color-danger: #DC2626;
+  --color-danger-subtle: #FEE2E2;
+  --color-info: #0284C7;
+  --color-info-subtle: #E0F2FE;
+}
+
+body {
+  font-family: var(--font-sans);
+}

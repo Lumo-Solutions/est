@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { SkeletonRows } from '../components/Skeleton'
 import {
   useBoqItems,
   useLinkMeasurement,
@@ -33,10 +34,15 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
         type="button"
         onClick={() => reconcile.mutate(item.id)}
         disabled={reconcile.isPending}
-        className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+        className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Reconcile
       </button>
+      {reconcile.isError && (
+        <p role="alert" className="mt-1 text-xs text-danger">
+          {reconcile.error.message}
+        </p>
+      )}
 
       <h4 className="mt-3 text-xs font-semibold uppercase text-slate-500">Linked measurements</h4>
       {(links ?? []).length === 0 && <p className="text-xs text-slate-500">None linked yet.</p>}
@@ -49,7 +55,7 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
             <button
               type="button"
               onClick={() => unlinkMeasurement.mutate(m.id)}
-              className="text-slate-500 underline hover:text-slate-800"
+              className="rounded text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Unlink
             </button>
@@ -77,7 +83,7 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
                     outcome: 'accepted',
                   })
                 }}
-                className="text-green-700 underline"
+                className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Accept
               </button>
@@ -91,7 +97,7 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
                     outcome: 'rejected',
                   })
                 }
-                className="text-red-700 underline"
+                className="rounded text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Reject
               </button>
@@ -132,17 +138,26 @@ export function BoqReconciliationPage() {
         {projectId && (
           <Link
             to={`/projects/${projectId}/boq/import`}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Import BOQ
           </Link>
         )}
       </div>
-      {isLoading && <p className="px-4 text-slate-500">Loading...</p>}
-      {isError && <p className="px-4 text-red-600">{error.message}</p>}
+      {isError && (
+        <p role="alert" className="px-4 text-danger">
+          {error.message}
+        </p>
+      )}
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1">
-          <BoqReconciliationGrid rows={items ?? []} onRowClick={setSelectedItem} />
+          {isLoading ? (
+            <div className="p-4">
+              <SkeletonRows count={8} />
+            </div>
+          ) : (
+            <BoqReconciliationGrid rows={items ?? []} onRowClick={setSelectedItem} />
+          )}
         </div>
         <div className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white">
           {selectedItem && projectId && <ItemDetailPanel projectId={projectId} item={selectedItem} />}

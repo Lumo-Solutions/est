@@ -26,33 +26,60 @@ export function ReasonCodesAdmin() {
             createCode.mutate({ code, label }, { onSuccess: () => { setCode(''); setLabel('') } })
           }}
         >
-          <input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} required className="rounded border border-slate-300 px-2 py-1 text-sm" />
-          <input placeholder="Label" value={label} onChange={(e) => setLabel(e.target.value)} required className="rounded border border-slate-300 px-2 py-1 text-sm" />
-          <button type="submit" className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">
+          <input
+            aria-label="Code"
+            placeholder="Code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+          <input
+            aria-label="Label"
+            placeholder="Label"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            required
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+          <button
+            type="submit"
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             Add
           </button>
         </form>
       ) : (
         <p className="mt-2 text-xs text-slate-500">Your role can view reason codes but not add or change them.</p>
       )}
-      {createCode.isError && <p className="mt-1 text-sm text-red-600">{createCode.error.message}</p>}
-      {updateCode.isError && <p className="mt-1 text-sm text-red-600">{updateCode.error.message}</p>}
+      {createCode.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {createCode.error.message}
+        </p>
+      )}
+      {updateCode.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {updateCode.error.message}
+        </p>
+      )}
 
       <table className="mt-4 w-full text-left text-sm">
-        <thead className="border-b border-slate-200 text-slate-500">
-          <tr><th>Code</th><th>Label</th><th>Active</th></tr>
+        <thead className="border-b border-slate-200 font-medium text-slate-500">
+          <tr><th className="py-2">Code</th><th>Label</th><th>Active</th></tr>
         </thead>
         <tbody>
           {(codes ?? []).map((c) => (
-            <tr key={c.id} className="border-b border-slate-100">
-              <td>{c.code}</td>
+            <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50">
+              <td className="py-2">{c.code}</td>
               <td>{c.label}</td>
               <td>
                 <input
                   type="checkbox"
+                  aria-label={`${c.label} active`}
                   checked={c.is_active}
                   disabled={!canWrite}
                   onChange={(e) => updateCode.mutate({ id: c.id, data: { is_active: e.target.checked } })}
+                  className="accent-brand"
                 />
               </td>
             </tr>

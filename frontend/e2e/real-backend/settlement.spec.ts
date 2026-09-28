@@ -85,6 +85,11 @@ test('settlement: build -> simulate -> submit -> approve as a different user', a
   await completeMfaStepUp(mdPage, DEMO_TOTP_SECRETS.md1)
 
   await approveButton.click()
-  await expect(mdPage.getByText(/^v\d+ -- approved -- /)).toBeVisible()
+  // SettlementPage.tsx's Phase 4 restyle renders the status as a shared
+  // Badge (docs/ui-design-system.md section 4.8) rather than plain
+  // " -- approved -- " text, so the version number and the status badge are
+  // asserted separately instead of as one literal string.
+  await expect(mdPage.getByText(/^v\d+$/)).toBeVisible()
+  await expect(mdPage.getByText('approved', { exact: true })).toBeVisible()
   await mdContext.close()
 })

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { Badge, type BadgeTone } from '../components/Badge'
+import { SkeletonRows } from '../components/Skeleton'
+import { Spinner } from '../components/Spinner'
 import { TextPromptModal } from '../components/TextPromptModal'
 import { useTaxonomyNodes } from '../features/admin/api'
+import { ApiError } from '../lib/api'
 import {
   useBuildSettlementDraft,
   useDecideSettlement,
@@ -21,6 +25,17 @@ import { useCurrentSettlement } from '../features/settlement/useCurrentSettlemen
 import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import type { BidSettlementLineItemOut, BidSettlementOut, BidSettlementTradeOverrideOut, SimulateRequest, SimulateResult } from '../types/api'
+
+// docs/ui-design-system.md section 4.8. backend/app/core/enums.py's
+// BidSettlementStatus (draft/submitted/approved/rejected/won/lost).
+const SETTLEMENT_STATUS_TONE: Record<string, BadgeTone> = {
+  draft: 'warning',
+  submitted: 'info',
+  approved: 'success',
+  rejected: 'danger',
+  won: 'success',
+  lost: 'danger',
+}
 
 // Mirrors backend/app/api/v1/routes/settlement.py's _HEADER_ROLES/_SUBMIT_ROLES:
 // building/rebuilding a draft is lead_estimator/procurement_head/bd_director/
@@ -80,7 +95,7 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
                   const value = o[key as keyof BidSettlementTradeOverrideOut] as number | null
                   return (
                     <span key={key} className="ml-2 text-xs text-slate-600">
-                      {label}: {value != null ? `${value}%` : 'default'}
+                      {label}: <span className="tabular-nums">{value != null ? `${value}%` : 'default'}</span>
                     </span>
                   )
                 })}
@@ -101,9 +116,10 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
         }}
       >
         <select
+          aria-label="Trade"
           value={newTradeNodeId}
           onChange={(e) => setNewTradeNodeId(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1 text-sm"
+          className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
         >
           <option value="">-- Select trade --</option>
           {(tradeNodes ?? []).map((t) => (
@@ -115,26 +131,42 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
         {PCT_FIELDS.map(({ key, label }) => (
           <input
             key={key}
+            aria-label={label}
             placeholder={label}
             value={newValues[key] ?? ''}
             onChange={(e) => setNewValues((v) => ({ ...v, [key]: e.target.value }))}
-            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           />
         ))}
         <button
           type="submit"
           disabled={!newTradeNodeId || setOverride.isPending}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
+          {setOverride.isPending && <Spinner />}
           Set override
         </button>
       </form>
-      {setOverride.isError && <p className="mt-1 text-sm text-red-600">{setOverride.error.message}</p>}
+      {setOverride.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {setOverride.error.message}
+        </p>
+      )}
     </div>
   )
 }
 
-function LineOverrideRow({ projectId, settlementId, line }: { projectId: string; settlementId: string; line: BidSettlementLineItemOut }) {
+function LineOverrideRow({
+  projectId,
+  settlementId,
+  currency,
+  line,
+}: {
+  projectId: string
+  settlementId: string
+  currency: string
+  line: BidSettlementLineItemOut
+}) {
   const { hasRole } = useAuth()
   const updateLine = useUpdateSettlementLine(projectId, settlementId)
   const setFxRate = useSetLineFxRate(projectId, settlementId)
@@ -146,12 +178,16 @@ function LineOverrideRow({ projectId, settlementId, line }: { projectId: string;
     <li className="rounded border border-slate-200 px-2 py-1 text-sm">
       <div className="flex items-center justify-between">
         <span>
-          Line {line.id.slice(0, 8)} -- qty {line.quantity} -- sell rate{' '}
-          {line.unit_sell_rate != null ? formatMoney(line.unit_sell_rate) : '--'} -- amount{' '}
-          {line.line_amount != null ? formatMoney(line.line_amount) : '--'}
+          Line {line.id.slice(0, 8)} -- qty <span className="tabular-nums">{line.quantity}</span> -- sell rate{' '}
+          <span className="tabular-nums">{line.unit_sell_rate != null ? formatMoney(line.unit_sell_rate, currency) : '--'}</span> --
+          amount <span className="tabular-nums">{line.line_amount != null ? formatMoney(line.line_amount, currency) : '--'}</span>
         </span>
         {hasRole(...LINE_OVERRIDE_ROLES) && (
-          <button type="button" onClick={() => setEditing((v) => !v)} className="text-xs text-slate-600 underline">
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            className="rounded text-xs text-slate-600 underline transition-colors duration-150 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
             {editing ? 'Close' : 'Override'}
           </button>
         )}
@@ -167,7 +203,7 @@ function LineOverrideRow({ projectId, settlementId, line }: { projectId: string;
               placeholder={line.direct_unit_cost != null ? String(line.direct_unit_cost) : ''}
               value={manualCost}
               onChange={(e) => setManualCost(e.target.value)}
-              className="w-32 rounded border border-slate-300 px-2 py-1 text-sm"
+              className="w-32 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
           </div>
           <button
@@ -179,8 +215,9 @@ function LineOverrideRow({ projectId, settlementId, line }: { projectId: string;
                 { onSuccess: () => setManualCost('') },
               )
             }
-            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
+            {updateLine.isPending && <Spinner className="h-3 w-3" />}
             Set cost
           </button>
           {hasRole(...LINE_FX_RATE_ROLES) && (
@@ -194,7 +231,7 @@ function LineOverrideRow({ projectId, settlementId, line }: { projectId: string;
                   placeholder={line.fx_rate != null ? String(line.fx_rate) : '1.0'}
                   value={fxRate}
                   onChange={(e) => setFxRateInput(e.target.value)}
-                  className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+                  className="w-24 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
                 />
               </div>
               <button
@@ -206,21 +243,40 @@ function LineOverrideRow({ projectId, settlementId, line }: { projectId: string;
                     { onSuccess: () => setFxRateInput('') },
                   )
                 }
-                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
+                {setFxRate.isPending && <Spinner className="h-3 w-3" />}
                 Set FX rate
               </button>
             </>
           )}
-          {updateLine.isError && <p className="w-full text-xs text-red-600">{updateLine.error.message}</p>}
-          {setFxRate.isError && <p className="w-full text-xs text-red-600">{setFxRate.error.message}</p>}
+          {updateLine.isError && (
+            <p role="alert" className="w-full text-xs text-danger">
+              {updateLine.error.message}
+            </p>
+          )}
+          {setFxRate.isError && (
+            <p role="alert" className="w-full text-xs text-danger">
+              {setFxRate.error.message}
+            </p>
+          )}
         </div>
       )}
     </li>
   )
 }
 
-function LineOverridesPanel({ projectId, settlementId, lines }: { projectId: string; settlementId: string; lines: BidSettlementLineItemOut[] }) {
+function LineOverridesPanel({
+  projectId,
+  settlementId,
+  currency,
+  lines,
+}: {
+  projectId: string
+  settlementId: string
+  currency: string
+  lines: BidSettlementLineItemOut[]
+}) {
   const { hasRole } = useAuth()
   if (!hasRole(...LINE_OVERRIDE_ROLES) || lines.length === 0) return null
 
@@ -229,7 +285,7 @@ function LineOverridesPanel({ projectId, settlementId, lines }: { projectId: str
       <h3 className="text-sm font-semibold text-slate-800">Per-line overrides</h3>
       <ul className="mt-2 space-y-1">
         {lines.map((line) => (
-          <LineOverrideRow key={line.id} projectId={projectId} settlementId={settlementId} line={line} />
+          <LineOverrideRow key={line.id} projectId={projectId} settlementId={settlementId} currency={currency} line={line} />
         ))}
       </ul>
     </div>
@@ -245,7 +301,11 @@ function ScenarioDeleteButton({ settlementId, scenarioId }: { settlementId: stri
 
   if (!confirming) {
     return (
-      <button type="button" onClick={() => setConfirming(true)} className="ml-2 text-xs text-red-600 underline">
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className="ml-2 rounded text-xs text-danger underline transition-colors duration-150 hover:text-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      >
         Delete
       </button>
     )
@@ -256,14 +316,22 @@ function ScenarioDeleteButton({ settlementId, scenarioId }: { settlementId: stri
         type="button"
         disabled={deleteScenario.isPending}
         onClick={() => deleteScenario.mutate(scenarioId, { onSettled: () => setConfirming(false) })}
-        className="text-red-700 underline disabled:opacity-50"
+        className="rounded text-red-700 underline transition-colors duration-150 hover:text-red-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Confirm delete?
       </button>{' '}
-      <button type="button" onClick={() => setConfirming(false)} className="text-slate-500 underline">
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="rounded text-slate-500 underline transition-colors duration-150 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      >
         Cancel
       </button>
-      {deleteScenario.isError && <span className="ml-1 text-red-600">{deleteScenario.error.message}</span>}
+      {deleteScenario.isError && (
+        <span role="alert" className="ml-1 text-danger">
+          {deleteScenario.error.message}
+        </span>
+      )}
     </span>
   )
 }
@@ -312,7 +380,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
         {SLIDERS.map(({ key, label }) => (
           <div key={key}>
             <label className="block text-xs text-slate-500" htmlFor={key}>
-              {label}: {values[key].toFixed(1)}%
+              {label}: <span className="tabular-nums">{values[key].toFixed(1)}%</span>
             </label>
             <input
               id={key}
@@ -322,7 +390,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
               step={0.1}
               value={values[key]}
               onChange={(e) => onSlide(key, Number(e.target.value))}
-              className="w-full"
+              className="w-full accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             />
           </div>
         ))}
@@ -330,13 +398,14 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
 
       {result && (
         <div className="mt-3 rounded border border-slate-200 p-3 text-sm">
-          <p>
-            Tender total: <span className="font-semibold">{result.tender_total.toFixed(2)}</span> {settlement.currency}
+          <p className="tabular-nums">
+            Tender total: <span className="font-semibold">{formatMoney(result.tender_total, settlement.currency)}</span>
           </p>
-          <p className="text-xs text-slate-500">
-            Direct cost {result.direct_cost_total.toFixed(2)} + plant {result.plant_total.toFixed(2)} + overhead{' '}
-            {result.overhead_total.toFixed(2)} + volatility {result.volatility_total.toFixed(2)} + markup{' '}
-            {result.markup_total.toFixed(2)}
+          <p className="tabular-nums text-xs text-slate-500">
+            Direct cost {formatMoney(result.direct_cost_total, settlement.currency)} + plant{' '}
+            {formatMoney(result.plant_total, settlement.currency)} + overhead {formatMoney(result.overhead_total, settlement.currency)} +
+            volatility {formatMoney(result.volatility_total, settlement.currency)} + markup{' '}
+            {formatMoney(result.markup_total, settlement.currency)}
           </p>
           {result.margin_on_sell_pct != null && (
             // 3dp, not 2 -- this is the exact value app/services/approvals.py
@@ -345,35 +414,49 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
             // escalates to managing_director must not be shown as a
             // rounded "8.00%" that looks like it should stay at
             // bd_director. See docs/build-log.md's Phase 10 section.
-            <p className="text-xs text-slate-500">Margin on sell: {formatMarginPct(result.margin_on_sell_pct)}%</p>
+            <p className="tabular-nums text-xs text-slate-500">Margin on sell: {formatMarginPct(result.margin_on_sell_pct)}%</p>
           )}
           {result.required_role && (
-            <p className="mt-1 text-xs font-medium text-amber-700">Requires approval by: {result.required_role}</p>
+            <p className="mt-1 text-xs font-medium text-amber-800">Requires approval by: {result.required_role}</p>
           )}
           {result.unresolved_line_ids.length > 0 && (
-            <p className="mt-1 text-xs text-red-600">{result.unresolved_line_ids.length} line(s) unresolved</p>
+            <p role="alert" className="mt-1 text-xs text-danger">
+              {result.unresolved_line_ids.length} line(s) unresolved
+            </p>
           )}
         </div>
       )}
 
       <div className="mt-3 flex items-end gap-2">
-        <input
-          placeholder="Scenario label"
-          value={scenarioLabel}
-          onChange={(e) => setScenarioLabel(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1 text-sm"
-        />
+        <div>
+          <label htmlFor="scenario-label" className="sr-only">
+            Scenario label
+          </label>
+          <input
+            id="scenario-label"
+            placeholder="Scenario label"
+            value={scenarioLabel}
+            onChange={(e) => setScenarioLabel(e.target.value)}
+            className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+        </div>
         <button
           type="button"
           disabled={!scenarioLabel || saveScenario.isPending}
           onClick={() =>
             saveScenario.mutate({ label: scenarioLabel, inputs: values as SimulateRequest }, { onSuccess: () => setScenarioLabel('') })
           }
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
+          {saveScenario.isPending && <Spinner />}
           Save scenario
         </button>
       </div>
+      {saveScenario.isError && (
+        <p role="alert" className="mt-1 text-xs text-danger">
+          {saveScenario.error.message}
+        </p>
+      )}
       {scenarios && scenarios.length > 0 && (
         <ul className="mt-2 space-y-1 text-xs text-slate-600">
           {scenarios.map((s) => (
@@ -385,11 +468,14 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
                   setValues(inputs)
                   runSimulate(inputs)
                 }}
-                className="underline"
+                className="rounded underline transition-colors duration-150 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 {s.label}
               </button>{' '}
-              -- tender total {s.result.tender_total?.toFixed(2)}
+              -- tender total{' '}
+              <span className="tabular-nums">
+                {s.result.tender_total != null ? formatMoney(s.result.tender_total, settlement.currency) : '--'}
+              </span>
               <ScenarioDeleteButton settlementId={settlement.id} scenarioId={s.id} />
             </li>
           ))}
@@ -406,6 +492,16 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
   const isSubmitter = user?.sub === settlement.submitted_by
   const [rejectPromptOpen, setRejectPromptOpen] = useState(false)
 
+  // docs/ui-design-system.md section 4.11: the step-up redirect itself is
+  // unchanged (lib/api.ts's request() still fires window.location.href to
+  // Keycloak the instant a 403 urn:installtec:step-up-required comes back --
+  // nothing here alters whether/when that happens). This only adds a brief
+  // inline "Verifying..." notice for the moment between the click and the
+  // browser actually navigating away, so that moment isn't a silent gap --
+  // distinct from decide's other, real error states, which still render as
+  // a normal role="alert" message below.
+  const stepUpPending = decide.isError && decide.error instanceof ApiError && decide.error.isStepUpRequired
+
   if (settlement.status === 'draft') {
     if (!hasRole(...SUBMIT_ROLES)) return null
     return (
@@ -414,11 +510,16 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           type="button"
           onClick={() => submit.mutate()}
           disabled={submit.isPending}
-          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
+          {submit.isPending && <Spinner className="text-white" />}
           Submit for approval
         </button>
-        {submit.isError && <p className="text-xs text-red-600">{submit.error.message}</p>}
+        {submit.isError && (
+          <p role="alert" className="text-xs text-danger">
+            {submit.error.message}
+          </p>
+        )}
       </div>
     )
   }
@@ -436,7 +537,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           // Same 3dp precision as the cockpit's live simulation -- this is
           // the value that actually routed this request, so the approver
           // must see it exactly, not rounded to 2dp.
-          <span className="text-xs text-slate-500">Margin on sell: {formatMarginPct(settlement.margin_on_sell_pct)}%</span>
+          <span className="text-xs tabular-nums text-slate-500">Margin on sell: {formatMarginPct(settlement.margin_on_sell_pct)}%</span>
         )}
         <div className="flex items-center gap-2">
           <button
@@ -444,21 +545,33 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
             disabled={isSubmitter || decide.isPending}
             title={isSubmitter ? 'Segregation of duties: the submitter cannot decide their own request' : ''}
             onClick={() => decide.mutate({ approve: true })}
-            className="rounded bg-green-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
+            {decide.isPending && <Spinner className="text-white" />}
             Approve
           </button>
           <button
             type="button"
             disabled={isSubmitter || decide.isPending}
             onClick={() => setRejectPromptOpen(true)}
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
+            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Reject
           </button>
           {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
         </div>
-        {decide.isError && <p className="text-xs text-red-600">{decide.error.message}</p>}
+        {stepUpPending ? (
+          <p role="status" className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+            <Spinner className="text-slate-500" />
+            Verifying... redirecting you to confirm your identity before this decision can complete.
+          </p>
+        ) : (
+          decide.isError && (
+            <p role="alert" className="text-xs text-danger">
+              {decide.error.message}
+            </p>
+          )
+        )}
         <TextPromptModal
           open={rejectPromptOpen}
           title="Reject settlement"
@@ -507,41 +620,61 @@ export function SettlementPage() {
   return (
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Settlement cockpit</h1>
-      {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
-      {isError && <p className="mt-4 text-red-600">{error.message}</p>}
+      {isLoading && <SkeletonRows count={4} />}
+      {isError && (
+        <p role="alert" className="mt-4 text-sm text-danger">
+          {error.message}
+        </p>
+      )}
       {!isLoading && canBuildNewDraft && (
         <button
           type="button"
           onClick={() => buildDraft.mutate()}
           disabled={buildDraft.isPending}
-          className="mt-4 rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="mt-4 inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
+          {buildDraft.isPending && <Spinner className="text-white" />}
           {current ? 'Build new settlement draft' : 'Build settlement draft'}
         </button>
       )}
-      {buildDraft.isError && <p className="mt-2 text-sm text-red-600">{buildDraft.error.message}</p>}
+      {buildDraft.isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {buildDraft.error.message}
+        </p>
+      )}
       {current && projectId && (
         <div className="mt-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-600">
-              v{current.version_no} -- {current.status} -- {current.currency}
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => refreshQuantities.mutate()}
-                className="text-xs text-slate-600 underline"
-              >
-                Refresh quantities
-              </button>
-              <SubmitApprove projectId={projectId} settlement={current} />
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <span className="tabular-nums">v{current.version_no}</span>
+              <Badge tone={SETTLEMENT_STATUS_TONE[current.status] ?? 'neutral'}>{current.status}</Badge>
+              <span>{current.currency}</span>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => refreshQuantities.mutate()}
+                  disabled={refreshQuantities.isPending}
+                  className="inline-flex items-center gap-1 rounded text-xs text-slate-600 underline transition-colors duration-150 hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                >
+                  {refreshQuantities.isPending && <Spinner className="h-3 w-3" />}
+                  Refresh quantities
+                </button>
+                <SubmitApprove projectId={projectId} settlement={current} />
+              </div>
+              {refreshQuantities.isError && (
+                <p role="alert" className="text-xs text-danger">
+                  {refreshQuantities.error.message}
+                </p>
+              )}
             </div>
           </div>
           <SimulationSliders settlement={current} />
           {detail && (
             <>
               <TradeOverridesPanel projectId={projectId} settlementId={current.id} tradeOverrides={detail.trade_overrides} />
-              <LineOverridesPanel projectId={projectId} settlementId={current.id} lines={detail.lines} />
+              <LineOverridesPanel projectId={projectId} settlementId={current.id} currency={current.currency} lines={detail.lines} />
             </>
           )}
         </div>
