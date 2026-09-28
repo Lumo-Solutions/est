@@ -891,7 +891,73 @@ after Phase 2's merge.
     - Commits: `64879c7` (modal component + all 6 replacements),
       `71070ce` (e2e tests).
 
-Remaining Phase 3 work: taxonomy tree editor; home dashboard per role.
+6. **Taxonomy tree editor** — explicit Phase 3 item: `TaxonomyAdmin.tsx`
+   (the Taxonomy tab on `/admin`) was, per the brief's own words, "a plain
+   parent-id form, not a tree UI."
+   - Rebuilt as an actual hierarchical tree: nodes nested under their
+     parents (built client-side from each node's `parent_id`), per-branch
+     expand/collapse, inline rename, per-node "add child," and a
+     move-to-parent `<select>` gated behind a confirmation step (new
+     `ConfirmModal.tsx` — a yes/no sibling to Phase 3's earlier
+     `TextPromptModal`, so this didn't reach for a new `window.confirm`).
+     A node's own ltree path prefixes its descendants' paths, used
+     client-side to keep a node and its own subtree out of its own "move
+     to" options — the server already rejects a cyclic move via a DB
+     trigger regardless (`move_node`'s own pre-existing comment), so this
+     is a UX nicety on top of a real guard, not the only thing preventing
+     one. All existing role gating (`_WRITE_ROLES`) and mutation wiring
+     unchanged — presentation/interaction change only. The root-level
+     create form deliberately stays always-visible (not behind a button)
+     specifically so Phase 2's existing `admin-audit-permissions.spec.ts`
+     assertions kept passing unmodified — confirmed live, not assumed.
+   - **Two real, previously-hidden backend bugs found and fixed while
+     live-testing the new UI, not by code review**: `update_node` and
+     `move_node` (`backend/app/services/taxonomy.py`) both changed a
+     column via a bare `setattr` + `session.flush()` without refreshing
+     afterward. `updated_at` (`app/db/base.py`'s `TenantEntity`) is
+     `server_default`/`onupdate=func.now()`-driven, so SQLAlchemy marks it
+     expired after an UPDATE instead of populating it from a `RETURNING`
+     clause — the next attribute access (`TradeNodeOut.model_validate` in
+     both routes) then attempts a lazy `SELECT`, which crashes with
+     `MissingGreenlet` under the async driver. Every rename, every
+     active-toggle, and every move through the new UI 500'd — each one
+     confirmed via the real network response and backend traceback before
+     diagnosing and fixing, not guessed at. `move_node` already refreshed
+     `path`/`level` for the identical underlying reason (its own
+     pre-existing comment) but had still missed `updated_at`. Fixed by
+     adding `updated_at` to each function's existing/new
+     `session.refresh(...)` call. 4 new integration tests reproduce the
+     exact route-level failure (`TradeNodeOut.model_validate` reading
+     `updated_at` off the just-mutated ORM object, not just the service
+     call succeeding in isolation).
+   - **Flagging for the main session, not fixed here (out of this task's
+     scope)**: the same `flush()`-without-`refresh()` pattern appears in
+     dozens of other places across `backend/app/services/*.py`. Whether
+     any of those are *live* bugs (not just latent ones) depends on
+     whether each one's response schema actually serializes a
+     server-side-computed column like `updated_at` right after an UPDATE
+     — this needs a systematic sweep to know for sure, similar in spirit
+     to Phase 2's JsonDecimal sweep, not something to guess at or fix
+     piecemeal from inside a UI-focused chunk.
+   - Also found and fixed, purely a test artifact (not a product bug):
+     Playwright's `getByRole(..., {name})` substring-matches by default,
+     so a node named e.g. "QA Root **Rename**d 060xbq" made its own
+     Collapse button (`aria-label="Collapse QA Root Renamed 060xbq"`)
+     match a `{name: 'Rename'}` locator — fixed with `exact: true`.
+     Cleaned up all ~34 test-pattern taxonomy nodes accumulated in the dev
+     DB while debugging this (a scoped `DELETE ... WHERE code LIKE
+     'QA-ROOT-%' OR ...`, children-before-parents to respect the FK
+     `RESTRICT`, verified zero rows remain), so the dev taxonomy tree
+     isn't left cluttered for Phase 4/5.
+   - 2 new e2e tests (10 total pass together with the 8 pre-existing
+     `admin-audit-permissions.spec.ts` tests, confirmed unaffected).
+     `tsc --noEmit` clean, `oxlint` clean (same 3 pre-existing warnings,
+     zero new), `vitest`: 24 passed. `make test-unit`: 347 passed. `make
+     test-integration`: 184 passed. `make test-api`: 26 passed.
+   - Commits: `8e6a360` (backend fix), `1700fd8` (tree editor),
+     `593a16a` (e2e tests).
+
+Remaining Phase 3 work: home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
