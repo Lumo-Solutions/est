@@ -1283,6 +1283,44 @@ brittleness as D1-SIM's already-documented settlement non-idempotency —
 flagging for whoever next touches `ProcurementPackagesPage`, not fixed
 here since the page itself is unmodified and correct.
 
+### Chunk: Cost library pages (main-session work, same forking limitation)
+Applied `docs/ui-design-system.md` to `CostLibraryPage.tsx` and
+`CostItemDetailPage.tsx`.
+
+- **The design doc's own explicit example, actually done**: section 1
+  names this exact gap — "Phase 4 is the pass that makes every remaining
+  ad-hoc `.toFixed()` call use [`formatMoney`]." `CostItemDetailPage.tsx`
+  displayed every money value (`rate.total_rate`, each component's
+  `unit_cost`/`amount`) via a bare `.toFixed(2)` with no currency shown at
+  all on the component table rows — switched all three to
+  `formatMoney(value, rate.currency)`. `Badge` used for cost-item
+  active/inactive status; `SkeletonRows` for loading states; every
+  previously-unlabeled input (rate-component fields) already had labels
+  from Phase 3, unchanged; the search input (previously placeholder-only)
+  gets a real (`sr-only`) `<label>`.
+- **Two real e2e regressions this caused, both found and fixed**:
+  1. The new search input's first-attempt label text ("Search cost items
+     by code or description") contained the substring "code", and
+     Playwright's `getByLabel()` matches by substring by default — this
+     made `costlib-module-e.spec.ts`'s `getByLabel('Code')` (targeting the
+     create-form's own Code field) ambiguous. Reworded the label to drop
+     the colliding word rather than changing the test's matcher, since the
+     test's intent (find the Code field uniquely) is the more stable thing
+     to preserve.
+  2. `formatMoney` correctly started showing "AED 42.50" (currency +
+     amount) on the component table's unit-cost/amount cells, where before
+     they showed a bare "42.50" with no currency — a real improvement, but
+     it meant a test asserting `getByText('AED 42.50')` now matched 3
+     elements (the summary line + 2 table cells) instead of 1. Fixed the
+     test to scope to `.first()` for visibility and assert the expected
+     count of 3 explicitly, rather than narrowing the app's own now-more-
+     correct display back down to satisfy the old assertion.
+
+**Verified**: `tsc --noEmit` clean, `oxlint` clean, `vitest` 24 passed,
+`costlib-module-e.spec.ts` (all 3, including the fixed rate-recording
+test) passes, 1 new axe check (`CostLibraryPage`) zero serious/critical
+violations.
+
 Remaining Phase 4 work: the rest of the ~30-page design-system rollout
 (procurement, settlement, admin, module E, dashboard, etc.); the
 remaining accessibility pass; more before/after screenshots.
