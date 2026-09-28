@@ -60,16 +60,32 @@ a common default) does not (2.9:1 on white, fails AA for text).
 | `--color-brand` | `#1D4ED8` | `blue-700` | primary buttons, links, focus rings, active nav | 6.3:1 (AA/AAA text) |
 | `--color-brand-hover` | `#1E40AF` | `blue-800` | brand hover/active state | 8.6:1 |
 | `--color-brand-subtle` | `#EFF6FF` | `blue-50` | selected-row / active-tab background | — |
-| `--color-success` | `#059669` | `emerald-600` | approved, accepted, verified, matched | 4.5:1 |
-| `--color-warning` | `#D97706` | `amber-600` | pending, expiring soon, draft-needs-attention | 4.6:1 |
+| `--color-success` | `#059669` | `emerald-600` | fills/borders/icons only — never plain text (see correction below) | 3.76:1 — **fails AA as text** |
+| `--color-warning` | `#D97706` | `amber-600` | fills/borders/icons only — never plain text | not independently verified as text |
 | `--color-danger` | `#DC2626` | `red-600` | rejected, expired, error, destructive action | 5.9:1 |
-| `--color-info` | `#0284C7` | `sky-600` | informational badges, neutral in-progress states | 4.6:1 |
+| `--color-info` | `#0284C7` | `sky-600` | fills/borders/icons only — never plain text | not independently verified as text |
 
-All four semantic colors are used as **text-on-tint** (e.g. `text-emerald-700`
-on `bg-emerald-100`) for badges — that pairing is 5.7:1+ for all four, comfortably
-AA, and is what most pages already do today (Phase 2 built several `STATUS_STYLES`
-maps in exactly this shape) — Phase 4 consolidates them into one shared
-`Badge` component/token set instead of nine near-identical per-page copies.
+**Correction (found live, Phase 4 page-by-page pass, `@axe-core/playwright`
+run against real rendered pages, not assumed from the table above):**
+`text-success` as plain foreground text on white measures 3.76:1 via axe,
+failing AA's 4.5:1 — this doc's original table asserted 4.5:1 for that
+usage without independently verifying it, which was wrong. Only
+`--color-brand` and `--color-danger` are confirmed safe as plain
+foreground/link text on white; treat `--color-warning`/`--color-info` as
+unverified for that use too unless independently checked.
+
+All four semantic colors remain safe as **text-on-tint** (e.g.
+`text-emerald-700` on `bg-emerald-100`) for badges — that pairing is
+5.7:1+ for all four, comfortably AA, and is what most pages already do
+today (Phase 2 built several `STATUS_STYLES` maps in exactly this shape;
+the shared `Badge` component uses these darker shades internally, e.g.
+`text-emerald-700`/`text-amber-800`, not the bare token) — Phase 4
+consolidates them into one shared `Badge` component/token set instead of
+nine near-identical per-page copies. **Never use a bare `text-success`/
+`text-warning`/`text-info` class outside `Badge` or its tint background**
+— use `text-emerald-700`/`text-amber-800`/`text-sky-700` (or route the
+content through `Badge` itself) for any plain-text success/warning/info
+message on a white or neutral background instead.
 
 Never introduce a one-off hex value on any page. If a new state needs a
 color, it maps to one of the four semantic tokens above, or it's neutral.
@@ -382,9 +398,14 @@ redirecting (Keycloak's own page is the step-up UI).
   missing — a Phase 4 fix on `TaxonomyAdmin.tsx`), `role="alert"` on inline
   mutation-error text so a screen reader announces it without the user
   needing to find it.
-- AA contrast: every token in §2.1 was chosen to hit 4.5:1 minimum as
-  *text*, not just as a fill behind white text — verified against both a
-  white (`#FFFFFF`) and the app's `bg-slate-50` surface.
+- AA contrast: `--color-brand`/`--color-danger` are confirmed ≥4.5:1 as
+  plain text on white. §2.1's correction note applies here too —
+  `--color-success`/`--color-warning`/`--color-info` are fill/border/icon
+  tokens, not verified plain-text colors (`text-success` measures 3.76:1,
+  failing AA); their text-on-tint `Badge` pairing (`text-emerald-700` on
+  `bg-emerald-100`, etc.) is the verified ≥5.7:1 path for any of these four
+  statuses shown as text. `@axe-core/playwright` (run per-page, not
+  assumed from this table) is the actual gate, per the brief.
 - `prefers-reduced-motion`: the new `Spinner` and any `animate-pulse`
   skeleton respect it (`motion-reduce:animate-none`, falling back to a
   static state) — small addition, not a broad animation system to audit
