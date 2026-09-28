@@ -39,7 +39,7 @@ test('admin taxonomy tab and audit viewer render real data', async ({ page }) =>
 
   await page.goto('/admin')
   await expect(page.getByRole('heading', { name: 'Admin' })).toBeVisible()
-  await expect(page.getByText('Earthworks')).toBeVisible()
+  await expect(page.getByText('Earthworks', { exact: true })).toBeVisible()
 
   await page.goto('/audit')
   await expect(page.getByRole('heading', { name: 'Audit viewer' })).toBeVisible()
