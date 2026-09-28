@@ -1083,7 +1083,62 @@ full `npm run e2e:real-backend` suite.
 confirmed green — see the merge commit for the full summary.
 
 ## Phase 4: design system and redesign
-Not started.
+**Status: in progress.** Branch `phase-4-design-system` created off `master`
+after Phase 3's merge.
+
+**Process note, for the record**: the subagent doing Phase 3's final
+home-dashboard chunk was resumed mid-session with a "stop waiting, report
+now" nudge while the main session was independently verifying the same
+Phase 3 work in the same working directory. Instead of only reporting, it
+continued autonomously (a fork inherits full conversation context,
+including the brief's own standing "continue to the next phase"
+instruction) and — concurrently with the main session's own git commands
+in that same shared directory — committed a final Phase 3 log entry,
+merged `phase-3-gap-fill` → `master`, and started this phase (the design
+system doc, `docs/ui-design-system.md`; design tokens; `Badge`/`Spinner`/
+`Skeleton`; a real font-bundling bug found and fixed). No isolation
+(`worktree`) was used for that subagent, so its git operations were
+visible to and interleaved with the main session's own. Nothing was lost
+— the fork picked up and correctly committed the main session's own
+in-flight edit rather than clobbering it — but this was an unintended
+race, not a coordinated handoff. The main session stopped the subagent,
+independently reviewed every commit it made against the real source and
+by re-running every test/build check itself (all confirmed accurate, all
+green), and is continuing as the sole active agent on this repository
+from this point forward.
+
+1. **Design system document** (`docs/ui-design-system.md`, written first
+   per the brief): professional enterprise B2B style; slate neutral +
+   one brand accent (`#1D4ED8`, chosen for 6.3:1 text contrast, not just
+   button-fill contrast) + four semantic tokens (all verified ≥4.5:1 as
+   text-on-white); self-hosted IBM Plex Sans (`@fontsource`, MIT,
+   air-gapped-compliant) with tabular figures for numbers; Tailwind v4
+   `@theme` tokens; AG Grid Theming API (not a CSS-file theme); component
+   specs for the app shell, buttons, forms, tables/grid, tabs, modals
+   (re-skinning Phase 3's `Modal`/`TextPromptModal`/`ConfirmModal`, not
+   replacing them), badges, empty states, skeleton loaders, and the
+   step-up return experience; 1440/1280 primary layout targets, 1024
+   minimum, the 5,000-row grid test as a hard perf gate; accessibility
+   requirements including `@axe-core/playwright` with zero serious/
+   critical violations. Explicitly scopes out a dark theme, a new toast
+   system, and any new modal type — a restyle pass, not a feature phase.
+2. **Foundation** (main-session work, not delegated — every subsequent
+   page restyle depends on getting this right first): Tailwind `@theme`
+   tokens in `index.css`; `@fontsource/ibm-plex-sans` installed and
+   imported from `main.tsx` (not a CSS `@import`, which left the actual
+   `.woff`/`.woff2` files unbundled — confirmed live: `npm run build`
+   silently produced a font-less bundle until fixed, verified fixed by
+   checking `dist/assets/` actually contains the font files); shared
+   `Badge.tsx`/`Spinner.tsx`/`Skeleton.tsx` components (respecting
+   `prefers-reduced-motion`); `@axe-core/playwright` added as a dev
+   dependency. `tsc --noEmit` clean, `oxlint` clean (3 pre-existing
+   warnings, zero new), `vitest`: 24 passed, `npm run build`: succeeds
+   with all 20 font files present in `dist/assets/` (verified directly).
+
+Remaining Phase 4 work: apply the design system page-by-page (~30 pages)
+with Sonnet subagents under main-session review per the brief's 0.3,
+fixing every Phase 2 P2 item along the way; the 5,000-row grid
+re-benchmark; the accessibility pass; before/after screenshots.
 
 ## Phase 5: final regression and report
 Not started.
