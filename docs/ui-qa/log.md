@@ -957,7 +957,102 @@ after Phase 2's merge.
    - Commits: `8e6a360` (backend fix), `1700fd8` (tree editor),
      `593a16a` (e2e tests).
 
-Remaining Phase 3 work: home dashboard per role.
+## Phase 3 — home dashboard per role (final item)
+
+**Status: done. Phase 3 as a whole is now complete.**
+
+Read the brief's exact wording again before designing this: "answers 'what
+needs my attention?'... approvals waiting for me, quarantined mail, quotes
+to review, certificates expiring, RFQs past due, settlements in draft."
+Two of those six examples (approvals waiting for me, certificates
+expiring) had no list endpoint to build a real tile from — added both,
+minimal, following this phase's established route→service→schema pattern:
+
+- `GET /approvals/pending-for-me` (new): mirrors `decide()`'s own
+  authorization exactly — the current step's `required_role` in the
+  caller's roles, requester excluded per the same SoD rule `decide()`
+  enforces — rather than "every pending request", so the tile only ever
+  shows what the viewer can actually act on. 3 integration + 1 api test.
+- `GET /vendor-certificates/expiring?days=30` (new): joins `vendors` for a
+  human-readable name (a bare `vendor_id` isn't useful on a dashboard
+  card), includes already-expired certificates too (same "already a
+  problem" framing `VendorDetailPage.tsx`'s own badge uses). 3 integration
+  + 1 api test.
+- `make test-unit`: 347 passed. `make test-integration`: 190 passed
+  (184 → +6). `make test-api`: 28 passed (26 → +2).
+
+**Built**: `HomeDashboardPage.tsx` at a new `/dashboard` route (nav link
+added; deliberately NOT a replacement for `/` — `ProjectsListPage` stays
+the default landing page, since forcing a post-login redirect without a
+real user validating the new page first felt like the wrong default to
+pick unilaterally). Four tiles, each gated to the roles with real
+server-granted access to its data: Approvals waiting for me
+(lead/proc/bd/md), Quarantined mail (proc/bd/md), Vendor duplicates open
+(lead/proc/bd/md), Certificates expiring (lead/proc/bd/md).
+
+**Deliberately scoped out, not built speculatively**: the brief's other
+four example tiles ("quotes to review", "RFQs past due", "settlements in
+draft", and BOQ/drawing-ingestion items for `estimator`) are all
+project-scoped in this codebase today — there is no endpoint that
+aggregates "quotes to review across every project" or "every project's
+settlements in draft" into one cross-project count, and inventing one
+speculatively for a dashboard pass would violate the brief's own "add
+backend endpoints only where a screen genuinely needs one" (a real
+aggregate endpoint is a bigger, more deliberate design decision — does it
+paginate, does it need its own index, should it exist as a materialized
+view — than this pass should make unilaterally). `estimator`'s dashboard
+section says this honestly (a message pointing back to Projects) rather
+than showing a fake or misleading number. Flagging as a real gap for
+Phase 4/5 or a future decision: a cross-project attention-summary
+endpoint would make this dashboard genuinely complete for every role, not
+just the four business roles above `estimator`.
+
+3 new e2e tests (per-role tile rendering, no console/network errors on
+reload, `estimator`'s honest empty state). `tsc --noEmit` clean, `oxlint`
+clean (same 3 pre-existing warnings, zero new), `vitest`: 24 passed.
+
+Commits: `ab67633` (backend endpoints), `0eb1638` (dashboard UI + e2e).
+
+### Phase 3 final tally
+Built across the whole phase: vendor master + duplicate review +
+prequalification/certificates UI; cost library UI (+ its own new list
+endpoint) + Module E read views; project location/members UI (+ new
+members-list endpoint) + saved-scenario delete (+ a new DELETE endpoint
+and its own missing-RLS-policy migration, `0028`); quotation attachments
+viewer + exclusion-flag acknowledge + fx-rate overrides (quotation- and
+line-level) + settlement per-trade/per-line overrides; a shared
+`Modal`/`TextPromptModal`/`ConfirmModal` component set replacing all 6
+`window.prompt` call sites; a hierarchical taxonomy tree editor (+ 2 real
+backend bugs found and fixed along the way — `update_node`/`move_node`
+never refreshing `updated_at`, causing a 500 on every rename/toggle/move);
+and this home dashboard (+ 2 more new endpoints). Also: the read-only
+`GET /users` endpoint (Keycloak admin API integration, main-session work)
+that several of the above needed for a usable member/user picker.
+
+**Real bugs found and fixed along the way** (not just missing UI):
+completing the JsonDecimal sweep Phase 2 started (main session); a
+quarantine-queue query that never filtered on `needs_review`; a missing
+`audit.record` call on `acknowledge_exclusion_flag`; a missing RLS DELETE
+policy for settlement scenarios; `update_node`/`move_node`'s missing
+`updated_at` refresh (a real, live 500 on every taxonomy write, found
+live building the tree editor, not by inspection).
+
+**Flagged for the main session / a future decision, not fixed in Phase
+3** (each already detailed in its own entry above):
+- The same `flush()`-without-`refresh()` pattern that broke taxonomy
+  writes likely exists elsewhere in `backend/app/services/*.py` — worth a
+  systematic sweep, similar to Phase 2's JsonDecimal one, to know how many
+  are live bugs versus latent.
+- No cross-project "quotes to review / RFQs past due / settlements in
+  draft" aggregate exists — the dashboard's remaining gap for `estimator`
+  and a fuller dashboard generally.
+- Member *removal* has no backend endpoint (only add).
+- `CostRateComponentOut`/`CostItemRateOut` use bare `float` instead of
+  `JsonDecimal` — functionally identical wire format (confirmed, not just
+  assumed), a Phase 4 tidiness item, not a bug.
+
+**Not merged to master yet** — branch `phase-3-gap-fill` is ready for the
+main session's final review and merge.
 
 ## Phase 4: design system and redesign
 Not started.
