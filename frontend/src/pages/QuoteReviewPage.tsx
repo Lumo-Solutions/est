@@ -72,7 +72,7 @@ function AttachmentsList({ quotationId }: { quotationId: string }) {
       {attachments.map((a) => (
         <li key={a.id} className="flex items-center justify-between gap-2">
           <span>
-            {a.filename} {a.is_primary && <span className="text-slate-400">(primary)</span>} --{' '}
+            {a.filename} {a.is_primary && <span className="text-slate-600">(primary)</span>} --{' '}
             {(a.size_bytes / 1024).toFixed(1)} KB
           </span>
           {a.safety_status === 'accepted' ? (
@@ -276,7 +276,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
                     <button
                       type="button"
                       onClick={() => acceptItem.mutate(li.id)}
-                      className="rounded text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Accept
                     </button>
@@ -322,6 +322,7 @@ export function QuoteReviewPage() {
 
       <div className="mt-4 flex gap-4">
         <select
+          aria-label="Package"
           value={packageId ?? ''}
           onChange={(e) => {
             setPackageId(e.target.value || null)
@@ -337,6 +338,7 @@ export function QuoteReviewPage() {
           ))}
         </select>
         <select
+          aria-label="RFQ"
           value={rfqId ?? ''}
           onChange={(e) => setRfqId(e.target.value || null)}
           disabled={!packageId}

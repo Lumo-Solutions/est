@@ -37,9 +37,9 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
             </p>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-xs">
               {f.citation_verified ? (
-                <span className="text-success">Citation verified</span>
+                <span className="text-emerald-700">Citation verified</span>
               ) : (
-                <span className="text-warning">Citation not verified -- review the source</span>
+                <span className="text-amber-800">Citation not verified -- review the source</span>
               )}
               <Badge tone={FLAG_STATUS_TONE[f.status] ?? 'neutral'}>{f.status}</Badge>
               {f.status !== 'acknowledged' && hasRole(...ACKNOWLEDGE_ROLES) && (
@@ -79,6 +79,7 @@ export function BidLevelingPage() {
     <div className="p-6">
       <h1 className="text-xl font-semibold text-slate-800">Bid-leveling matrix</h1>
       <select
+        aria-label="Package"
         value={packageId ?? ''}
         onChange={(e) => setPackageId(e.target.value || null)}
         className="mt-4 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"

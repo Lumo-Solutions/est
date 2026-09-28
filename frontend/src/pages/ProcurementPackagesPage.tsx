@@ -105,7 +105,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
       <h3 className="mt-4 text-sm font-semibold text-slate-800">Matched vendors</h3>
       <ul className="mt-1 text-sm">
         {(vendors ?? []).map((v) => (
-          <li key={v.vendor_id} className={v.eligible ? 'text-slate-700' : 'text-slate-400'}>
+          <li key={v.vendor_id} className={v.eligible ? 'text-slate-700' : 'text-slate-600'}>
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"

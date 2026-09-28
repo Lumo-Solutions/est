@@ -22,7 +22,7 @@ const AUTH_RESULT_TONE: Record<string, BadgeTone> = {
 function AuthResultBadge({ label, value }: { label: string; value: string }) {
   return (
     <span className="inline-flex items-center gap-1">
-      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-xs text-slate-600">{label}</span>
       <Badge tone={AUTH_RESULT_TONE[value] ?? 'neutral'}>{value}</Badge>
     </span>
   )

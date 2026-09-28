@@ -65,7 +65,7 @@ export function ExportPage() {
 
             {previewOriginal.data && (
               <div className="mt-2 rounded border border-slate-200 p-3 text-sm">
-                <p className={previewOriginal.data.ok ? 'text-success' : 'text-warning'}>
+                <p className={previewOriginal.data.ok ? 'text-emerald-700' : 'text-amber-800'}>
                   {previewOriginal.data.ok ? 'No fidelity loss detected.' : 'Fidelity loss detected -- review below.'}
                 </p>
                 {previewOriginal.data.lost_features.length > 0 && (
