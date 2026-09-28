@@ -139,3 +139,40 @@ async def test_full_two_tier_approval_flow_with_step_up(authed_client):
     assert resp2.status_code == 200
     assert resp2.json()["status"] == "approved"
     assert resp2.json()["completed_at"] is not None
+
+
+async def test_pending_for_me_only_shows_requests_the_caller_can_actually_decide(authed_client):
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): home dashboard's "approvals
+    waiting for me" tile. Mirrors decide()'s own routing exactly, not just
+    "every pending request" -- a lead_estimator sees the single-tier
+    request routed to them, but not one routed to procurement_head, and
+    the requester never sees their own request even though it's pending."""
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    lead_routed = await creator.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 10000, "currency": "AED"},
+    )
+    lead_request_id = lead_routed.json()["id"]
+    proc_routed = await creator.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 60000, "currency": "AED"},
+    )
+    # amount=60000 routes lead_estimator (seq 1) then procurement_head (seq
+    # 2) -- current_seq starts at 1, so this one is NOT yet in
+    # procurement_head's queue until lead_estimator decides it first.
+    proc_request_id = proc_routed.json()["id"]
+
+    lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
+    resp = await lead.get("/api/v1/approvals/pending-for-me")
+    assert resp.status_code == 200
+    ids = {r["id"] for r in resp.json()}
+    assert lead_request_id in ids
+    assert proc_request_id in ids  # lead_estimator IS the current (seq 1) step here too
+
+    proc = authed_client(frozenset({Role.PROCUREMENT_HEAD.value}))
+    proc_resp = await proc.get("/api/v1/approvals/pending-for-me")
+    proc_ids = {r["id"] for r in proc_resp.json()}
+    assert proc_request_id not in proc_ids  # not their turn yet (current_seq=1, not 2)
+
+    own_resp = await creator.get("/api/v1/approvals/pending-for-me")
+    assert lead_request_id not in {r["id"] for r in own_resp.json()}  # SoD: never your own request

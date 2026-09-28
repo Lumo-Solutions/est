@@ -30,6 +30,37 @@ echo "Setting installtec-backend client secret..."
 CLIENT_UUID=$(run get clients -r "$REALM" -q clientId=installtec-backend --fields id --format csv --noquotes | tail -n1)
 run update "clients/${CLIENT_UUID}" -r "$REALM" -s "secret=${KEYCLOAK_CLIENT_SECRET}"
 
+# Phase 3 (docs/ui-qa-brief.md): a read-only GET /users endpoint needs the
+# backend itself to call Keycloak's admin API (listing users + their realm
+# roles for an "add project member"/"users & roles" screen) -- this is a
+# SEPARATE credential from the interactive login flow above, so it's
+# deliberately least-privilege: only the three read-only realm-management
+# client roles it actually needs (view-users/query-users for the user
+# list + role mappings, query-groups because tenant scoping is done via
+# the caller's /tenants/* group -- see keycloak_admin.py), never
+# manage-users, manage-realm, or a realm-admin role.
+# serviceAccountsEnabled=true is also set directly here (not left to the
+# realm-installtec.json import alone) because a realm that already existed
+# before this change won't pick up a JSON edit retroactively -- this
+# `update` is what actually flips it on an already-running dev stack.
+echo "Enabling installtec-backend's service account (read-only Keycloak admin API access)..."
+run update "clients/${CLIENT_UUID}" -r "$REALM" -s serviceAccountsEnabled=true
+SERVICE_ACCOUNT_USER_ID=$(run get "clients/${CLIENT_UUID}/service-account-user" -r "$REALM" --fields id --format csv --noquotes | tail -n1 | tr -d '\r')
+REALM_MGMT_UUID=$(run get clients -r "$REALM" -q clientId=realm-management --fields id --format csv --noquotes | tail -n1 | tr -d '\r')
+grant_client_role_if_missing() {
+    local role_name="$1"
+    if run get "users/${SERVICE_ACCOUNT_USER_ID}/role-mappings/clients/${REALM_MGMT_UUID}" -r "$REALM" --fields name --format csv --noquotes \
+        | tr -d '\r' | grep -qx "$role_name"; then
+        echo "  service account already has '${role_name}', skipping."
+    else
+        run add-roles -r "$REALM" --uid "$SERVICE_ACCOUNT_USER_ID" --cclientid realm-management --rolename "$role_name"
+        echo "  granted '${role_name}' to the service account."
+    fi
+}
+grant_client_role_if_missing view-users
+grant_client_role_if_missing query-users
+grant_client_role_if_missing query-groups
+
 # Keycloak 25+ emits `sub` and `acr` from its built-in 'basic'/'acr' client
 # scopes, which are NOT created when the realm import defines its own
 # clientScopes (ours does). Without `sub` every bearer token is rejected, so
@@ -61,6 +92,21 @@ ensure_mapper acr oidc-acr-mapper \
 ensure_mapper auth_time oidc-usersessionmodel-note-mapper \
     -s 'config."user.session.note"=AUTH_TIME' -s 'config."claim.name"=auth_time' -s 'config."jsonType.label"=long' \
     -s 'config."id.token.claim"=true' -s 'config."access.token.claim"=true' -s 'config."userinfo.token.claim"=true'
+# Phase 3: same "we don't have the built-in scopes" reason sub/acr/auth_time
+# need their own mappers above -- without this, a client_credentials token
+# for installtec-backend's own service account (used by
+# app/integrations/keycloak_admin.py to call Keycloak's admin API) carries
+# NO resource_access.realm-management.roles claim at all, even though the
+# role assignment itself is real (visible via
+# users/{id}/role-mappings/clients/{realm-management-uuid}) -- Keycloak's
+# admin REST API authorizes off the token's own claims, not a fresh DB
+# lookup, so every admin API call 403'd until this mapper existed. Harmless
+# for every normal human login token: a regular user has zero
+# realm-management roles, so this claim is simply empty/absent for them.
+ensure_mapper realm-management-roles oidc-usermodel-client-role-mapper \
+    -s 'config."usermodel.clientRoleMapping.clientId"=realm-management' \
+    -s 'config."multivalued"=true' -s 'config."claim.name"=resource_access.realm-management.roles' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true'
 
 # fix/keycloak-step-up: a Level-of-Authentication step-up flow, following
 # Keycloak's own documented pattern -- bronze (level 1) = password + TOTP

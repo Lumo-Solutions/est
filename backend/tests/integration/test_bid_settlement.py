@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.enums import BidSettlementStatus, QuotationExtractionMethod, QuotationLineItemStatus, QuotationStatus
-from app.core.errors import ConflictError, ForbiddenError
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError
 from app.db.rls import set_rls_context
 from app.models.quotation_ingestion import Quotation, QuotationLineItem
 from app.models.taxonomy import TradeNode
@@ -487,6 +487,56 @@ async def test_save_and_list_scenarios(rls_session):
 
     scenarios = await settlement_service.list_scenarios(rls_session, settlement.id)
     assert [s.label for s in scenarios] == ["Aggressive markup"]
+
+
+async def test_delete_scenario(rls_session):
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): scenarios had no delete at
+    all before -- confirmed no endpoint existed. Same _LINE_ROLES as
+    saving one (every one of the 5 business roles), scoped to the
+    settlement it was actually saved under."""
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+    estimator_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, estimator_ctx)
+    scenario = await settlement_service.save_scenario(
+        rls_session, estimator_ctx, settlement.id,
+        ScenarioCreate(label="To be deleted", inputs=SimulateRequest(default_markup_pct=15)),
+    )
+
+    await settlement_service.delete_scenario(rls_session, estimator_ctx, settlement.id, scenario.id)
+
+    assert await settlement_service.list_scenarios(rls_session, settlement.id) == []
+
+
+async def test_delete_scenario_denied_for_a_role_outside_line_roles(rls_session):
+    """_LINE_ROLES already covers every one of the 5 business roles, so
+    the only real "denied" case is a role that isn't a project-scoped
+    business role at all -- platform_admin, per its own narrow scope
+    (docs/ui-qa/coverage.md's role glossary)."""
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+    estimator_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, estimator_ctx)
+    scenario = await settlement_service.save_scenario(
+        rls_session, estimator_ctx, settlement.id,
+        ScenarioCreate(label="Should survive", inputs=SimulateRequest(default_markup_pct=15)),
+    )
+
+    admin_ctx = _ctx(frozenset({"platform_admin"}), tenant_id=tenant_id, user_id=uuid.uuid4())
+    await set_rls_context(rls_session, admin_ctx)
+    with pytest.raises(ForbiddenError):
+        await settlement_service.delete_scenario(rls_session, admin_ctx, settlement.id, scenario.id)
+
+
+async def test_delete_scenario_from_a_different_settlement_404s(rls_session):
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+    estimator_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, estimator_ctx)
+    scenario = await settlement_service.save_scenario(
+        rls_session, estimator_ctx, settlement.id,
+        ScenarioCreate(label="Belongs elsewhere", inputs=SimulateRequest(default_markup_pct=15)),
+    )
+
+    with pytest.raises(NotFoundError):
+        await settlement_service.delete_scenario(rls_session, estimator_ctx, uuid.uuid4(), scenario.id)
 
 
 # --------------------------------------------------------------------------

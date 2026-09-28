@@ -580,8 +580,507 @@ not just trusting subagent claims):**
 green. Branch `phase-2-functional-qa` is done.
 
 ## Phase 3: gap-fill
-Not started. Ready to begin once `phase-2-functional-qa` is reviewed and
-merged.
+**Status: in progress.** Branch `phase-3-gap-fill` created off `master`
+after Phase 2's merge.
+
+1. **Research pass** (no code changes): a fork surveyed the existing
+   Keycloak admin API integration (none existed), the CRUD/audit/RLS
+   pattern to copy for new endpoints, the frontend feature-module pattern,
+   every vendor/prequalification/cost-library/Module E endpoint's exact
+   shape, saved-scenario/settlement-override endpoints, every remaining
+   `window.prompt` call site (6, all text-input style, no
+   `window.confirm` anywhere, no existing modal component), and the real
+   project-editing/members gaps. Found two small additional gaps not in
+   `coverage.md`: no `GET /vendors/{id}/certificates` list endpoint and no
+   `GET /cost-items` list endpoint (both get-by-id only) -- both needed
+   for a real browsing screen, both to be added following existing
+   patterns.
+2. **Users & roles endpoint** (`GET /users`, main-session work, not
+   delegated -- new backend attack surface): installtec-backend's service
+   account is now enabled with exactly `view-users`/`query-users`/
+   `query-groups` on `realm-management`, plus a new client-role mapper on
+   the `installtec-claims` scope (without it, Keycloak's admin API 403s
+   every call regardless of the role grant, since it authorizes off the
+   token's own claims). `app/integrations/keycloak_admin.py` is
+   tenant-scoped by construction: Keycloak's admin API has no tenant
+   concept, so it walks the group tree for the caller's own tenant group
+   and only ever lists that group's members, failing closed (empty list)
+   if none matches. Verified end-to-end against the real dev stack (not
+   just mocked tests) as both an allowed role (`lead_estimator`, real
+   users+roles returned, noise roles like `default-roles-installtec`
+   filtered out) and a denied role (`estimator`, 403). 3 new unit tests +
+   2 new api tests (lowest allowed role + denied role), `make test-unit`:
+   347 passed, `make test-api`: 21 passed.
+
+3. **Vendor master, duplicate review, prequalification & certificates UI**
+   (two more of the confirmed "no UI at all" capabilities). Built:
+   - `GET /vendors/{id}/certificates` (new, `backend/app/api/v1/routes/prequal.py`)
+     -- only single-cert add/verify existed before; a certificates screen
+     needs to list all of them. Read-only, any role. 2 integration tests +
+     1 api test.
+   - `VendorsPage` (`/vendors`, nav-visible to every role -- reading the
+     directory is useful to everyone, matching `GET /vendors`'s own "any
+     authenticated user" server check): browse/search, create-vendor form
+     with a "check for duplicates" preflight (`POST /vendors:check-duplicates`),
+     link to duplicate review. Create is role-gated
+     (lead/proc/bd/md, mirroring `_WRITE_ROLES`).
+   - `VendorDetailPage` (`/vendors/:id`): full vendor info, service
+     regions shown read-only (editing stays on `AdminPage`'s existing tab
+     -- deliberately not duplicated here), certificates with **expiry
+     badges** (expired / expiring within 30 days / valid -- the brief's
+     explicit ask), add/verify certificate and prequalification
+     status+decision (role-gated to `procurement_head`/`lead_estimator`/
+     `managing_director`, mirroring `prequal.py`'s own `_WRITE_ROLES` --
+     notably NOT `bd_director`, unlike vendor-master writes), a "scan for
+     duplicates" trigger (`POST /vendors/{id}/duplicate-scan`).
+   - `VendorDuplicatesPage` (`/vendors/duplicates`): open candidates, the
+     three resolution actions, role-gated.
+   - Judgment calls: duplicate review is its own page, not a tab (kept
+     `VendorsPage` focused on browsing); `scope_trade_node_id` on a
+     prequalification decision is omitted from the form (not exposed) --
+     every decision made through this UI is realm-wide, not
+     trade-scoped, which is a reasonable default and matches how the
+     brief describes the capability, but a trade-scoped decision still
+     requires a direct API call today; noted here rather than treated as
+     a blocking gap.
+   - Every write control role-gated client-side against the real
+     server-side role list (read from the route files, not guessed), with
+     an `isError` display on every mutation -- the same recurring pattern
+     from Phase 2. No new P0/P1 found in this new UI itself.
+   - Pre-existing issue noticed, not fixed here (out of scope for new UI,
+     flagging for the record): `VendorPrequalificationOut.max_award_value`
+     is a bare `float` on both the request and response schema -- a
+     different, older issue than Phase 2's JsonDecimal-string sweep (this
+     one is `float` in the schema's own type, not a serialization
+     mismatch), not touched since it's pre-existing and out of this
+     chunk's scope.
+   - 4 new real-backend Playwright tests, all passing against the rebuilt
+     frontend image (including a live check that the expiry badge
+     actually renders using a real certificate type seeded into the dev
+     DB for this verification). `tsc --noEmit` clean, `oxlint` clean,
+     `vitest`: 24 passed.
+
+4. **Cost library + Module E read views** (2 more "no UI at all"
+   capabilities): built directly by the main session this run (same
+   rigor as a delegated chunk — reviewed and tested the same way).
+   - **New endpoint**: `GET /cost-items` (list/search, paginated) — only
+     get-by-id existed before. Mirrors `vendors_service.list_vendors`'s
+     `Page`/`limit`/`offset` shape exactly; adds case-insensitive
+     `search` (code/description substring), `trade_node_id`, `is_active`
+     filters. 4 new integration tests + 2 api tests.
+   - **CostLibraryPage** (`/cost-library`): paginated browse/search
+     (real Previous/Next controls, not just a count), create-item form
+     (role-gated lead/proc/md, matching `_WRITE_ROLES`).
+   - **CostItemDetailPage** (`/cost-library/:id`): current rate as of a
+     chosen date (`GET /cost-items/{id}/rate?valid_on=...`) with a date
+     picker to see a different date's rate, and a record-new-rate form.
+     Deliberately did **not** add a separate rate-history-list endpoint —
+     per the brief's own "add backend endpoints only where a screen
+     genuinely needs one," picking different as-of dates already covers
+     "history" without a new screen need.
+   - **ModuleEPage** (`/projects/:id/module-e`, "Post-award"): 4 tabs
+     (Contracts incl. revisions/variations on selection, BOQ revisions,
+     Exclusion register with a status filter, Outturn costs) over the
+     existing all-read-only, any-role `module_e.py` endpoints. No forms,
+     no new role gating needed.
+   - **Corrected by the main session on review — the "end to end float"
+     claim above was a misdiagnosis, not a real bug.** `total_rate`/
+     `unit_cost` (`app/models/costlib.py`) are declared `Mapped[float]`,
+     which reads as "this column is float all the way down," but the
+     actual SQLAlchemy column type is `Money`/`app/db/types.py`'s
+     `TypeDecorator(impl=Numeric(18,6))` with `asdecimal` left at
+     SQLAlchemy's own default (`True`) — meaning every value that comes
+     back from Postgres is a genuine Python `Decimal`, and
+     `record_rate`'s `sum(quantity_per_uom * unit_cost * (1 +
+     waste_factor) ...)` is real Decimal arithmetic, not float. Confirmed
+     empirically against the live dev DB (`SELECT total_rate FROM
+     cost_item_rates LIMIT 1` inside the backend container →
+     `Decimal('42.500000') <class 'decimal.Decimal'>`), not just reasoned
+     about. The `Mapped[float]` hints are simply wrong/misleading (should
+     say `Mapped[Decimal]`) — a type-hygiene nitpick, not a precision-loss
+     bug, and not something this run needs to fix.
+     `CostRateComponentOut.unit_cost: float`/`CostItemRateOut.total_rate:
+     float` on the response schemas do coerce that real Decimal to a
+     Python `float` during Pydantic serialization — but that produces
+     the exact same JSON wire format `JsonDecimal` would (a JSON number),
+     so there is no functional difference from the pattern already
+     accepted everywhere else in this app; using bare `float` here instead
+     of `JsonDecimal` is a minor style inconsistency worth tidying in
+     Phase 4 for self-documentation, not a bug needing a schema migration
+     or a main-session decision.
+   - 3 new real-backend Playwright tests, all passing against the
+     rebuilt frontend image. `tsc --noEmit` clean, `oxlint` clean,
+     `vitest`: 24 passed. `make test-unit`: 347 passed. `make
+     test-integration`: 172 passed. `make test-api`: 24 passed.
+
+3. **Project location/members UI + saved-scenario delete** (a prior attempt
+   at this exact chunk fabricated a complete fake report with zero real
+   tool calls -- caught on review via `git log`/`git status` showing none
+   of it existed; redone for real):
+   - **`GET /projects/{id}/members`** (new): confirmed by reading `backend/app/api/v1/routes/projects.py`
+     that no members-list endpoint existed at all, only add. Any
+     authenticated role (matches `ProjectOut`'s own read gate), calls
+     `get_project` first so a 404 on an unauthorized/nonexistent project
+     matches `add_member`'s own check. 3 new integration tests + 2 api
+     tests.
+   - **`ProjectDetailPage.tsx`**: an "Edit location" form (role-gated
+     `_CREATE_ROLES` = bd/md) and a Members section — a real list with
+     usernames resolved via `GET /users` (falls back to the raw UUID if a
+     user isn't in that tenant's list) and an add-member form using a real
+     `<select>` picker (role-gated bd/md/lead), instead of requiring a
+     bare UUID.
+   - **`DELETE /bid-settlements/{id}/scenarios/{id}`** (new): confirmed no
+     delete endpoint existed for saved scenarios (brief's own explicit
+     Phase 3 item). Same `_LINE_ROLES` as saving one. **Found a second real
+     bug while testing this for real, not just reasoning about it**:
+     `bid_settlement_scenarios`' RLS policies (migration 0019) were created
+     with `write_roles` but no `delete_roles` at all (nobody had ever
+     needed one before), so `tenant_policies()` never emitted a DELETE
+     policy — with RLS force-enabled, the new `delete_scenario()` silently
+     deleted 0 rows on its very first real test run, the exact same
+     failure shape migration 0022 already found once for
+     `drawing_measurements`. Fixed with migration `0028`, `DELETE_ROLES`
+     matching the same 5 roles write already covers. Applied to the dev
+     stack and verified live, not just against the ephemeral test DB.
+   - **`SettlementPage.tsx`**: a "Delete" button per saved scenario
+     (role-gated to the same 5 `_LINE_ROLES`), using a two-step inline
+     "Delete / Confirm delete?" toggle rather than a new `window.confirm`
+     (Phase 3 removes those elsewhere; adding one here would be a step
+     backward) or a full modal (a separate chunk's job).
+   - **Judgment call**: member *removal* has no backend endpoint at all —
+     not mentioned in the brief's Phase 3 list, not built speculatively,
+     flagged here as a possible future gap.
+   - 3 new integration tests (project members) + 2 api tests, 3 new
+     integration tests (scenario delete: lowest role deletes, denied role
+     `ForbiddenError`, wrong-settlement 404s), 3 new e2e tests (one
+     self-skips on the already-documented D1-SIM shared-fixture state,
+     same as several existing Phase 2 specs). `make test-unit`: 347
+     passed. `make test-integration`: 178 passed. `make test-api`: 26
+     passed. `tsc --noEmit` clean, `oxlint` clean, `vitest`: 24 passed.
+   - Commits: `0e35208` (members-list endpoint), `e748906` (scenario
+     delete endpoint + migration 0028), `3165a31` (frontend UI + e2e spec).
+
+4. **Quotation attachments/exclusion-ack/fx-rate UI, settlement per-trade/
+   per-line overrides.**
+   - **Attachments viewer** (`QuoteReviewPage.tsx`): `QuotationAttachmentOut`
+     never exposed a way to fetch an attachment's bytes (correctly not
+     `raw_object_key` directly), so there was no way to actually view one.
+     Added `GET /quotation-attachments/{id}/download`, mirroring
+     `app/services/takeoff.py::presigned_download_url`'s exact shape
+     (presign + redirect + audit `DOWNLOAD`) — only `safety_status=accepted`
+     attachments are servable; a rejected one may be exactly what
+     `attachment_safety.py` rejected it for, a still-pending one hasn't
+     been scanned yet.
+   - **Found and fixed in passing**: `acknowledge_exclusion_flag` was the
+     only reviewer action in `quotation_ingestion.py` that never called
+     `audit.record` — every sibling action (accept/reject line, set fx
+     rate) does. Fixed alongside its first-ever UI.
+   - **Exclusion-flag acknowledge** (`BidLevelingPage.tsx`): an
+     "Acknowledge" action next to each open flag, gated to the same
+     `_REVIEW_ROLES` as every other quotation-review action.
+   - **Quotation fx-rate override** (`QuoteReviewPage.tsx`): wired up
+     `useSetQuotationFxRate`, which already existed in
+     `features/quotations/api.ts` but had never been called from any page.
+   - **Settlement per-trade/per-line overrides** (`SettlementPage.tsx`,
+     explicit brief item): a trade-override panel (existing trades'
+     plant/overhead/volatility/markup % shown + editable, plus an "add
+     override for a new trade" form using the taxonomy trade-node picker)
+     and a per-line panel (manual unit cost via `PATCH .../lines/{id}`,
+     FX rate via the separate `POST .../lines/{id}/fx-rate` — `_LINE_ROLES`
+     vs `_HEADER_ROLES` respectively, so an estimator can override a
+     line's cost but not its FX rate, exactly matching the server).
+     **Found in the process**: `useCurrentSettlement` is built on the list
+     endpoint (`GET /projects/{id}/bid-settlements`), which never
+     populates `lines`/`trade_overrides` — only the single-settlement
+     detail endpoint's `_to_out()` does. Added a second `useSettlement(
+     current.id)` fetch for the detail data the override panels need,
+     rather than changing the list endpoint's shape (`docs/ui-qa/
+     coverage.md`'s own "harmless today, no frontend code reads it" note
+     about this gap is now out of date — this is the first code that does).
+   - Added `formatMoney` to `lib/format.ts` (thousands separators, 2dp,
+     currency code) — no shared money formatter existed anywhere in the
+     frontend before this (Phase 2's cross-cutting note). Used for the new
+     override panels; a broader pass to use it everywhere else money is
+     shown belongs to Phase 4.
+   - 4 new real-backend Playwright tests. Two real test-authoring bugs
+     caught and fixed on the first run, not just described: (a) called
+     `ensureProjectMember` with `'procurement1'`, a role outside that
+     helper's own `'estimator1' | 'lead_estimator'` type — TypeScript
+     doesn't check `frontend/e2e` from the root `tsc --noEmit`, so this
+     silently fell through to the helper's password lookup picking
+     `lead1`'s password for the `procurement1` account, producing real,
+     repeated failed-login attempts against Keycloak (not a flaky test —
+     removed the unnecessary call instead, since `procurement_head` is
+     already in `_PROJECT_VISIBLE_WITHOUT_MEMBERSHIP_ROLES` and never
+     needed it); (b) `getByRole('button', { name: 'Override' })`'s default
+     substring match also matched the trade-override panel's "Set
+     override" button, which starts disabled with no trade selected,
+     causing an indefinite click timeout — fixed with `exact: true`. All
+     4 pass after both fixes. `make test-unit`: 347 passed. `make
+     test-integration`: 181 passed (one transient/flaky failure seen on a
+     re-run, gone on the next — consistent with this suite's
+     already-documented occasional testcontainers flakiness, not caused
+     by this change). `make test-api`: 26 passed. `tsc --noEmit` clean,
+     `oxlint` clean, `vitest`: 24 passed.
+   - Commits: `8108d9b` (attachment download endpoint + audit fix),
+     `f9aea5c` (frontend UI + e2e spec).
+   - **Main-session follow-up on independent verification**: the chunk's
+     own e2e run reported all 4 new tests passing, but re-running the
+     same spec independently (including after a from-scratch frontend
+     rebuild) reproduced 1 real failure: `quotation-settlement-
+     overrides.spec.ts`'s FX-rate test located the input by
+     `getByPlaceholder(/FX rate/)`, but `QuoteReviewPage.tsx`'s FX input
+     placeholder is dynamic — `"FX rate to base"` when
+     `quotation.fx_rate_to_base` is unset, `"Current: <value>"` once a
+     rate has already been recorded — so the locator breaks the moment
+     any prior run (including this same test, re-run against the shared
+     D1-SIM fixture) already set one. A real test-authoring bug, not
+     flakiness or a product bug. Fixed by widening the regex to match
+     both placeholder states (`e1c1e31`); all 4 tests in the file pass
+     now, reproduced twice.
+
+10. **Shared modal component and window.prompt replacement** (Phase 3's
+    explicit "replace every window.prompt/window.confirm with proper
+    modals" item):
+    - No modal/dialog component existed anywhere in this codebase before
+      this (confirmed by the earlier research pass) — added
+      `frontend/src/components/Modal.tsx` (minimal: backdrop click +
+      Escape both dismiss, `role="dialog"`/`aria-modal`/`aria-label`, no
+      focus trap — not required for this pass's simple dialogs) and
+      `TextPromptModal.tsx` on top of it (title, optional message,
+      textarea, Cancel/Submit, Submit disabled until the trimmed value is
+      non-empty — matching every existing prompt's own `if (reason)
+      mutate(...)` guard).
+    - Replaced all 6 confirmed `window.prompt` call sites (no
+      `window.confirm` anywhere): `ProcurementPackagesPage.tsx` (resend
+      RFQ reason), `QuarantineQueuePage.tsx` (resolve-tenant note, attach
+      reason, dismiss note — lifted to page-level state keyed by
+      which email/action is open, rather than per-row, specifically to
+      avoid a modal's `<div>` ending up as an invalid direct child of
+      `<tbody>`/`<tr>`: harmless visually since the modal is
+      fixed-positioned, but React still emits a console warning for the
+      invalid nesting, which this app's own Phase 2 QA bar treats as a
+      console error worth avoiding), `QuoteReviewPage.tsx` (reject-
+      quotation reason), `SettlementPage.tsx` (settlement rejection note
+      — the Reject button's existing SoD disabled-state logic is
+      untouched, only the prompt mechanism changed).
+    - No server-side behavior, role gating, or mutation logic changed
+      anywhere — purely a UI-mechanism swap.
+    - 2 new real-backend Playwright tests verify the mechanism end to
+      end on 2 of the 6 sites (chosen to cover both the "cancel without
+      submitting" path and a full submit-through-a-real-MFA-step-up
+      path): `QuarantineQueuePage`'s Dismiss modal (open → validate
+      Submit stays disabled until non-empty → Cancel leaves the row
+      untouched, deliberately not consuming the shared QA-DEMO fixture
+      row other specs also read) and `SettlementPage`'s Reject modal
+      (bd1 submits a fresh draft via the existing
+      `submitSettlementForApproval` helper, md1 rejects through a real
+      MFA step-up — same redirect-and-retry shape as the pre-existing
+      Approve flow in `settlement.spec.ts` — and the settlement visibly
+      moves to `rejected`). Deliberately no `page.on('dialog')` handler
+      anywhere in the new spec file: a leftover native `window.prompt`
+      would hang the test waiting on a dialog nothing answers, which is
+      a stronger regression signal than asserting its absence directly.
+      The other 4 replaced sites use the identical component with the
+      same shape and aren't independently re-tested.
+    - `tsc --noEmit` clean, `oxlint` clean (same 3 pre-existing warnings
+      in files this change doesn't touch, zero new ones), `vitest`: 24
+      passed, `make test-unit`: 347 passed (no backend change this
+      chunk). Both new e2e tests verified passing (including the full
+      MFA step-up round-trip) against the rebuilt frontend image.
+    - Commits: `64879c7` (modal component + all 6 replacements),
+      `71070ce` (e2e tests).
+
+6. **Taxonomy tree editor** — explicit Phase 3 item: `TaxonomyAdmin.tsx`
+   (the Taxonomy tab on `/admin`) was, per the brief's own words, "a plain
+   parent-id form, not a tree UI."
+   - Rebuilt as an actual hierarchical tree: nodes nested under their
+     parents (built client-side from each node's `parent_id`), per-branch
+     expand/collapse, inline rename, per-node "add child," and a
+     move-to-parent `<select>` gated behind a confirmation step (new
+     `ConfirmModal.tsx` — a yes/no sibling to Phase 3's earlier
+     `TextPromptModal`, so this didn't reach for a new `window.confirm`).
+     A node's own ltree path prefixes its descendants' paths, used
+     client-side to keep a node and its own subtree out of its own "move
+     to" options — the server already rejects a cyclic move via a DB
+     trigger regardless (`move_node`'s own pre-existing comment), so this
+     is a UX nicety on top of a real guard, not the only thing preventing
+     one. All existing role gating (`_WRITE_ROLES`) and mutation wiring
+     unchanged — presentation/interaction change only. The root-level
+     create form deliberately stays always-visible (not behind a button)
+     specifically so Phase 2's existing `admin-audit-permissions.spec.ts`
+     assertions kept passing unmodified — confirmed live, not assumed.
+   - **Two real, previously-hidden backend bugs found and fixed while
+     live-testing the new UI, not by code review**: `update_node` and
+     `move_node` (`backend/app/services/taxonomy.py`) both changed a
+     column via a bare `setattr` + `session.flush()` without refreshing
+     afterward. `updated_at` (`app/db/base.py`'s `TenantEntity`) is
+     `server_default`/`onupdate=func.now()`-driven, so SQLAlchemy marks it
+     expired after an UPDATE instead of populating it from a `RETURNING`
+     clause — the next attribute access (`TradeNodeOut.model_validate` in
+     both routes) then attempts a lazy `SELECT`, which crashes with
+     `MissingGreenlet` under the async driver. Every rename, every
+     active-toggle, and every move through the new UI 500'd — each one
+     confirmed via the real network response and backend traceback before
+     diagnosing and fixing, not guessed at. `move_node` already refreshed
+     `path`/`level` for the identical underlying reason (its own
+     pre-existing comment) but had still missed `updated_at`. Fixed by
+     adding `updated_at` to each function's existing/new
+     `session.refresh(...)` call. 4 new integration tests reproduce the
+     exact route-level failure (`TradeNodeOut.model_validate` reading
+     `updated_at` off the just-mutated ORM object, not just the service
+     call succeeding in isolation).
+   - **Flagging for the main session, not fixed here (out of this task's
+     scope)**: the same `flush()`-without-`refresh()` pattern appears in
+     dozens of other places across `backend/app/services/*.py`. Whether
+     any of those are *live* bugs (not just latent ones) depends on
+     whether each one's response schema actually serializes a
+     server-side-computed column like `updated_at` right after an UPDATE
+     — this needs a systematic sweep to know for sure, similar in spirit
+     to Phase 2's JsonDecimal sweep, not something to guess at or fix
+     piecemeal from inside a UI-focused chunk.
+   - Also found and fixed, purely a test artifact (not a product bug):
+     Playwright's `getByRole(..., {name})` substring-matches by default,
+     so a node named e.g. "QA Root **Rename**d 060xbq" made its own
+     Collapse button (`aria-label="Collapse QA Root Renamed 060xbq"`)
+     match a `{name: 'Rename'}` locator — fixed with `exact: true`.
+     Cleaned up all ~34 test-pattern taxonomy nodes accumulated in the dev
+     DB while debugging this (a scoped `DELETE ... WHERE code LIKE
+     'QA-ROOT-%' OR ...`, children-before-parents to respect the FK
+     `RESTRICT`, verified zero rows remain), so the dev taxonomy tree
+     isn't left cluttered for Phase 4/5.
+   - 2 new e2e tests (10 total pass together with the 8 pre-existing
+     `admin-audit-permissions.spec.ts` tests, confirmed unaffected).
+     `tsc --noEmit` clean, `oxlint` clean (same 3 pre-existing warnings,
+     zero new), `vitest`: 24 passed. `make test-unit`: 347 passed. `make
+     test-integration`: 184 passed. `make test-api`: 26 passed.
+   - Commits: `8e6a360` (backend fix), `1700fd8` (tree editor),
+     `593a16a` (e2e tests).
+
+## Phase 3 — home dashboard per role (final item)
+
+**Status: done. Phase 3 as a whole is now complete.**
+
+Read the brief's exact wording again before designing this: "answers 'what
+needs my attention?'... approvals waiting for me, quarantined mail, quotes
+to review, certificates expiring, RFQs past due, settlements in draft."
+Two of those six examples (approvals waiting for me, certificates
+expiring) had no list endpoint to build a real tile from — added both,
+minimal, following this phase's established route→service→schema pattern:
+
+- `GET /approvals/pending-for-me` (new): mirrors `decide()`'s own
+  authorization exactly — the current step's `required_role` in the
+  caller's roles, requester excluded per the same SoD rule `decide()`
+  enforces — rather than "every pending request", so the tile only ever
+  shows what the viewer can actually act on. 3 integration + 1 api test.
+- `GET /vendor-certificates/expiring?days=30` (new): joins `vendors` for a
+  human-readable name (a bare `vendor_id` isn't useful on a dashboard
+  card), includes already-expired certificates too (same "already a
+  problem" framing `VendorDetailPage.tsx`'s own badge uses). 3 integration
+  + 1 api test.
+- `make test-unit`: 347 passed. `make test-integration`: 190 passed
+  (184 → +6). `make test-api`: 28 passed (26 → +2).
+
+**Built**: `HomeDashboardPage.tsx` at a new `/dashboard` route (nav link
+added; deliberately NOT a replacement for `/` — `ProjectsListPage` stays
+the default landing page, since forcing a post-login redirect without a
+real user validating the new page first felt like the wrong default to
+pick unilaterally). Four tiles, each gated to the roles with real
+server-granted access to its data: Approvals waiting for me
+(lead/proc/bd/md), Quarantined mail (proc/bd/md), Vendor duplicates open
+(lead/proc/bd/md), Certificates expiring (lead/proc/bd/md).
+
+**Deliberately scoped out, not built speculatively**: the brief's other
+four example tiles ("quotes to review", "RFQs past due", "settlements in
+draft", and BOQ/drawing-ingestion items for `estimator`) are all
+project-scoped in this codebase today — there is no endpoint that
+aggregates "quotes to review across every project" or "every project's
+settlements in draft" into one cross-project count, and inventing one
+speculatively for a dashboard pass would violate the brief's own "add
+backend endpoints only where a screen genuinely needs one" (a real
+aggregate endpoint is a bigger, more deliberate design decision — does it
+paginate, does it need its own index, should it exist as a materialized
+view — than this pass should make unilaterally). `estimator`'s dashboard
+section says this honestly (a message pointing back to Projects) rather
+than showing a fake or misleading number. Flagging as a real gap for
+Phase 4/5 or a future decision: a cross-project attention-summary
+endpoint would make this dashboard genuinely complete for every role, not
+just the four business roles above `estimator`.
+
+3 new e2e tests (per-role tile rendering, no console/network errors on
+reload, `estimator`'s honest empty state). `tsc --noEmit` clean, `oxlint`
+clean (same 3 pre-existing warnings, zero new), `vitest`: 24 passed.
+
+Commits: `ab67633` (backend endpoints), `0eb1638` (dashboard UI + e2e).
+
+### Phase 3 final tally
+Built across the whole phase: vendor master + duplicate review +
+prequalification/certificates UI; cost library UI (+ its own new list
+endpoint) + Module E read views; project location/members UI (+ new
+members-list endpoint) + saved-scenario delete (+ a new DELETE endpoint
+and its own missing-RLS-policy migration, `0028`); quotation attachments
+viewer + exclusion-flag acknowledge + fx-rate overrides (quotation- and
+line-level) + settlement per-trade/per-line overrides; a shared
+`Modal`/`TextPromptModal`/`ConfirmModal` component set replacing all 6
+`window.prompt` call sites; a hierarchical taxonomy tree editor (+ 2 real
+backend bugs found and fixed along the way — `update_node`/`move_node`
+never refreshing `updated_at`, causing a 500 on every rename/toggle/move);
+and this home dashboard (+ 2 more new endpoints). Also: the read-only
+`GET /users` endpoint (Keycloak admin API integration, main-session work)
+that several of the above needed for a usable member/user picker.
+
+**Real bugs found and fixed along the way** (not just missing UI):
+completing the JsonDecimal sweep Phase 2 started (main session); a
+quarantine-queue query that never filtered on `needs_review`; a missing
+`audit.record` call on `acknowledge_exclusion_flag`; a missing RLS DELETE
+policy for settlement scenarios; `update_node`/`move_node`'s missing
+`updated_at` refresh (a real, live 500 on every taxonomy write, found
+live building the tree editor, not by inspection).
+
+**Main session follow-up on the flagged `flush()`-without-`refresh()`
+sweep** (resolved, not left as a vague flag): grepped every
+`backend/app/services/*.py` module for a `setattr`-style mutation of an
+already-loaded row followed by `session.flush()` with no refresh, then
+cross-referenced each hit against whether its response schema actually
+exposes an `onupdate`-driven column at all — the bug can only fire when
+both conditions hold (a fresh `session.add()` insert is unaffected,
+since `flush()` does populate server defaults via `INSERT...RETURNING`;
+and a schema that never reads the expired column never triggers a lazy
+load either way). Only four schemas expose `updated_at`:
+`BoqToleranceOut`, `ProcurementPackageOut`, `TradeNodeOut` (already fixed
+this phase), `VendorOut`. Checked all candidate mutate-then-return sites
+against those four and found exactly **one** more live instance:
+`boq.py`'s `set_tolerance` UPDATE branch (setting a tolerance that
+already exists). Fixed the same way as `taxonomy.py` — confirmed the bug
+was real first (reverted the fix, watched the new regression test fail
+with the identical `MissingGreenlet` crash, then restored the fix and
+confirmed green) rather than assuming. `resolve_duplicate` (`vendors.py`,
+mutates a `Vendor.status` in passing) and every `ProcurementPackage`
+mutation were checked and ruled out — neither returns the mutated row
+through a schema read that would actually hit the expired column. `make
+test-integration`: 191 passed (190 → +1). This was a bounded, evidence-
+based check, not an exhaustive audit of every service function's
+correctness — it specifically answers "does this exact bug shape recur,"
+which it now has, twice, both fixed.
+
+**Flagged for the main session / a future decision, not fixed in Phase
+3** (each already detailed in its own entry above):
+- No cross-project "quotes to review / RFQs past due / settlements in
+  draft" aggregate exists — the dashboard's remaining gap for `estimator`
+  and a fuller dashboard generally.
+- Member *removal* has no backend endpoint (only add).
+- `CostRateComponentOut`/`CostItemRateOut` use bare `float` instead of
+  `JsonDecimal` — functionally identical wire format (confirmed, not just
+  assumed), a Phase 4 tidiness item, not a bug.
+
+**Final regression, run independently by the main session before
+merge:** `make test-all` (unit + integration + api, all green — 347/
+191/28), `npm run build` (succeeds), `npx tsc --noEmit` (clean), `oxlint`
+(clean, 3 pre-existing warnings unchanged), `vitest` (24 passed), and the
+full `npm run e2e:real-backend` suite.
+
+**Merged to `master`** (`--no-ff`, not pushed) once all of the above was
+confirmed green — see the merge commit for the full summary.
 
 ## Phase 4: design system and redesign
 Not started.

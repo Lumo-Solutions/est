@@ -387,6 +387,18 @@ async def set_tolerance(
         action = AuditAction.CREATE
 
     await session.flush()
+    if existing is not None:
+        # updated_at (BoqToleranceOut's own field) is server_default/
+        # onupdate=func.now() driven -- SQLAlchemy marks it expired after
+        # this UPDATE flush rather than populating it via RETURNING (unlike
+        # a fresh INSERT's server defaults, which flush() does fetch). The
+        # route's BoqToleranceOut.model_validate(row) then tries a lazy
+        # SELECT outside an awaited context, crashing with MissingGreenlet.
+        # Same root cause and fix as taxonomy.py's update_node/move_node
+        # (found there first, then confirmed live here too via a static
+        # sweep of every other service module's flush-then-return-existing-
+        # row pattern -- see docs/ui-qa/log.md's Phase 3 final tally).
+        await session.refresh(row, attribute_names=["updated_at"])
     await audit.record(
         session, ctx, action=action, entity_type="boq_tolerance", entity_id=row.id, project_id=project_id,
         payload={"trade_node_id": str(trade_node_id) if trade_node_id else None, "tolerance_pct": tolerance_pct},

@@ -11,15 +11,22 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.enums import QuotationLineItemStatus
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.db.rls import set_rls_context
+from app.models.audit import AuditEvent
 from app.models.procurement import ProcurementPackage, Rfq
-from app.models.quotation_ingestion import InboundEmail, Quotation, QuotationAttachment, QuotationLineItem
+from app.models.quotation_ingestion import (
+    InboundEmail,
+    Quotation,
+    QuotationAttachment,
+    QuotationExclusionFlag,
+    QuotationLineItem,
+)
 from app.models.vendors import Vendor
 from app.schemas.boq import BoqLineItemCreate
 from app.services import boq as boq_service
@@ -495,3 +502,97 @@ async def test_bid_leveling_uses_accepted_line_items_not_current_version(rls_ses
     prices = {cell.quotation_id: cell.unit_price for cell in rows_both[0].cells}
     assert prices[quotation_v1.id] == Decimal("100.0")
     assert prices[quotation_v2.id] == Decimal("77.0")
+
+
+# --------------------------------------------------------------------------
+# Phase 3 gap-fill (docs/ui-qa-brief.md): exclusion-flag acknowledge audit,
+# and attachment download presigning/safety-status gating
+# --------------------------------------------------------------------------
+
+
+async def test_acknowledge_exclusion_flag_now_records_an_audit_event(rls_session):
+    """Every other reviewer action in this module (accept/reject line item,
+    set fx rate) audits; acknowledge_exclusion_flag didn't -- found while
+    wiring up its first-ever UI. Fixed alongside this test."""
+    tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
+    quotation, _line = await _seed_quotation_with_line_item(rls_session, tenant_id=tenant_id, rfq=rfq, currency="AED", vat_inclusive=True)
+    flag = QuotationExclusionFlag(
+        tenant_id=tenant_id, quotation_id=quotation.id, project_id=rfq.project_id, flag_text="Excludes scaffolding",
+        source_quote_text="Scaffolding by others", citation_verified=True, confidence=Decimal("0.9"), status="open",
+    )
+    rls_session.add(flag)
+    await rls_session.flush()
+
+    ph_ctx = _ctx(frozenset({"procurement_head"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, ph_ctx)
+    acknowledged = await quotation_service.acknowledge_exclusion_flag(rls_session, ph_ctx, flag.id)
+    assert acknowledged.status == "acknowledged"
+
+    events = (
+        await rls_session.execute(
+            select(AuditEvent.action).where(
+                AuditEvent.entity_type == "quotation_exclusion_flag", AuditEvent.entity_id == str(flag.id)
+            )
+        )
+    ).scalars().all()
+    assert events == ["update"]
+
+
+async def test_acknowledge_exclusion_flag_denied_for_estimator(rls_session):
+    tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
+    quotation, _line = await _seed_quotation_with_line_item(rls_session, tenant_id=tenant_id, rfq=rfq, currency="AED", vat_inclusive=True)
+    flag = QuotationExclusionFlag(
+        tenant_id=tenant_id, quotation_id=quotation.id, project_id=rfq.project_id, flag_text="Excludes scaffolding",
+        source_quote_text="Scaffolding by others", citation_verified=True, confidence=Decimal("0.9"), status="open",
+    )
+    rls_session.add(flag)
+    await rls_session.flush()
+
+    est_ctx = _ctx(frozenset({"estimator"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, est_ctx)
+    with pytest.raises(ForbiddenError):
+        await quotation_service.acknowledge_exclusion_flag(rls_session, est_ctx, flag.id)
+
+
+async def test_presigned_attachment_download_url_only_serves_accepted_attachments(rls_session, monkeypatch):
+    # Real signing needs real S3 credentials, which this test stack doesn't
+    # configure -- same reason test_boq_import_retention.py fakes
+    # put_object_streaming rather than exercising real S3 I/O; this only
+    # needs to prove the safety-status gate and audit call, not that
+    # aiobotocore can sign a URL.
+    async def _fake_presign(object_key, *args, **kwargs):
+        return f"https://s3.test/{object_key}"
+
+    monkeypatch.setattr(quotation_service, "presign_get_url", _fake_presign)
+
+    tenant_id, rfq = await _seed_tenant_project_rfq(rls_session)
+    await _system_ctx(rls_session, tenant_id)
+    inbound_email = await _seed_inbound_email(rls_session, tenant_id=tenant_id, rfq_id=rfq.id, needs_review=False)
+    accepted = QuotationAttachment(
+        tenant_id=tenant_id, inbound_email_id=inbound_email.id, filename="quote.xlsx",
+        size_bytes=1, raw_object_key="inbound/1/quote.xlsx", raw_sha256="0" * 64, safety_status="accepted",
+    )
+    rejected = QuotationAttachment(
+        tenant_id=tenant_id, inbound_email_id=inbound_email.id, filename="quote.exe",
+        size_bytes=1, raw_object_key="inbound/1/quote.exe", raw_sha256="1" * 64, safety_status="rejected_type",
+    )
+    rls_session.add_all([accepted, rejected])
+    await rls_session.flush()
+
+    ph_ctx = _ctx(frozenset({"procurement_head"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, ph_ctx)
+
+    url = await quotation_service.presigned_attachment_download_url(rls_session, ph_ctx, accepted.id)
+    assert url.startswith("http")
+
+    with pytest.raises(ForbiddenError):
+        await quotation_service.presigned_attachment_download_url(rls_session, ph_ctx, rejected.id)
+
+    events = (
+        await rls_session.execute(
+            select(AuditEvent.action).where(
+                AuditEvent.entity_type == "quotation_attachment", AuditEvent.entity_id == str(accepted.id)
+            )
+        )
+    ).scalars().all()
+    assert events == ["download"]

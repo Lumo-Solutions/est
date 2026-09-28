@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { TextPromptModal } from '../components/TextPromptModal'
 import { useTaxonomyNodes } from '../features/admin/api'
 import { useBoqItems } from '../features/boq/api'
 import {
@@ -36,6 +37,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([])
   const [overrideReason, setOverrideReason] = useState('')
+  const [resendTargetId, setResendTargetId] = useState<string | null>(null)
 
   const linkedIds = new Set((items ?? []).map((i) => i.id))
   const availableItems = (allBoqItems ?? []).filter((i) => !linkedIds.has(i.id))
@@ -145,12 +147,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
                 <button
                   type="button"
                   disabled={resend.isPending}
-                  onClick={() => {
-                    // TODO(Phase 3): window.prompt replaced app-wide with a
-                    // proper modal -- see docs/ui-qa/issues.md.
-                    const reason = window.prompt('Reason for resending?')
-                    if (reason) resend.mutate({ rfqId: rfq.id, reason })
-                  }}
+                  onClick={() => setResendTargetId(rfq.id)}
                   className="text-slate-600 underline disabled:opacity-50"
                 >
                   Resend
@@ -162,6 +159,17 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
       </table>
       {dispatch.isError && <p className="mt-1 text-sm text-red-600">Dispatch failed: {dispatch.error.message}</p>}
       {resend.isError && <p className="mt-1 text-sm text-red-600">Resend failed: {resend.error.message}</p>}
+      <TextPromptModal
+        open={resendTargetId !== null}
+        title="Resend RFQ"
+        message="Reason for resending?"
+        submitLabel="Resend"
+        onCancel={() => setResendTargetId(null)}
+        onSubmit={(reason) => {
+          if (resendTargetId) resend.mutate({ rfqId: resendTargetId, reason })
+          setResendTargetId(null)
+        }}
+      />
     </div>
   )
 }

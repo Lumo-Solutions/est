@@ -13,6 +13,7 @@ from app.core.errors import NotFoundError
 from app.schemas.prequal import (
     AuthorityOut,
     CertificateTypeOut,
+    ExpiringVendorCertificateOut,
     PrequalificationDecision,
     VendorCertificateCreate,
     VendorCertificateOut,
@@ -37,6 +38,26 @@ async def list_certificate_types_endpoint(
     ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> list[CertificateTypeOut]:
     return [CertificateTypeOut.model_validate(c) for c in await prequal_service.list_certificate_types(session)]
+
+
+@router.get("/vendors/{vendor_id}/certificates", response_model=list[VendorCertificateOut])
+async def list_vendor_certificates_endpoint(
+    vendor_id: UUID,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[VendorCertificateOut]:
+    rows = await prequal_service.list_certificates_for_vendor(session, vendor_id)
+    return [VendorCertificateOut.model_validate(r) for r in rows]
+
+
+@router.get("/vendor-certificates/expiring", response_model=list[ExpiringVendorCertificateOut])
+async def list_expiring_certificates_endpoint(
+    days: int = Query(default=30, ge=0, le=365),
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[ExpiringVendorCertificateOut]:
+    rows = await prequal_service.list_expiring_certificates(session, days)
+    return [ExpiringVendorCertificateOut.model_validate(r) for r in rows]
 
 
 @router.post("/vendor-certificates", response_model=VendorCertificateOut, status_code=201)

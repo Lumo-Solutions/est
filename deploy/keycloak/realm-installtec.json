@@ -181,7 +181,7 @@
       "bearerOnly": false,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
+      "serviceAccountsEnabled": true,
       "implicitFlowEnabled": false,
       "secret": "CHANGE_ME_CLIENT_SECRET",
       "redirectUris": [

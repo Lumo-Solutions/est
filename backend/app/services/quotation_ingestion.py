@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.enums import (
+    AttachmentSafetyStatus,
     AuditAction,
     InboundEmailMatchStatus,
     QuotationLineItemStatus,
@@ -31,6 +32,7 @@ from app.core.enums import (
 )
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.db.rls import set_rls_context
+from app.integrations.s3 import presign_get_url
 from app.models.procurement import Rfq
 from app.models.quotation_ingestion import (
     InboundEmail,
@@ -262,6 +264,29 @@ async def list_quotation_attachments(session: AsyncSession, quotation_id: UUID) 
     return list(result.scalars().all())
 
 
+async def presigned_attachment_download_url(session: AsyncSession, ctx: RequestContext, attachment_id: UUID) -> str:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): QuotationAttachmentOut never
+    exposed raw_object_key (right call -- a client has no business getting
+    a raw storage key), which meant there was no way to actually view an
+    attachment's bytes, only its metadata. Mirrors
+    app/services/takeoff.py::presigned_download_url's exact shape. Only
+    ACCEPTED attachments are ever servable -- a REJECTED_* one may be
+    exactly the kind of thing attachment_safety.py rejected it for (a zip
+    bomb, a macro), and a still-PENDING one hasn't been scanned yet."""
+    result = await session.execute(select(QuotationAttachment).where(QuotationAttachment.id == attachment_id))
+    attachment = result.scalar_one_or_none()
+    if attachment is None:
+        raise NotFoundError(f"Attachment {attachment_id} not found")
+    if attachment.safety_status != AttachmentSafetyStatus.ACCEPTED.value:
+        raise ForbiddenError(f"Attachment is not downloadable (safety_status={attachment.safety_status})")
+    url = await presign_get_url(attachment.raw_object_key)
+    await audit.record(
+        session, ctx, action=AuditAction.DOWNLOAD, entity_type="quotation_attachment", entity_id=attachment.id,
+        payload={"filename": attachment.filename},
+    )
+    return url
+
+
 async def resolve_currency_and_vat(
     session: AsyncSession, ctx: RequestContext, quotation_id: UUID, currency: str, vat_inclusive: bool
 ) -> Quotation:
@@ -396,6 +421,15 @@ async def acknowledge_exclusion_flag(session: AsyncSession, ctx: RequestContext,
     flag.reviewed_by = ctx.user_id
     flag.reviewed_at = datetime.now(timezone.utc)
     await session.flush()
+    # Every other reviewer action in this module audits (accept_line_item,
+    # reject_line_item, set_quotation_fx_rate) -- this one didn't, found
+    # while wiring up its first-ever UI (Phase 3 gap-fill,
+    # docs/ui-qa-brief.md). Same UPDATE action set_quotation_fx_rate uses
+    # for a reviewer-driven state correction.
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="quotation_exclusion_flag", entity_id=flag.id,
+        payload={"quotation_id": str(flag.quotation_id), "status": "acknowledged"},
+    )
     return flag
 
 

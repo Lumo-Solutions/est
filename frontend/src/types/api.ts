@@ -31,6 +31,25 @@ export interface ProjectLocationUpdate {
   longitude?: number | null
 }
 
+export interface ProjectMemberAdd {
+  user_id: string
+  project_role?: string | null
+}
+
+export interface ProjectMemberOut {
+  user_id: string
+  project_role: string | null
+}
+
+// Mirrors backend/app/schemas/users.py exactly.
+export interface UserOut {
+  id: string
+  username: string
+  email: string | null
+  enabled: boolean
+  roles: string[]
+}
+
 // backend/app/core/enums.py::DrawingStatus
 export type DrawingStatus =
   | 'uploaded'
@@ -415,6 +434,20 @@ export interface InboundEmailOut {
   created_at: string
 }
 
+export interface QuotationAttachmentOut {
+  id: string
+  inbound_email_id: string
+  quotation_id: string | null
+  is_primary: boolean
+  filename: string
+  content_type_declared: string | null
+  content_type_sniffed: string | null
+  size_bytes: number
+  safety_status: string
+  rejection_reason: string | null
+  processed_at: string | null
+}
+
 export interface QuotationOut {
   id: string
   rfq_id: string
@@ -576,6 +609,33 @@ export interface BidSettlementScenarioOut {
   result: SimulateResult
   created_by: string | null
   created_at: string
+}
+
+export interface TradeOverrideUpdate {
+  plant_pct?: number | null
+  overhead_pct?: number | null
+  volatility_pct?: number | null
+  markup_pct?: number | null
+}
+
+export interface LineCostUpdate {
+  cost_source?: 'quotation_line' | 'cost_library_rate' | 'manual' | null
+  source_quotation_line_item_id?: string | null
+  cost_item_id?: string | null
+  valid_on?: string | null
+  manual_unit_cost?: number | null
+  manual_currency?: string | null
+  source_note?: string | null
+  plant_pct_override?: number | null
+  overhead_pct_override?: number | null
+  volatility_pct_override?: number | null
+  markup_pct_override?: number | null
+  line_note?: string | null
+}
+
+export interface FxRateSet {
+  fx_rate: number
+  fx_rate_date: string
 }
 
 export interface BidSettlementTradeOverrideOut {
@@ -754,13 +814,141 @@ export interface DrawingLayerTradeMappingOut {
   trade_node_id: string
 }
 
-// Mirrors backend/app/schemas/vendors.py (fields needed for the admin
-// vendor-regions picker only, not the full duplicate-detection surface).
+// Mirrors backend/app/schemas/vendors.py exactly (expanded from the
+// admin vendor-regions picker's original 4-field subset for Phase 3's
+// vendor master page -- existing callers only used the fields kept here,
+// so this is purely additive).
 export interface VendorOut {
   id: string
   legal_name: string
   trading_name: string | null
+  trade_license_no: string | null
+  license_authority: string | null
+  trn_vat_no: string | null
+  country: string | null
+  emirate: string | null
+  address_line: string | null
+  primary_email: string | null
+  primary_phone: string | null
+  website_domain: string | null
   status: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VendorCreate {
+  legal_name: string
+  trading_name?: string | null
+  trade_license_no?: string | null
+  license_authority?: string | null
+  trn_vat_no?: string | null
+  country?: string | null
+  emirate?: string | null
+  address_line?: string | null
+  primary_email?: string | null
+  primary_phone?: string | null
+  website_domain?: string | null
+  notes?: string | null
+}
+
+export interface DuplicateCandidateOut {
+  id: string
+  vendor_a_id: string
+  vendor_b_id: string
+  score: number
+  signals: Record<string, number> | null
+  status: string
+  detected_at: string
+}
+
+export interface DuplicateCandidatePreview {
+  existing_vendor_id: string
+  existing_vendor_name: string
+  score: number
+  signals: Record<string, number>
+}
+
+export interface DuplicateCheckResult {
+  candidates: DuplicateCandidatePreview[]
+  highest_score: number
+}
+
+export interface DuplicateResolveRequest {
+  resolution: 'confirmed_duplicate' | 'not_duplicate' | 'merged'
+  resolution_note?: string | null
+}
+
+// Mirrors backend/app/schemas/prequal.py exactly.
+export interface AuthorityOut {
+  id: string
+  code: string
+  name: string
+  jurisdiction: string | null
+}
+
+export interface CertificateTypeOut {
+  id: string
+  authority_id: string
+  code: string
+  name: string
+  validity_months: number | null
+  is_mandatory: boolean
+  warn_days_before: number
+}
+
+export interface VendorCertificateCreate {
+  vendor_id: string
+  certificate_type_id: string
+  certificate_no?: string | null
+  issue_date?: string | null
+  expiry_date?: string | null
+  document_object_key?: string | null
+  document_sha256?: string | null
+}
+
+export interface VendorCertificateOut {
+  id: string
+  vendor_id: string
+  certificate_type_id: string
+  certificate_no: string | null
+  issue_date: string | null
+  expiry_date: string | null
+  status: string
+  verified_by: string | null
+  verified_at: string | null
+}
+
+// Mirrors backend/app/schemas/prequal.py's ExpiringVendorCertificateOut
+// exactly (Phase 3 gap-fill, docs/ui-qa-brief.md: home dashboard).
+export interface ExpiringVendorCertificateOut {
+  id: string
+  vendor_id: string
+  vendor_name: string
+  certificate_type_id: string
+  expiry_date: string
+  status: string
+}
+
+export interface PrequalificationDecision {
+  status: string
+  grade?: string | null
+  max_award_value?: number | null
+  scope_trade_node_id?: string | null
+  effective_from: string
+  decision_note?: string | null
+}
+
+export interface VendorPrequalificationOut {
+  id: string
+  vendor_id: string
+  status: string
+  grade: string | null
+  max_award_value: number | null
+  scope_trade_node_id: string | null
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
 }
 
 export interface Page<T> {
@@ -768,6 +956,149 @@ export interface Page<T> {
   total: number
   limit: number
   offset: number
+}
+
+// Mirrors backend/app/schemas/costlib.py exactly. unit_cost/amount/
+// total_rate/confidence are bare `number` here because the backend itself
+// uses plain float, not Decimal/JsonDecimal, for cost-library money fields
+// end to end (a pre-existing, different issue from the JsonDecimal-string
+// bug fixed elsewhere -- flagged in docs/ui-qa/log.md Phase 3 for the main
+// session, not something this UI can fix on its own).
+export interface CostItemOut {
+  id: string
+  code: string
+  description: string
+  uom: string
+  trade_node_id: string | null
+  item_type: string
+  is_active: boolean
+}
+
+export interface CostItemCreate {
+  code: string
+  description: string
+  long_description?: string | null
+  uom: string
+  trade_node_id?: string | null
+  item_type?: string
+  attributes?: Record<string, unknown> | null
+}
+
+export interface CostRateComponentIn {
+  component_type: string
+  description: string
+  resource_code?: string | null
+  quantity_per_uom?: number
+  unit_cost: number
+  waste_factor?: number
+  productivity?: number | null
+  sort_order?: number
+}
+
+export interface CostRateComponentOut {
+  id: string
+  component_type: string
+  description: string
+  resource_code: string | null
+  quantity_per_uom: number
+  unit_cost: number
+  waste_factor: number
+  amount: number
+  sort_order: number
+}
+
+export interface RecordRateRequest {
+  scope_key?: string
+  currency?: string
+  valid_from: string
+  valid_to?: string | null
+  source?: string
+  source_ref?: string | null
+  confidence?: number | null
+  components: CostRateComponentIn[]
+}
+
+export interface CostItemRateOut {
+  id: string
+  cost_item_id: string
+  scope_key: string
+  currency: string
+  total_rate: number
+  source: string
+  source_ref: string | null
+  confidence: number | null
+  components: CostRateComponentOut[]
+}
+
+// Mirrors backend/app/schemas/module_e.py exactly.
+export interface ContractOut {
+  id: string
+  project_id: string
+  settlement_id: string
+  contract_ref: string | null
+  status: string
+  awarded_at: string | null
+  created_at: string
+}
+
+export interface BoqRevisionOut {
+  id: string
+  project_id: string
+  revision_no: number
+  parent_revision_id: string | null
+  import_batch_id: string | null
+  reason: string | null
+  created_at: string
+}
+
+export interface ContractRevisionOut {
+  id: string
+  project_id: string
+  contract_id: string
+  revision_no: number
+  parent_revision_id: string | null
+  reason: string | null
+  created_at: string
+}
+
+export interface ContractVariationOut {
+  id: string
+  project_id: string
+  contract_id: string
+  revision_id: string
+  variation_ref: string | null
+  description: string
+  delta_amount: number | null
+  status: string
+  created_at: string
+}
+
+export interface ExclusionRegisterEntryOut {
+  id: string
+  project_id: string
+  contract_id: string | null
+  source_exclusion_flag_id: string | null
+  description: string
+  status: string
+  resolution_note: string | null
+  resolved_by: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface OutturnCostObservationOut {
+  id: string
+  project_id: string
+  contract_id: string
+  boq_line_item_id: string | null
+  cost_item_id: string | null
+  observed_unit_cost: number
+  observed_quantity: number | null
+  currency: string
+  observed_at: string
+  source_note: string | null
+  written_back_rate_id: string | null
+  created_at: string
 }
 
 // Mirrors backend/app/schemas/approvals.py.
@@ -810,6 +1141,34 @@ export interface ApprovalPolicyOut {
   mode: string
   is_active: boolean
   tiers: ApprovalPolicyTierOut[]
+}
+
+// Mirrors backend/app/schemas/approvals.py's ApprovalStepOut/ApprovalRequestOut
+// exactly (Phase 3 gap-fill, docs/ui-qa-brief.md: home dashboard's
+// "approvals waiting for me" tile).
+export interface ApprovalStepOut {
+  id: string
+  seq: number
+  required_role: string
+  status: string
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
+}
+
+export interface ApprovalRequestOut {
+  id: string
+  project_id: string | null
+  entity_type: string
+  entity_id: string
+  amount: number
+  currency: string
+  status: string
+  current_seq: number
+  requested_by: string
+  requested_at: string
+  completed_at: string | null
+  steps: ApprovalStepOut[]
 }
 
 export interface ApprovalPolicySetActive {

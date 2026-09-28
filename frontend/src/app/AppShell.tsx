@@ -46,6 +46,8 @@ function projectNavItems(projectId: string): NavItem[] {
     },
     { label: 'Export', to: `/projects/${projectId}/export` },
     { label: 'Win/loss', to: `/projects/${projectId}/win-loss` },
+    // module_e.py's endpoints are all CurrentUser (any role), read-only.
+    { label: 'Post-award', to: `/projects/${projectId}/module-e` },
   ]
 }
 
@@ -58,6 +60,17 @@ function projectNavItems(projectId: string): NavItem[] {
 // guaranteed 403 on load (docs/ui-qa/issues.md UI-P2-022).
 const GLOBAL_NAV_ITEMS: NavItem[] = [
   { label: 'Projects', to: '/' },
+  // No requiresRoles: HomeDashboardPage checks per-tile roles itself and
+  // shows a sensible message for a role with no cross-project tile (an
+  // estimator, whose relevant items are all project-scoped today).
+  { label: 'Dashboard', to: '/dashboard' },
+  // No requiresRoles: reading the vendor directory is useful to every role
+  // (matches GET /vendors's own "any authenticated user" server check) --
+  // only the write actions inside VendorsPage/VendorDetailPage are gated.
+  { label: 'Vendors', to: '/vendors' },
+  // Same reasoning as Vendors above: GET /cost-items has no role
+  // restriction server-side, only create/record-rate do.
+  { label: 'Cost library', to: '/cost-library' },
   { label: 'Admin', to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
   { label: 'Audit', to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
 ]

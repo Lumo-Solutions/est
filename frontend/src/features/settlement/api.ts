@@ -2,16 +2,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, downloadFile } from '../../lib/api'
 import type {
   ApprovalDecision,
+  BidSettlementLineItemOut,
   BidSettlementOut,
   BidSettlementScenarioOut,
+  BidSettlementTradeOverrideOut,
   ExportRequest,
   FidelityReportOut,
+  FxRateSet,
+  LineCostUpdate,
   OutcomeRequest,
   ScenarioCreate,
   SettlementDefaultsUpdate,
   SettlementReasonCodeOut,
   SimulateRequest,
   SimulateResult,
+  TradeOverrideUpdate,
 } from '../../types/api'
 
 export function useSettlements(projectId: string | undefined) {
@@ -79,6 +84,41 @@ export function useSaveScenario(settlementId: string | undefined) {
     mutationFn: (data: ScenarioCreate) =>
       api.post<BidSettlementScenarioOut>(`/bid-settlements/${settlementId}/scenarios`, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bid-settlements', settlementId, 'scenarios'] }),
+  })
+}
+
+export function useDeleteScenario(settlementId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (scenarioId: string) => api.delete<void>(`/bid-settlements/${settlementId}/scenarios/${scenarioId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bid-settlements', settlementId, 'scenarios'] }),
+  })
+}
+
+export function useSetTradeOverride(projectId: string | undefined, settlementId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ tradeNodeId, data }: { tradeNodeId: string; data: TradeOverrideUpdate }) =>
+      api.put<BidSettlementTradeOverrideOut>(`/bid-settlements/${settlementId}/trade-overrides/${tradeNodeId}`, data),
+    onSuccess: () => invalidateSettlement(queryClient, projectId, settlementId),
+  })
+}
+
+export function useUpdateSettlementLine(projectId: string | undefined, settlementId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ lineId, data }: { lineId: string; data: LineCostUpdate }) =>
+      api.patch<BidSettlementLineItemOut>(`/bid-settlements/${settlementId}/lines/${lineId}`, data),
+    onSuccess: () => invalidateSettlement(queryClient, projectId, settlementId),
+  })
+}
+
+export function useSetLineFxRate(projectId: string | undefined, settlementId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ lineId, data }: { lineId: string; data: FxRateSet }) =>
+      api.post<BidSettlementLineItemOut>(`/bid-settlements/${settlementId}/lines/${lineId}/fx-rate`, data),
+    onSuccess: () => invalidateSettlement(queryClient, projectId, settlementId),
   })
 }
 

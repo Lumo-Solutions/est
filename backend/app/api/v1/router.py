@@ -18,6 +18,7 @@ from app.api.v1.routes import (
     settlement,
     taxonomy,
     typology,
+    users,
     vendors,
 )
 
@@ -38,3 +39,4 @@ api_router.include_router(quotation_ingestion.router)
 api_router.include_router(semantic_matching.router)
 api_router.include_router(settlement.router)
 api_router.include_router(typology.router)
+api_router.include_router(users.router)

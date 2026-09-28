@@ -1,15 +1,19 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { TextPromptModal } from '../components/TextPromptModal'
 import { useProcurementPackages, useRfqs } from '../features/procurement/api'
 import {
+  attachmentDownloadHref,
   useAcceptLineItem,
   usePromoteQuotationVersion,
+  useQuotationAttachments,
   useQuotationLineItems,
   useQuotationsForRfq,
   useRejectLineItem,
   useRejectQuotation,
   useResolveCurrencyVat,
+  useSetQuotationFxRate,
 } from '../features/quotations/api'
 import { Role } from '../lib/roles'
 import type { QuotationOut } from '../types/api'
@@ -23,6 +27,36 @@ import type { QuotationOut } from '../types/api'
 // working-looking controls that just silently 403'd.
 const REVIEW_ROLES = [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
+function AttachmentsList({ quotationId }: { quotationId: string }) {
+  const { data: attachments, isLoading, isError, error } = useQuotationAttachments(quotationId)
+
+  if (isLoading) return <p className="mt-2 text-xs text-slate-500">Loading attachments...</p>
+  if (isError) return <p className="mt-2 text-xs text-red-600">{error.message}</p>
+  if (!attachments || attachments.length === 0) return <p className="mt-2 text-xs text-slate-500">No attachments.</p>
+
+  return (
+    <ul className="mt-2 space-y-1 text-xs">
+      {attachments.map((a) => (
+        <li key={a.id} className="flex items-center justify-between">
+          <span>
+            {a.filename} {a.is_primary && <span className="text-slate-400">(primary)</span>} --{' '}
+            {(a.size_bytes / 1024).toFixed(1)} KB
+          </span>
+          {a.safety_status === 'accepted' ? (
+            <a href={attachmentDownloadHref(a.id)} target="_blank" rel="noreferrer" className="text-slate-600 underline">
+              Download
+            </a>
+          ) : (
+            <span className="text-slate-400" title={a.rejection_reason ?? ''}>
+              Not downloadable ({a.safety_status})
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: QuotationOut }) {
   const { hasRole } = useAuth()
   const canReview = hasRole(...REVIEW_ROLES)
@@ -32,7 +66,11 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
   const promote = usePromoteQuotationVersion(rfqId)
   const resolveCurrencyVat = useResolveCurrencyVat(rfqId)
   const rejectQuotation = useRejectQuotation(rfqId)
+  const setFxRate = useSetQuotationFxRate()
   const [currency, setCurrency] = useState(quotation.currency ?? '')
+  const [fxRate, setFxRateInput] = useState('')
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false)
+  const [rejectPromptOpen, setRejectPromptOpen] = useState(false)
 
   return (
     <div className={`rounded border p-3 ${quotation.is_current ? 'border-slate-400' : 'border-slate-200'}`}>
@@ -69,10 +107,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
           </button>
           <button
             type="button"
-            onClick={() => {
-              const reason = window.prompt('Reject reason?')
-              if (reason) rejectQuotation.mutate({ quotationId: quotation.id, reason })
-            }}
+            onClick={() => setRejectPromptOpen(true)}
             className="text-xs text-red-600 underline"
           >
             Reject quotation
@@ -81,6 +116,47 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
       )}
       {resolveCurrencyVat.isError && <p className="mt-1 text-xs text-red-600">{resolveCurrencyVat.error.message}</p>}
       {rejectQuotation.isError && <p className="mt-1 text-xs text-red-600">{rejectQuotation.error.message}</p>}
+      <TextPromptModal
+        open={rejectPromptOpen}
+        title="Reject quotation"
+        message="Reject reason?"
+        submitLabel="Reject"
+        onCancel={() => setRejectPromptOpen(false)}
+        onSubmit={(reason) => {
+          rejectQuotation.mutate({ quotationId: quotation.id, reason })
+          setRejectPromptOpen(false)
+        }}
+      />
+
+      {canReview && (
+        <div className="mt-2 flex items-end gap-2">
+          <input
+            placeholder={quotation.fx_rate_to_base != null ? `Current: ${quotation.fx_rate_to_base}` : 'FX rate to base'}
+            value={fxRate}
+            onChange={(e) => setFxRateInput(e.target.value)}
+            className="w-32 rounded border border-slate-300 px-1 py-0.5 text-xs"
+          />
+          <button
+            type="button"
+            disabled={!fxRate || setFxRate.isPending}
+            onClick={() =>
+              setFxRate.mutate(
+                { quotationId: quotation.id, data: { fx_rate_to_base: Number(fxRate), fx_rate_date: new Date().toISOString().slice(0, 10) } },
+                { onSuccess: () => setFxRateInput('') },
+              )
+            }
+            className="text-xs text-slate-600 underline disabled:opacity-50"
+          >
+            Set FX rate
+          </button>
+        </div>
+      )}
+      {setFxRate.isError && <p className="mt-1 text-xs text-red-600">{setFxRate.error.message}</p>}
+
+      <button type="button" onClick={() => setAttachmentsOpen((v) => !v)} className="mt-2 text-xs text-slate-600 underline">
+        {attachmentsOpen ? 'Hide attachments' : 'Show attachments'}
+      </button>
+      {attachmentsOpen && <AttachmentsList quotationId={quotation.id} />}
 
       <table className="mt-2 w-full text-left text-xs">
         <thead className="text-slate-500">

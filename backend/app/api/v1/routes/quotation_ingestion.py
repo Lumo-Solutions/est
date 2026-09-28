@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_session, require_roles
@@ -106,6 +107,14 @@ async def list_quotation_attachments_endpoint(
 ) -> list[QuotationAttachmentOut]:
     rows = await quotation_service.list_quotation_attachments(session, quotation_id)
     return [QuotationAttachmentOut.model_validate(r) for r in rows]
+
+
+@router.get("/quotation-attachments/{attachment_id}/download")
+async def download_quotation_attachment_endpoint(
+    attachment_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> RedirectResponse:
+    url = await quotation_service.presigned_attachment_download_url(session, ctx, attachment_id)
+    return RedirectResponse(url)
 
 
 @router.post("/quotations/{quotation_id}/promote", response_model=QuotationOut)

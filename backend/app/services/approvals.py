@@ -211,6 +211,35 @@ async def create_request(session: AsyncSession, ctx: RequestContext, data: Appro
     return request
 
 
+async def list_pending_for_caller(session: AsyncSession, ctx: RequestContext) -> list[ApprovalRequest]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): home dashboard's "approvals
+    waiting for me" tile -- no list endpoint existed before this, only
+    get-by-id. Mirrors decide()'s own "is this actually waiting on me"
+    check exactly (current step's required_role in ctx.roles, requester
+    excluded per the same SoD rule decide() enforces) rather than just
+    "every pending request", so a caller never sees one they can't actually
+    act on."""
+    result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending"))
+    requests = list(result.scalars().all())
+    if not requests:
+        return []
+    steps_result = await session.execute(
+        select(ApprovalStep).where(ApprovalStep.request_id.in_([r.id for r in requests]))
+    )
+    steps_by_request: dict[UUID, list[ApprovalStep]] = {}
+    for step in steps_result.scalars().all():
+        steps_by_request.setdefault(step.request_id, []).append(step)
+
+    waiting_on_me = []
+    for request in requests:
+        if request.requested_by == ctx.user_id:
+            continue
+        current_step = next((s for s in steps_by_request.get(request.id, []) if s.seq == request.current_seq), None)
+        if current_step is not None and current_step.status == "pending" and current_step.required_role in ctx.roles:
+            waiting_on_me.append(request)
+    return waiting_on_me
+
+
 async def get_request(session: AsyncSession, request_id: UUID) -> tuple[ApprovalRequest, list[ApprovalStep]]:
     result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.id == request_id))
     request = result.scalar_one_or_none()

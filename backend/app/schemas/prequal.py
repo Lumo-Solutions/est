@@ -47,6 +47,19 @@ class VendorCertificateOut(ORMModel):
     verified_at: datetime | None
 
 
+class ExpiringVendorCertificateOut(ORMModel):
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): the home dashboard's
+    "certificates expiring" tile needs a vendor name to be useful -- a bare
+    VendorCertificateOut's vendor_id alone isn't human-readable."""
+
+    id: UUID
+    vendor_id: UUID
+    vendor_name: str
+    certificate_type_id: UUID
+    expiry_date: date
+    status: str
+
+
 class PrequalificationDecision(BaseModel):
     status: str
     grade: str | None = None

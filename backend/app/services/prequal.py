@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -11,6 +11,7 @@ from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError
 from app.models.prequal import Authority, CertificateType, VendorCertificate, VendorPrequalification
+from app.models.vendors import Vendor
 from app.schemas.prequal import PrequalificationDecision, VendorCertificateCreate
 from app.services import audit
 
@@ -21,6 +22,43 @@ async def list_authorities(session: AsyncSession) -> list[Authority]:
 
 async def list_certificate_types(session: AsyncSession) -> list[CertificateType]:
     return list((await session.execute(select(CertificateType))).scalars().all())
+
+
+async def list_certificates_for_vendor(session: AsyncSession, vendor_id: UUID) -> list[VendorCertificate]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): only single-cert add/verify
+    existed before -- a certificates screen with expiry alerts needs to see
+    every certificate a vendor has, not just one at a time."""
+    result = await session.execute(
+        select(VendorCertificate)
+        .where(VendorCertificate.vendor_id == vendor_id)
+        .order_by(VendorCertificate.expiry_date.asc().nulls_last())
+    )
+    return list(result.scalars().all())
+
+
+async def list_expiring_certificates(session: AsyncSession, days: int) -> list[dict]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): home dashboard's
+    "certificates expiring" tile -- across every vendor, not one at a
+    time. Includes already-expired ones too (expiry_date <= today +
+    days), same "already a problem, not just approaching one" framing
+    VendorDetailPage.tsx's own expiry badge uses. Returns plain dicts
+    (vendor_name comes from a join, not a single ORM row) for the route to
+    build ExpiringVendorCertificateOut from."""
+    cutoff = date.today() + timedelta(days=days)
+    result = await session.execute(
+        select(
+            VendorCertificate.id,
+            VendorCertificate.vendor_id,
+            Vendor.legal_name.label("vendor_name"),
+            VendorCertificate.certificate_type_id,
+            VendorCertificate.expiry_date,
+            VendorCertificate.status,
+        )
+        .join(Vendor, Vendor.id == VendorCertificate.vendor_id)
+        .where(VendorCertificate.expiry_date.is_not(None), VendorCertificate.expiry_date <= cutoff)
+        .order_by(VendorCertificate.expiry_date.asc())
+    )
+    return [dict(row._mapping) for row in result.all()]
 
 
 async def add_certificate(
