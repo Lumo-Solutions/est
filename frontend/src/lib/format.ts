@@ -10,3 +10,16 @@ export const MARGIN_PCT_DECIMALS = 3
 export function formatMarginPct(value: number): string {
   return value.toFixed(MARGIN_PCT_DECIMALS)
 }
+
+// docs/ui-qa-brief.md's money rule: thousands separators, 2dp, currency
+// code shown (not a "$"-style symbol -- this app deals in AED, occasionally
+// other currencies on a quotation, never USD by default). No shared
+// formatter existed anywhere in the frontend before this (see
+// docs/ui-qa/issues.md's Phase 2 cross-cutting note) -- used here for the
+// settlement per-trade/per-line override UI (Phase 3 gap-fill); a broader
+// pass to use this everywhere else money is displayed belongs to Phase 4.
+const AED_FORMATTER = new Intl.NumberFormat('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+export function formatMoney(value: number, currency = 'AED'): string {
+  return `${currency} ${AED_FORMATTER.format(value)}`
+}

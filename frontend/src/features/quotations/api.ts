@@ -4,6 +4,7 @@ import type {
   AttachInboundEmailRequest,
   BidLevelingRowOut,
   InboundEmailOut,
+  QuotationAttachmentOut,
   QuotationExclusionFlagOut,
   QuotationFxRateSet,
   QuotationLineItemOut,
@@ -79,6 +80,32 @@ export function useQuotationExclusionFlags(quotationId: string | undefined) {
       api.get<QuotationExclusionFlagOut[]>(`/quotations/${quotationId}/exclusion-flags`, signal),
     enabled: Boolean(quotationId),
   })
+}
+
+export function useAcknowledgeExclusionFlag(quotationId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (flagId: string) => api.post<QuotationExclusionFlagOut>(`/quotation-exclusion-flags/${flagId}/acknowledge`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['quotations', quotationId, 'exclusion-flags'] }),
+  })
+}
+
+export function useQuotationAttachments(quotationId: string | undefined) {
+  return useQuery({
+    queryKey: ['quotations', quotationId, 'attachments'],
+    queryFn: ({ signal }) => api.get<QuotationAttachmentOut[]>(`/quotations/${quotationId}/attachments`, signal),
+    enabled: Boolean(quotationId),
+  })
+}
+
+// GET /quotation-attachments/{id}/download redirects to a presigned S3 URL
+// (backend/app/api/v1/routes/quotation_ingestion.py) -- a plain same-origin
+// link lets the browser carry the session cookie and follow the redirect
+// itself, same as any other authenticated GET; no need for downloadFile's
+// fetch-as-blob dance (that's for POST export endpoints that return the
+// file body directly, not a redirect).
+export function attachmentDownloadHref(attachmentId: string): string {
+  return `/api/v1/quotation-attachments/${attachmentId}/download`
 }
 
 function useLineItemAction(quotationId: string | undefined, action: 'accept' | 'reject') {

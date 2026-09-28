@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useProcurementPackages } from '../features/procurement/api'
-import { useBidLevelingMatrix, useQuotationExclusionFlags, useQuotationTotals } from '../features/quotations/api'
+import { useAcknowledgeExclusionFlag, useBidLevelingMatrix, useQuotationExclusionFlags, useQuotationTotals } from '../features/quotations/api'
+import { Role } from '../lib/roles'
+
+// Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
+// same roles as every other quotation-review action (accept/reject line,
+// reject quotation, promote, fx-rate).
+const ACKNOWLEDGE_ROLES = [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
 function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
+  const { hasRole } = useAuth()
   const { data: flags } = useQuotationExclusionFlags(quotationId)
+  const acknowledge = useAcknowledgeExclusionFlag(quotationId)
   return (
     <div className="mt-4 border-t border-slate-200 pt-4">
       <h3 className="text-sm font-semibold text-slate-800">Exclusion flags and citations</h3>
@@ -16,7 +25,7 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
             <p className="mt-1 text-xs text-slate-600">
               "{f.source_quote_text}" {f.source_location && `(${f.source_location})`}
             </p>
-            <p className="mt-1 text-xs">
+            <p className="mt-1 flex items-center gap-2 text-xs">
               {f.citation_verified ? (
                 <span className="text-green-700">Citation verified</span>
               ) : (
@@ -24,10 +33,21 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
               )}
               {' · '}
               {f.status}
+              {f.status !== 'acknowledged' && hasRole(...ACKNOWLEDGE_ROLES) && (
+                <button
+                  type="button"
+                  disabled={acknowledge.isPending}
+                  onClick={() => acknowledge.mutate(f.id)}
+                  className="text-slate-600 underline disabled:opacity-50"
+                >
+                  Acknowledge
+                </button>
+              )}
             </p>
           </li>
         ))}
       </ul>
+      {acknowledge.isError && <p className="mt-1 text-xs text-red-600">{acknowledge.error.message}</p>}
     </div>
   )
 }

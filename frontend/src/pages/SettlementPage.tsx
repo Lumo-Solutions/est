@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useTaxonomyNodes } from '../features/admin/api'
 import {
   useBuildSettlementDraft,
   useDecideSettlement,
@@ -8,13 +9,17 @@ import {
   useRefreshQuantities,
   useSaveScenario,
   useScenarios,
+  useSettlement,
+  useSetLineFxRate,
+  useSetTradeOverride,
   useSimulate,
   useSubmitSettlement,
+  useUpdateSettlementLine,
 } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
-import { formatMarginPct } from '../lib/format'
+import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
-import type { BidSettlementOut, SimulateRequest, SimulateResult } from '../types/api'
+import type { BidSettlementLineItemOut, BidSettlementOut, BidSettlementTradeOverrideOut, SimulateRequest, SimulateResult } from '../types/api'
 
 // Mirrors backend/app/api/v1/routes/settlement.py's _HEADER_ROLES/_SUBMIT_ROLES:
 // building/rebuilding a draft is lead_estimator/procurement_head/bd_director/
@@ -29,6 +34,206 @@ const SUBMIT_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 // Mirrors _LINE_ROLES exactly (same roles that can save a scenario in the
 // first place) -- every business role except platform_admin.
 const SCENARIO_DELETE_ROLES = [Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+// Mirrors _HEADER_ROLES -- PUT .../trade-overrides/{id} (backend/app/api/v1/
+// routes/settlement.py).
+const TRADE_OVERRIDE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+// Mirrors _LINE_ROLES -- PATCH .../lines/{id} is open to estimator too,
+// unlike the trade-level override above.
+const LINE_OVERRIDE_ROLES = [Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+// PATCH .../lines/{id}/fx-rate is _HEADER_ROLES specifically (not
+// _LINE_ROLES) -- an estimator can override a line's manual cost but not
+// its FX rate.
+const LINE_FX_RATE_ROLES = TRADE_OVERRIDE_ROLES
+
+const PCT_FIELDS = [
+  { key: 'plant_pct', label: 'Plant %' },
+  { key: 'overhead_pct', label: 'Overhead %' },
+  { key: 'volatility_pct', label: 'Volatility %' },
+  { key: 'markup_pct', label: 'Markup %' },
+] as const
+
+function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { projectId: string; settlementId: string; tradeOverrides: BidSettlementTradeOverrideOut[] }) {
+  const { hasRole } = useAuth()
+  const { data: tradeNodes } = useTaxonomyNodes()
+  const setOverride = useSetTradeOverride(projectId, settlementId)
+  const [newTradeNodeId, setNewTradeNodeId] = useState('')
+  const [newValues, setNewValues] = useState<Record<string, string>>({})
+
+  if (!hasRole(...TRADE_OVERRIDE_ROLES)) return null
+
+  return (
+    <div className="mt-4 border-t border-slate-200 pt-4">
+      <h3 className="text-sm font-semibold text-slate-800">Per-trade overrides</h3>
+      <p className="mt-1 text-xs text-slate-500">
+        Away from the project defaults above, for one trade at a time. Leave a field blank to keep whatever override
+        already exists for that trade (or the project default, if none).
+      </p>
+      {tradeOverrides.length > 0 && (
+        <ul className="mt-2 space-y-1 text-sm">
+          {tradeOverrides.map((o) => {
+            const tradeName = tradeNodes?.find((t) => t.id === o.trade_node_id)?.name ?? o.trade_node_id
+            return (
+              <li key={o.id} className="rounded border border-slate-200 px-2 py-1">
+                <span className="font-medium">{tradeName}</span>{' '}
+                {PCT_FIELDS.map(({ key, label }) => {
+                  const value = o[key as keyof BidSettlementTradeOverrideOut] as number | null
+                  return (
+                    <span key={key} className="ml-2 text-xs text-slate-600">
+                      {label}: {value != null ? `${value}%` : 'default'}
+                    </span>
+                  )
+                })}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <form
+        className="mt-2 flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!newTradeNodeId) return
+          const data = Object.fromEntries(
+            PCT_FIELDS.map(({ key }) => [key, newValues[key] ? Number(newValues[key]) : null]),
+          )
+          setOverride.mutate({ tradeNodeId: newTradeNodeId, data }, { onSuccess: () => setNewValues({}) })
+        }}
+      >
+        <select
+          value={newTradeNodeId}
+          onChange={(e) => setNewTradeNodeId(e.target.value)}
+          className="rounded border border-slate-300 px-2 py-1 text-sm"
+        >
+          <option value="">-- Select trade --</option>
+          {(tradeNodes ?? []).map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        {PCT_FIELDS.map(({ key, label }) => (
+          <input
+            key={key}
+            placeholder={label}
+            value={newValues[key] ?? ''}
+            onChange={(e) => setNewValues((v) => ({ ...v, [key]: e.target.value }))}
+            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+          />
+        ))}
+        <button
+          type="submit"
+          disabled={!newTradeNodeId || setOverride.isPending}
+          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          Set override
+        </button>
+      </form>
+      {setOverride.isError && <p className="mt-1 text-sm text-red-600">{setOverride.error.message}</p>}
+    </div>
+  )
+}
+
+function LineOverrideRow({ projectId, settlementId, line }: { projectId: string; settlementId: string; line: BidSettlementLineItemOut }) {
+  const { hasRole } = useAuth()
+  const updateLine = useUpdateSettlementLine(projectId, settlementId)
+  const setFxRate = useSetLineFxRate(projectId, settlementId)
+  const [editing, setEditing] = useState(false)
+  const [manualCost, setManualCost] = useState('')
+  const [fxRate, setFxRateInput] = useState('')
+
+  return (
+    <li className="rounded border border-slate-200 px-2 py-1 text-sm">
+      <div className="flex items-center justify-between">
+        <span>
+          Line {line.id.slice(0, 8)} -- qty {line.quantity} -- sell rate{' '}
+          {line.unit_sell_rate != null ? formatMoney(line.unit_sell_rate) : '--'} -- amount{' '}
+          {line.line_amount != null ? formatMoney(line.line_amount) : '--'}
+        </span>
+        {hasRole(...LINE_OVERRIDE_ROLES) && (
+          <button type="button" onClick={() => setEditing((v) => !v)} className="text-xs text-slate-600 underline">
+            {editing ? 'Close' : 'Override'}
+          </button>
+        )}
+      </div>
+      {editing && (
+        <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-slate-100 pt-2">
+          <div>
+            <label className="block text-xs text-slate-500" htmlFor={`manual-${line.id}`}>
+              Manual unit cost
+            </label>
+            <input
+              id={`manual-${line.id}`}
+              placeholder={line.direct_unit_cost != null ? String(line.direct_unit_cost) : ''}
+              value={manualCost}
+              onChange={(e) => setManualCost(e.target.value)}
+              className="w-32 rounded border border-slate-300 px-2 py-1 text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={!manualCost || updateLine.isPending}
+            onClick={() =>
+              updateLine.mutate(
+                { lineId: line.id, data: { cost_source: 'manual', manual_unit_cost: Number(manualCost) } },
+                { onSuccess: () => setManualCost('') },
+              )
+            }
+            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Set cost
+          </button>
+          {hasRole(...LINE_FX_RATE_ROLES) && (
+            <>
+              <div>
+                <label className="block text-xs text-slate-500" htmlFor={`fx-${line.id}`}>
+                  FX rate (to {'>'} base)
+                </label>
+                <input
+                  id={`fx-${line.id}`}
+                  placeholder={line.fx_rate != null ? String(line.fx_rate) : '1.0'}
+                  value={fxRate}
+                  onChange={(e) => setFxRateInput(e.target.value)}
+                  className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={!fxRate || setFxRate.isPending}
+                onClick={() =>
+                  setFxRate.mutate(
+                    { lineId: line.id, data: { fx_rate: Number(fxRate), fx_rate_date: new Date().toISOString().slice(0, 10) } },
+                    { onSuccess: () => setFxRateInput('') },
+                  )
+                }
+                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Set FX rate
+              </button>
+            </>
+          )}
+          {updateLine.isError && <p className="w-full text-xs text-red-600">{updateLine.error.message}</p>}
+          {setFxRate.isError && <p className="w-full text-xs text-red-600">{setFxRate.error.message}</p>}
+        </div>
+      )}
+    </li>
+  )
+}
+
+function LineOverridesPanel({ projectId, settlementId, lines }: { projectId: string; settlementId: string; lines: BidSettlementLineItemOut[] }) {
+  const { hasRole } = useAuth()
+  if (!hasRole(...LINE_OVERRIDE_ROLES) || lines.length === 0) return null
+
+  return (
+    <div className="mt-4 border-t border-slate-200 pt-4">
+      <h3 className="text-sm font-semibold text-slate-800">Per-line overrides</h3>
+      <ul className="mt-2 space-y-1">
+        {lines.map((line) => (
+          <LineOverrideRow key={line.id} projectId={projectId} settlementId={settlementId} line={line} />
+        ))}
+      </ul>
+    </div>
+  )
+}
 
 function ScenarioDeleteButton({ settlementId, scenarioId }: { settlementId: string; scenarioId: string }) {
   const { hasRole } = useAuth()
@@ -277,6 +482,14 @@ export function SettlementPage() {
   const { projectId } = useParams()
   const { hasRole } = useAuth()
   const { current, isLoading, isError, error } = useCurrentSettlement(projectId)
+  // useCurrentSettlement is built on the list endpoint (GET
+  // /projects/{id}/bid-settlements), which never populates lines/
+  // trade_overrides (only the single-settlement detail endpoint's
+  // _to_out(settlement, lines, trade_overrides) does -- see
+  // backend/app/api/v1/routes/settlement.py). The per-trade/per-line
+  // override panels need those, so fetch the detail separately once the
+  // current settlement's id is known.
+  const { data: detail } = useSettlement(current?.id)
   const buildDraft = useBuildSettlementDraft(projectId)
   const refreshQuantities = useRefreshQuantities(projectId, current?.id)
   const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
@@ -315,6 +528,12 @@ export function SettlementPage() {
             </div>
           </div>
           <SimulationSliders settlement={current} />
+          {detail && (
+            <>
+              <TradeOverridesPanel projectId={projectId} settlementId={current.id} tradeOverrides={detail.trade_overrides} />
+              <LineOverridesPanel projectId={projectId} settlementId={current.id} lines={detail.lines} />
+            </>
+          )}
         </div>
       )}
     </div>

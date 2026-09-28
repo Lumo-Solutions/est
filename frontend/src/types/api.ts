@@ -434,6 +434,20 @@ export interface InboundEmailOut {
   created_at: string
 }
 
+export interface QuotationAttachmentOut {
+  id: string
+  inbound_email_id: string
+  quotation_id: string | null
+  is_primary: boolean
+  filename: string
+  content_type_declared: string | null
+  content_type_sniffed: string | null
+  size_bytes: number
+  safety_status: string
+  rejection_reason: string | null
+  processed_at: string | null
+}
+
 export interface QuotationOut {
   id: string
   rfq_id: string
@@ -595,6 +609,33 @@ export interface BidSettlementScenarioOut {
   result: SimulateResult
   created_by: string | null
   created_at: string
+}
+
+export interface TradeOverrideUpdate {
+  plant_pct?: number | null
+  overhead_pct?: number | null
+  volatility_pct?: number | null
+  markup_pct?: number | null
+}
+
+export interface LineCostUpdate {
+  cost_source?: 'quotation_line' | 'cost_library_rate' | 'manual' | null
+  source_quotation_line_item_id?: string | null
+  cost_item_id?: string | null
+  valid_on?: string | null
+  manual_unit_cost?: number | null
+  manual_currency?: string | null
+  source_note?: string | null
+  plant_pct_override?: number | null
+  overhead_pct_override?: number | null
+  volatility_pct_override?: number | null
+  markup_pct_override?: number | null
+  line_note?: string | null
+}
+
+export interface FxRateSet {
+  fx_rate: number
+  fx_rate_date: string
 }
 
 export interface BidSettlementTradeOverrideOut {
