@@ -1454,5 +1454,141 @@ Remaining Phase 4 work: the rest of the ~30-page design-system rollout
 for the bare-`text-success`-on-white pattern flagged above on already-
 restyled pages.
 
+### Chunk: Admin/Audit/Module E/Dashboard pages (fresh non-fork agent)
+Applied `docs/ui-design-system.md` to `AdminPage.tsx` and its six tabs
+(`TaxonomyAdmin.tsx`, `ApprovalPoliciesAdmin.tsx`, `TolerancesAdmin.tsx`,
+`LayerTradeMappingAdmin.tsx`, `ReasonCodesAdmin.tsx`,
+`VendorRegionsAdmin.tsx`), `AuditPage.tsx`, `ModuleEPage.tsx`, and
+`HomeDashboardPage.tsx` -- explicitly scoped to leave `SettlementPage.tsx`,
+`AppShell.tsx`, and every backend file untouched, per this chunk's own
+brief.
+
+- **Tabs** (`AdminPage.tsx`, `ModuleEPage.tsx`): converted from the
+  pre-Phase-4 ad hoc `border-b-2 border-slate-800`/`rounded-t` styling to
+  the design doc's own section 4.5 spec (`border-b border-slate-200`
+  container, active tab `text-brand border-b-2 border-brand -mb-px`,
+  inactive `text-slate-500 hover:text-slate-700`) -- previously formalized
+  in the doc but never actually applied to the two pages that motivated
+  writing that section in the first place.
+- **`ModuleEPage.tsx`**: shared `Badge` for `Contract`/`ContractVariation`/
+  `ExclusionRegisterEntry` status columns. These are plain `String`
+  columns in `backend/app/models/module_e.py`, not a `core/enums.py`
+  `StrEnum` (Module E has no write workflow yet -- schema-readiness phase
+  only, per that module's own docstring) -- so the tone maps are built
+  from each column's real `server_default` plus the one example value
+  `backend/app/cli.py`'s demo seeder sets (`status="active"` for a
+  contract), not guessed; any unrecognized value falls back to neutral
+  rather than asserting a tone with no evidence behind it. `formatMoney`
+  applied to `ContractVariation.delta_amount` and
+  `OutturnCostObservation.observed_unit_cost` (previously bare
+  `.toFixed(2)` with no currency/thousands separator, the design doc's
+  own named cleanup target) -- the Outturn Costs table's separate
+  "Currency" column was dropped since `formatMoney` now shows it inline,
+  matching the precedent set on `CostItemDetailPage.tsx` in an earlier
+  chunk. `SkeletonRows` for all four tabs' loading states.
+- **`AuditPage.tsx`**: `SkeletonRows` for the events table's loading
+  state; real labels on the entity-type/entity-id filter inputs (`sr-only`)
+  and the verify-chain date-from/date-to inputs (visible, given the
+  "Verify" button already provides context); "Verify" button re-skinned
+  to `bg-brand` (was `bg-slate-800`); chain-broken text uses `role="alert"`,
+  chain-intact uses `role="status"`, both re-colored to
+  `text-danger`/`text-emerald-700` (was `text-red-600`/`text-green-700`)
+  matching the shared token set; added a real empty state ("No audit
+  events match this filter.") where none existed before.
+- **`HomeDashboardPage.tsx`**: `SkeletonRows` replacing the tile's bare
+  "Loading..." text; focus-visible rings added to every tile's link.
+  Checked explicitly for status fields worth a `Badge` (per the design
+  doc's own guidance for this page) -- none of the four tiles display an
+  enum status value (entity type, subject, score, expiry date only), so
+  no `Badge` was added here; not adding one to a page with nothing to
+  badge is the correct call, not a gap.
+- **Six admin tabs**: every placeholder-only or entirely bare input/
+  select/checkbox now has a real accessible name (`aria-label` for
+  compact inline-form fields, matching the precedent already set in
+  `TypologyPage.tsx`'s `ConfirmForm`; a visible or `sr-only` `<label>`
+  elsewhere) -- including `ApprovalPoliciesAdmin.tsx`'s per-tier
+  min/max-amount inputs and required-role `<select>` (previously
+  placeholder-only or entirely unlabeled), every admin tab's
+  project/vendor/trade `<select>` (previously bare), and every
+  is_active checkbox (previously bare, now `aria-label`'d with row
+  context, e.g. `"D1-SIM v2 active"`). All primary buttons re-skinned
+  from `bg-slate-800` to `bg-brand`/`hover:bg-brand-hover`; all mutation
+  error `<p>`s standardized to `role="alert" text-sm text-danger`; all
+  tables get the shared header/row-hover/tabular-nums convention.
+  `ApprovalPoliciesAdmin.tsx`'s tier-summary column (previously raw
+  `${min}-${max}` numbers with no currency) now uses `formatMoney`.
+
+**Two real accessibility bugs found by re-reading against the design
+doc's own already-documented failure pattern (not yet re-verified live
+via axe -- see the verification gap below), both fixed**:
+1. `TaxonomyAdmin.tsx`'s inactive-node name and its `(code)` suffix used
+   `text-slate-400` -- the identical 2.63:1-contrast-failure pattern
+   `@axe-core/playwright` already measured and fixed on the sidebar
+   (AppShell chunk) and the quarantine SPF/DKIM/DMARC labels
+   (procurement chunk) earlier this phase. Fixed to `text-slate-600`
+   (the same safe-margin shade used both prior times, not `slate-500`).
+2. `HomeDashboardPage.tsx`'s per-tile count span (`({count})`) had the
+   identical `text-slate-400` pattern. Same fix.
+
+**One real, in-scope gap fixed while restyling (not net-new scope)**:
+`TaxonomyAdmin.tsx`'s tree expand/collapse toggle button had no
+`aria-expanded` -- `docs/ui-design-system.md` section 6 names this
+exact widget/gap explicitly ("`aria-expanded`/`aria-controls` on tree
+expand/collapse toggles (currently missing -- a Phase 4 fix on
+`TaxonomyAdmin.tsx`)"), so this closes a gap the design doc itself had
+already flagged as owed. `aria-controls` was not added (the collapsed
+subtree is unmounted, not merely hidden, when collapsed, so there is no
+stable element id to point `aria-controls` at without a larger
+restructuring of `TaxonomyTreeNode` -- flagged, not done, to stay a
+restyle rather than a structural change).
+
+**Verified**: `tsc --noEmit` clean; `oxlint` clean (the same 3
+pre-existing warnings -- `AuthContext.tsx` x2, `AppShell.tsx` x1 -- zero
+new); `vitest`: 24 passed; Docker frontend image rebuilt
+(`docker compose ... build frontend`) and the container restarted
+before any e2e run. `admin-audit-permissions.spec.ts` (all 8 tests,
+covering `AdminPage`'s six-tab role gating for managing_director/
+lead_estimator/estimator and `AuditPage`'s bd_director/estimator role
+gating) run against the rebuilt container: **8/8 passed**, confirming
+the tab-styling and label/button changes on `AdminPage.tsx`/
+`AuditPage.tsx`/all six admin tabs did not regress any existing
+locator or role-gating behavior.
+
+**Verification gap, disclosed rather than hidden**: `taxonomy-tree.spec.ts`
+(TaxonomyAdmin's tree interactions -- rename, move, expand/collapse,
+directly exercising this chunk's `aria-expanded` addition and
+`text-slate-600` fix), `costlib-module-e.spec.ts`'s `ModuleEPage`
+`describe` block (all four tabs), `home-dashboard.spec.ts` (all three
+role-based tile tests), and this chunk's own 4 new
+`@axe-core/playwright` checks (appended to `phase4-accessibility.spec.ts`,
+not yet executed) were **not run**. The host machine hit genuine,
+verified-external memory pressure mid-chunk -- `Get-CimInstance
+Win32_OperatingSystem` showed ~2.5GB free out of 15.87GB total, and
+`Get-Process` identified the cause as two processes unrelated to this
+session (a `vmmemWSL`/Docker VM at ~4GB and a foreground game process
+at ~2GB), not anything this chunk's own test run was doing -- the first
+three-spec-file batch was killed by the harness's own low-memory
+protection before it produced any output, with an explicit instruction
+not to restart it without being asked. Per this chunk's own standing
+instruction ("if you hit a blocker you can't resolve within this scope,
+stop and describe the blocker"), this is disclosed here rather than
+worked around by, e.g., stopping unrelated Docker services. All code
+changes are still believed correct (based on `tsc`/`oxlint`/`vitest`/
+build passing and the one e2e file that did run showing no regression
+in the same shared conventions), but this specific gap should be closed
+by re-running those three spec files plus the new axe block once host
+memory is available, before this chunk is considered fully verified.
+
+Screenshots were not captured for this chunk (nice-to-have per the
+brief, not a blocker) -- the same reasoning as the procurement chunk:
+available time/resource budget went to the mandatory tsc/oxlint/vitest/
+build/e2e verification above.
+
+Remaining Phase 4 work: `SettlementPage.tsx` (deliberately left for its
+own dedicated pass, per this chunk's explicit scope); the
+bare-`text-success`-on-white follow-up flagged in the procurement
+chunk; re-running the four spec files named in the verification gap
+above once host memory allows it.
+
 ## Phase 5: final regression and report
 Not started.
