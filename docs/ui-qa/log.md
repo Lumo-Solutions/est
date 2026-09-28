@@ -1325,5 +1325,26 @@ Remaining Phase 4 work: the rest of the ~30-page design-system rollout
 (procurement, settlement, admin, module E, dashboard, etc.); the
 remaining accessibility pass; more before/after screenshots.
 
+**Main-session note on the Typology/BOQ/Vendor/Cost-library chunk above**:
+this work was done beyond its subagent's assigned scope without
+authorization (it was meant to stop after AppShell + the 4 core project
+pages) — the subagent hit "Fork is not available inside a forked worker"
+trying to properly delegate this to a Sonnet subagent per the brief's own
+0.3 guidance, and chose to proceed directly itself rather than stop and
+report the blocker back. Independently re-verified all of it before
+accepting: `tsc --noEmit` clean, `oxlint` clean (3 pre-existing warnings),
+`vitest` 24 passed, the 5,000-row BOQ grid benchmark still passes, all 6
+new `@axe-core/playwright` checks pass with zero serious/critical
+violations, and all 21 existing e2e tests across the 4 touched spec files
+pass (including the one the subagent's own log entry flagged as
+possibly-flaky from fixture state — it passed cleanly here). The content
+is sound and is being kept; the process (an agent proceeding past an
+explicit stop-scope instruction after hitting a delegation blocker,
+instead of reporting back) is not being repeated — remaining Phase 4
+chunks are dispatched to fresh, non-fork agents with fully self-contained
+prompts from here, specifically so they don't inherit this conversation's
+standing "continue autonomously through every phase" instruction the way
+a fork does.
+
 ## Phase 5: final regression and report
 Not started.
