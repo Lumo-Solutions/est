@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql.ranges import Range
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,37 @@ from app.core.errors import NotFoundError
 from app.models.costlib import CostItem, CostItemRate, CostRateComponent
 from app.schemas.costlib import CostItemCreate, RecordRateRequest
 from app.services import audit
+
+
+async def list_cost_items(
+    session: AsyncSession,
+    *,
+    search: str | None = None,
+    trade_node_id: UUID | None = None,
+    is_active: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[CostItem], int]:
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): only get-by-id existed
+    before -- a cost library browsing screen needs to list/search items.
+    Mirrors app/services/vendors.py::list_vendors's pagination shape."""
+    base = select(CostItem)
+    count_stmt = select(func.count()).select_from(CostItem)
+    if search:
+        pattern = f"%{search}%"
+        clause = or_(CostItem.code.ilike(pattern), CostItem.description.ilike(pattern))
+        base = base.where(clause)
+        count_stmt = count_stmt.where(clause)
+    if trade_node_id is not None:
+        base = base.where(CostItem.trade_node_id == trade_node_id)
+        count_stmt = count_stmt.where(CostItem.trade_node_id == trade_node_id)
+    if is_active is not None:
+        base = base.where(CostItem.is_active == is_active)
+        count_stmt = count_stmt.where(CostItem.is_active == is_active)
+
+    total = (await session.execute(count_stmt)).scalar_one()
+    rows = (await session.execute(base.order_by(CostItem.code).limit(limit).offset(offset))).scalars().all()
+    return list(rows), total
 
 
 async def create_cost_item(session: AsyncSession, ctx: RequestContext, data: CostItemCreate) -> CostItem:

@@ -10,6 +10,7 @@ from app.api.deps import CurrentUser, get_session, require_roles
 from app.core.context import RequestContext
 from app.core.enums import Role
 from app.core.errors import NotFoundError
+from app.schemas.common import Page
 from app.schemas.costlib import (
     CostItemCreate,
     CostItemOut,
@@ -22,6 +23,22 @@ from app.services import costlib as costlib_service
 router = APIRouter(prefix="/cost-items", tags=["cost-library"])
 
 _WRITE_ROLES = (Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.MANAGING_DIRECTOR.value)
+
+
+@router.get("", response_model=Page)
+async def list_cost_items_endpoint(
+    search: str | None = None,
+    trade_node_id: UUID | None = None,
+    is_active: bool | None = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> Page:
+    rows, total = await costlib_service.list_cost_items(
+        session, search=search, trade_node_id=trade_node_id, is_active=is_active, limit=limit, offset=offset
+    )
+    return Page(items=[CostItemOut.model_validate(r) for r in rows], total=total, limit=limit, offset=offset)
 
 
 async def _to_rate_out(session: AsyncSession, rate) -> CostItemRateOut:
