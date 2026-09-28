@@ -70,6 +70,18 @@ async def update_node(session: AsyncSession, ctx: RequestContext, node_id: UUID,
     for field, value in changes.items():
         setattr(node, field, value)
     await session.flush()
+    # updated_at (app/db/base.py's TenantEntity) is server_default/onupdate
+    # driven -- SQLAlchemy marks it expired after this flush rather than
+    # populating it from a RETURNING clause, so the ORM object's own
+    # attribute access after this point tries a lazy SELECT. Under the
+    # async driver that's a synchronous-context lazy-load, which crashes
+    # with MissingGreenlet the moment something reads it outside an awaited
+    # call -- exactly what TradeNodeOut.model_validate(node) does in the
+    # route. move_node already refreshes path/level for the same reason
+    # (its own comment); found live via Phase 3's new taxonomy tree editor
+    # (a rename or active-toggle 500'd every time) that this endpoint never
+    # did the same for updated_at.
+    await session.refresh(node, attribute_names=["updated_at"])
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="trade_node", entity_id=node.id, payload=changes
     )
@@ -82,7 +94,14 @@ async def move_node(session: AsyncSession, ctx: RequestContext, node_id: UUID, n
         raise ConflictError("A node cannot be its own parent")
     node.parent_id = new_parent_id
     await session.flush()  # trade_nodes_path_trg rewrites path + descendants; raises on cycles
-    await session.refresh(node, attribute_names=["path", "level"])
+    # updated_at also needs refreshing here for the same reason
+    # update_node's own refresh does (see its comment) -- this UPDATE
+    # touches it via the same server-side onupdate just as much as any
+    # other field change, and TradeNodeOut.model_validate below reads it
+    # too. Found live via the same Phase 3 taxonomy tree editor test that
+    # found update_node's version of this bug: moving a node crashed with
+    # an identical MissingGreenlet 500.
+    await session.refresh(node, attribute_names=["path", "level", "updated_at"])
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="trade_node", entity_id=node.id,
         payload={"reparented_to": str(new_parent_id) if new_parent_id else None},
