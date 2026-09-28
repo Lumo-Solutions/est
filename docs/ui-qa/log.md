@@ -683,17 +683,31 @@ after Phase 2's merge.
      Exclusion register with a status filter, Outturn costs) over the
      existing all-read-only, any-role `module_e.py` endpoints. No forms,
      no new role gating needed.
-   - **Reconfirmed, not fixed** (already flagged by the research pass,
-     out of this chunk's scope): `CostRateComponentOut`/`CostItemRateOut`
-     use bare `float` for money fields **end to end on the backend**
-     (`record_rate`'s own `total_rate` computation is plain Python float
-     arithmetic), not just at the JSON boundary — a different, older, and
-     arguably more serious issue than the JsonDecimal-string bug fixed in
-     Phase 2, since real precision is lost server-side before storage,
-     not just at serialization. Flagging again here for a deliberate
-     main-session decision (migrate `cost_item_rates`/
-     `cost_rate_components` to Decimal columns is a real schema/migration
-     job, well beyond a UI gap-fill chunk).
+   - **Corrected by the main session on review — the "end to end float"
+     claim above was a misdiagnosis, not a real bug.** `total_rate`/
+     `unit_cost` (`app/models/costlib.py`) are declared `Mapped[float]`,
+     which reads as "this column is float all the way down," but the
+     actual SQLAlchemy column type is `Money`/`app/db/types.py`'s
+     `TypeDecorator(impl=Numeric(18,6))` with `asdecimal` left at
+     SQLAlchemy's own default (`True`) — meaning every value that comes
+     back from Postgres is a genuine Python `Decimal`, and
+     `record_rate`'s `sum(quantity_per_uom * unit_cost * (1 +
+     waste_factor) ...)` is real Decimal arithmetic, not float. Confirmed
+     empirically against the live dev DB (`SELECT total_rate FROM
+     cost_item_rates LIMIT 1` inside the backend container →
+     `Decimal('42.500000') <class 'decimal.Decimal'>`), not just reasoned
+     about. The `Mapped[float]` hints are simply wrong/misleading (should
+     say `Mapped[Decimal]`) — a type-hygiene nitpick, not a precision-loss
+     bug, and not something this run needs to fix.
+     `CostRateComponentOut.unit_cost: float`/`CostItemRateOut.total_rate:
+     float` on the response schemas do coerce that real Decimal to a
+     Python `float` during Pydantic serialization — but that produces
+     the exact same JSON wire format `JsonDecimal` would (a JSON number),
+     so there is no functional difference from the pattern already
+     accepted everywhere else in this app; using bare `float` here instead
+     of `JsonDecimal` is a minor style inconsistency worth tidying in
+     Phase 4 for self-documentation, not a bug needing a schema migration
+     or a main-session decision.
    - 3 new real-backend Playwright tests, all passing against the
      rebuilt frontend image. `tsc --noEmit` clean, `oxlint` clean,
      `vitest`: 24 passed. `make test-unit`: 347 passed. `make
