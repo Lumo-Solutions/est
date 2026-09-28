@@ -172,6 +172,7 @@ function LineOverrideRow({
   const setFxRate = useSetLineFxRate(projectId, settlementId)
   const [editing, setEditing] = useState(false)
   const [manualCost, setManualCost] = useState('')
+  const [manualCostNote, setManualCostNote] = useState('')
   const [fxRate, setFxRateInput] = useState('')
 
   return (
@@ -206,13 +207,28 @@ function LineOverrideRow({
               className="w-32 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
           </div>
+          <div>
+            <label className="block text-xs text-slate-500" htmlFor={`manual-note-${line.id}`}>
+              Why (required)
+            </label>
+            <input
+              id={`manual-note-${line.id}`}
+              placeholder="e.g. no accepted quote yet, budget estimate"
+              value={manualCostNote}
+              onChange={(e) => setManualCostNote(e.target.value)}
+              className="w-48 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+          </div>
           <button
             type="button"
-            disabled={!manualCost || updateLine.isPending}
+            disabled={!manualCost || !manualCostNote.trim() || updateLine.isPending}
             onClick={() =>
               updateLine.mutate(
-                { lineId: line.id, data: { cost_source: 'manual', manual_unit_cost: Number(manualCost) } },
-                { onSuccess: () => setManualCost('') },
+                {
+                  lineId: line.id,
+                  data: { cost_source: 'manual', manual_unit_cost: Number(manualCost), source_note: manualCostNote.trim() },
+                },
+                { onSuccess: () => { setManualCost(''); setManualCostNote('') } },
               )
             }
             className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"

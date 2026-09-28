@@ -107,7 +107,16 @@ test.describe('SettlementPage: per-trade and per-line overrides', () => {
     await overrideButtons.first().click()
     const manualCostInput = page.getByLabel('Manual unit cost').first()
     await manualCostInput.fill('42.50')
-    await page.getByRole('button', { name: 'Set cost' }).first().click()
+    // source_note ("why") is required server-side for cost_source=manual
+    // (app/services/settlement.py::set_line_cost) -- without filling it the
+    // Set cost button stays disabled, and this test's earlier version
+    // clicked straight through to a 422 that its own weak assertion
+    // (only checking for a ROLE error) never caught. See docs/ui-qa/log.md.
+    await page.getByLabel('Why (required)').first().fill('E2E regression: manual cost with a reason')
+    const setCostButton = page.getByRole('button', { name: 'Set cost' }).first()
+    await expect(setCostButton).toBeEnabled()
+    await setCostButton.click()
+    await expect(page.getByRole('alert').filter({ hasText: 'manual_unit_cost' })).toHaveCount(0)
     await expect(page.getByText('Requires one of roles')).toHaveCount(0)
   })
 
