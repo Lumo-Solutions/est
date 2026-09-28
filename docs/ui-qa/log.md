@@ -1037,12 +1037,34 @@ policy for settlement scenarios; `update_node`/`move_node`'s missing
 `updated_at` refresh (a real, live 500 on every taxonomy write, found
 live building the tree editor, not by inspection).
 
+**Main session follow-up on the flagged `flush()`-without-`refresh()`
+sweep** (resolved, not left as a vague flag): grepped every
+`backend/app/services/*.py` module for a `setattr`-style mutation of an
+already-loaded row followed by `session.flush()` with no refresh, then
+cross-referenced each hit against whether its response schema actually
+exposes an `onupdate`-driven column at all — the bug can only fire when
+both conditions hold (a fresh `session.add()` insert is unaffected,
+since `flush()` does populate server defaults via `INSERT...RETURNING`;
+and a schema that never reads the expired column never triggers a lazy
+load either way). Only four schemas expose `updated_at`:
+`BoqToleranceOut`, `ProcurementPackageOut`, `TradeNodeOut` (already fixed
+this phase), `VendorOut`. Checked all candidate mutate-then-return sites
+against those four and found exactly **one** more live instance:
+`boq.py`'s `set_tolerance` UPDATE branch (setting a tolerance that
+already exists). Fixed the same way as `taxonomy.py` — confirmed the bug
+was real first (reverted the fix, watched the new regression test fail
+with the identical `MissingGreenlet` crash, then restored the fix and
+confirmed green) rather than assuming. `resolve_duplicate` (`vendors.py`,
+mutates a `Vendor.status` in passing) and every `ProcurementPackage`
+mutation were checked and ruled out — neither returns the mutated row
+through a schema read that would actually hit the expired column. `make
+test-integration`: 191 passed (190 → +1). This was a bounded, evidence-
+based check, not an exhaustive audit of every service function's
+correctness — it specifically answers "does this exact bug shape recur,"
+which it now has, twice, both fixed.
+
 **Flagged for the main session / a future decision, not fixed in Phase
 3** (each already detailed in its own entry above):
-- The same `flush()`-without-`refresh()` pattern that broke taxonomy
-  writes likely exists elsewhere in `backend/app/services/*.py` — worth a
-  systematic sweep, similar to Phase 2's JsonDecimal one, to know how many
-  are live bugs versus latent.
 - No cross-project "quotes to review / RFQs past due / settlements in
   draft" aggregate exists — the dashboard's remaining gap for `estimator`
   and a fuller dashboard generally.
@@ -1051,8 +1073,14 @@ live building the tree editor, not by inspection).
   `JsonDecimal` — functionally identical wire format (confirmed, not just
   assumed), a Phase 4 tidiness item, not a bug.
 
-**Not merged to master yet** — branch `phase-3-gap-fill` is ready for the
-main session's final review and merge.
+**Final regression, run independently by the main session before
+merge:** `make test-all` (unit + integration + api, all green — 347/
+191/28), `npm run build` (succeeds), `npx tsc --noEmit` (clean), `oxlint`
+(clean, 3 pre-existing warnings unchanged), `vitest` (24 passed), and the
+full `npm run e2e:real-backend` suite.
+
+**Merged to `master`** (`--no-ff`, not pushed) once all of the above was
+confirmed green — see the merge commit for the full summary.
 
 ## Phase 4: design system and redesign
 Not started.
