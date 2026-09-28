@@ -2,10 +2,17 @@ import { useId, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
+import { ConfirmModal } from '../components/ConfirmModal'
 import { SkeletonRows } from '../components/Skeleton'
 import { DrawingUpload } from '../features/drawings/DrawingUpload'
 import { useDrawings } from '../features/drawings/api'
-import { useAddProjectMember, useProject, useProjectMembers, useUpdateProjectLocation } from '../features/projects/api'
+import {
+  useAddProjectMember,
+  useProject,
+  useProjectMembers,
+  useRemoveProjectMember,
+  useUpdateProjectLocation,
+} from '../features/projects/api'
 import { useUsers } from '../features/users/api'
 import { Role } from '../lib/roles'
 
@@ -113,6 +120,8 @@ function MembersSection({ projectId }: { projectId: string }) {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [projectRole, setProjectRole] = useState('')
   const addMember = useAddProjectMember(projectId)
+  const removeMember = useRemoveProjectMember(projectId)
+  const [memberToRemove, setMemberToRemove] = useState<string | null>(null)
   const userSelectId = useId()
   const projectRoleId = useId()
 
@@ -131,13 +140,42 @@ function MembersSection({ projectId }: { projectId: string }) {
       {members && members.length > 0 && (
         <ul className="space-y-1">
           {members.map((m) => (
-            <li key={m.user_id} className="text-sm text-slate-700">
-              {usernameFor(m.user_id)}
-              {m.project_role && <span className="ml-2 text-xs text-slate-500">({m.project_role})</span>}
+            <li key={m.user_id} className="flex items-center gap-2 text-sm text-slate-700">
+              <span>
+                {usernameFor(m.user_id)}
+                {m.project_role && <span className="ml-2 text-xs text-slate-500">({m.project_role})</span>}
+              </span>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => setMemberToRemove(m.user_id)}
+                  disabled={removeMember.isPending}
+                  aria-label={`Remove ${usernameFor(m.user_id)}`}
+                  className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
+      {removeMember.isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {removeMember.error.message}
+        </p>
+      )}
+      <ConfirmModal
+        open={memberToRemove !== null}
+        title="Remove member?"
+        message={`${memberToRemove ? usernameFor(memberToRemove) : ''} will lose access to this project.`}
+        confirmLabel="Remove"
+        onCancel={() => setMemberToRemove(null)}
+        onConfirm={() => {
+          if (memberToRemove) removeMember.mutate(memberToRemove)
+          setMemberToRemove(null)
+        }}
+      />
       {canWrite && (
         <form
           className="mt-3 flex flex-wrap items-end gap-2"

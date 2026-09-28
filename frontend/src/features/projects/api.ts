@@ -41,6 +41,14 @@ export function useProjectMembers(projectId: string | undefined) {
   })
 }
 
+export function useRemoveProjectMember(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (userId: string) => api.delete<void>(`/projects/${projectId}/members/${userId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'members'] }),
+  })
+}
+
 export function useAddProjectMember(projectId: string | undefined) {
   const queryClient = useQueryClient()
   return useMutation({

@@ -88,3 +88,37 @@ def test_every_orm_response_schema_decimal_field_uses_json_decimal():
         "but frontend/src/types/api.ts declares these fields `number` -- "
         "swap to JsonDecimal."
     )
+
+
+def test_cost_rate_response_schemas_take_decimals_and_emit_json_numbers():
+    """CostRateComponentOut / CostItemRateOut used bare `float`: the same JSON
+    on the wire, but they hid that the columns are NUMERIC/Decimal. They now
+    use JsonDecimal like every other money field."""
+    import json
+    import uuid
+
+    from app.schemas.costlib import CostItemRateOut, CostRateComponentOut
+
+    numeric = {
+        CostRateComponentOut: ("quantity_per_uom", "unit_cost", "waste_factor", "amount"),
+        CostItemRateOut: ("total_rate", "confidence"),
+    }
+    for cls, names in numeric.items():
+        not_decimal = [n for n in names if not _mentions_decimal(cls.model_fields[n].annotation)]
+        assert not_decimal == [], f"{cls.__name__} field(s) not JsonDecimal: {not_decimal}"
+
+    component = CostRateComponentOut(
+        id=uuid.uuid4(), component_type="labour", description="d", resource_code=None,
+        quantity_per_uom=Decimal("1.500000"), unit_cost=Decimal("42.500000"),
+        waste_factor=Decimal("0.0500"), amount=Decimal("66.937500"), sort_order=0,
+    )
+    rate = CostItemRateOut(
+        id=uuid.uuid4(), cost_item_id=uuid.uuid4(), scope_key="default", currency="AED",
+        total_rate=Decimal("42.500000"), source="manual", source_ref=None,
+        confidence=Decimal("0.900"), components=[component],
+    )
+    payload = json.loads(rate.model_dump_json())
+    assert payload["total_rate"] == 42.5 and isinstance(payload["total_rate"], float)
+    assert payload["confidence"] == 0.9
+    comp = payload["components"][0]
+    assert all(isinstance(comp[k], float) for k in ("quantity_per_uom", "unit_cost", "waste_factor", "amount"))

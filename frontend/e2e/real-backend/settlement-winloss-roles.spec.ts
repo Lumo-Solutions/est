@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import {
   csrfHeaders,
   D1_SIM_PROJECT_CODE,
+  driveSettlementTo,
   ensureProjectMember,
   findProjectByCode,
   loginViaKeycloak,
@@ -23,12 +24,11 @@ test('settlement: build-draft button is role-gated client-side, and the server i
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
   await page.goto(`/projects/${project.id}/settlement`)
 
-  const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
-  test.skip(
-    !(await buildButton.isVisible().catch(() => false)),
-    'D1-SIM is mid-lifecycle (draft/submitted, not a REBUILDABLE_STATUSES status) from another spec run -- ' +
-      'the role gate is still enforced server-side regardless of this, but this specific test needs the button offered to bd1 to prove the *client* also hides it correctly for estimator1.',
-  )
+  // Never skipped for fixture state: put the settlement into a status the
+  // cockpit offers "Build new draft" from, whatever a previous run left.
+  await driveSettlementTo(page, browser, project.id, 'rebuildable')
+  await page.goto(`/projects/${project.id}/settlement`)
+  await expect(page.getByRole('button', { name: /^Build( new)? settlement draft$/ })).toBeVisible()
 
   // estimator1 is not in BUILD_DRAFT_ROLES (lead_estimator/procurement_head/
   // bd_director/managing_director only, mirroring backend's _HEADER_ROLES).
@@ -52,22 +52,10 @@ test('settlement: submit-for-approval button is role-gated client-side to bd_dir
 }) => {
   await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+  // Never skipped for fixture state: guarantee a submittable draft.
+  await driveSettlementTo(page, browser, project.id, 'draft')
   await page.goto(`/projects/${project.id}/settlement`)
-
-  // Reuses whatever "draft" D1-SIM is already sitting in (this fixture is
-  // frequently left at "draft" by other runs -- see the non-idempotency
-  // notes in docs/ui-qa/log.md) rather than requiring a REBUILDABLE_STATUSES
-  // status like the build-gate test above; only skips if D1-SIM is neither
-  // draft NOR buildable into one, which would mean it's already
-  // submitted/decided and this button is correctly hidden for a different
-  // (also correct) reason.
-  const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
-  if (await buildButton.isVisible().catch(() => false)) await buildButton.click()
-  const submitButton = page.getByRole('button', { name: 'Submit for approval' })
-  test.skip(
-    !(await submitButton.isVisible().catch(() => false)),
-    'D1-SIM is not in "draft" and could not be built into one -- already submitted/decided from another run.',
-  )
+  await expect(page.getByRole('button', { name: 'Submit for approval' })).toBeVisible()
 
   // estimator1 has read/simulate access to this page (_LINE_ROLES) but is
   // not in _SUBMIT_ROLES (bd_director/managing_director only).
@@ -87,16 +75,9 @@ test('win-loss: the record-outcome form is role-gated client-side; an unauthoriz
   await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
 
-  const settlements = (await (await page.request.get(`/api/v1/projects/${project.id}/bid-settlements`)).json()) as {
-    is_current: boolean
-    outcome: string | null
-  }[]
-  const current = settlements.find((s) => s.is_current)
-  test.skip(!current, 'No current settlement on D1-SIM yet -- global-setup should have built one via make dev-simulate-settlement')
-  test.skip(
-    current!.outcome != null,
-    'D1-SIM already has a recorded outcome from another run -- both roles would see the same read-only view, which does not exercise this gate',
-  )
+  // A fresh draft has no recorded outcome, so both roles below see the
+  // form-vs-message split this test is about, whatever a previous run left.
+  await driveSettlementTo(page, browser, project.id, 'draft')
 
   // bd1 is in RECORD_OUTCOME_ROLES (mirrors backend's _OUTCOME_ROLES) --
   // sees the actual form.
@@ -116,6 +97,7 @@ test('win-loss: the record-outcome form is role-gated client-side; an unauthoriz
 
 test('export: downloading the generated workbook produces a real file with a working (if not very human-readable) name', async ({
   page,
+  browser,
 }) => {
   // Phase 2 UI QA (docs/ui-qa/issues.md UI-P2-020): confirms downloadFile()
   // (frontend/src/lib/api.ts) actually gets a real Content-Disposition
@@ -134,14 +116,9 @@ test('export: downloading the generated workbook produces a real file with a wor
   // under the button rather than hiding the button, which is fine (the
   // button staying clickable and failing with a clear message is
   // acceptable UX for a genuinely conditional, not role-based, restriction
-  // -- unlike the role-gate bugs elsewhere on this page's neighbors). Only
-  // exercises the actual download when D1-SIM happens to be approved.
-  const settlements = (await (await page.request.get(`/api/v1/projects/${project.id}/bid-settlements`)).json()) as {
-    is_current: boolean
-    status: string
-  }[]
-  const current = settlements.find((s) => s.is_current)
-  test.skip(current?.status !== 'approved', `D1-SIM's current settlement is "${current?.status}", not "approved" -- export correctly refuses it.`)
+  // -- unlike the role-gate bugs elsewhere on this page's neighbors).
+  // drives D1-SIM to approved first (driveSettlementTo) so this never skips.
+  await driveSettlementTo(page, browser, project.id, 'approved')
 
   await page.goto(`/projects/${project.id}/export`)
   const downloadButton = page.getByRole('button', { name: 'Download generated .xlsx' })

@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.context import RequestContext, system_context
 from app.core.enums import QuotationExtractionMethod, QuotationLineItemStatus, QuotationStatus, RfqStatus
-from app.core.errors import ForbiddenError
+from app.core.errors import ConflictError, ForbiddenError
 from app.db.session import session_scope
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier
 from app.models.prequal import Authority, CertificateType
@@ -45,7 +45,7 @@ from app.procurement.pricing_sheet import build_pricing_workbook
 from app.schemas.boq import BoqLineItemCreate
 from app.schemas.procurement import ProcurementPackageCreate, RfqCreateRequest
 from app.schemas.prequal import PrequalificationDecision, VendorCertificateCreate
-from app.schemas.settlement import SettlementDefaultsUpdate, SimulateRequest
+from app.schemas.settlement import LineCostUpdate, SettlementDefaultsUpdate, SimulateRequest
 from app.schemas.vendors import VendorCreate
 from app.boq.import_parser import BoqImportColumnMapping
 from app.services import boq as boq_service
@@ -696,6 +696,28 @@ async def simulate_settlement() -> None:
         )
         print("set project defaults: plant=2% overhead=5% volatility=3% markup=10%")
 
+    # Idempotence: the shared simulation project accumulates BOQ lines from
+    # other simulations/tests (semantic-matching, module E, ...) that have no
+    # accepted quotation, and a draft is built over EVERY priced BOQ line. Left
+    # unresolved they make submit fail ("Every settlement line needs a resolved
+    # cost"), which used to break every rerun on a non-fresh stack. Give each
+    # such line an explicit manual cost, exactly as a lead estimator would.
+    async with session_scope(lead_ctx) as session:
+        leftover = [
+            line for line in await settlement_service.list_settlement_lines(session, settlement_id)
+            if line.direct_unit_cost is None
+        ]
+        for line in leftover:
+            await settlement_service.set_line_cost(
+                session, lead_ctx, settlement_id, line.id,
+                LineCostUpdate(
+                    cost_source="manual", manual_unit_cost=Decimal("10.00"),
+                    source_note="simulate-settlement: leftover BOQ line from another simulation, no accepted quotation",
+                ),
+            )
+        if leftover:
+            print(f"resolved {len(leftover)} leftover BOQ line(s) with a manual cost so the run stays repeatable")
+
     async with session_scope(lead_ctx) as session:
         preview = await settlement_service.simulate(session, lead_ctx, settlement_id, SimulateRequest())
         print(
@@ -735,14 +757,20 @@ async def simulate_settlement() -> None:
     # Module D3: export into the retained original workbook -- must run
     # before outcome (below), since export-original also requires
     # status=approved, and recording an outcome moves it to won/lost.
-    async with session_scope(lead_ctx) as session:
-        report = await settlement_service.preview_original_export(session, lead_ctx, settlement_id)
-        print(f"original-export fidelity preview: ok={report['ok']} lost_features={report['lost_features']}")
+    # Only available when every BOQ line traces to ONE import batch; the shared
+    # simulation project can also hold lines from other simulations, in which
+    # case the service (correctly) refuses -- not a failure of this run.
+    try:
+        async with session_scope(lead_ctx) as session:
+            report = await settlement_service.preview_original_export(session, lead_ctx, settlement_id)
+            print(f"original-export fidelity preview: ok={report['ok']} lost_features={report['lost_features']}")
 
-        original_bytes, original_sha256, original_filename = await settlement_service.export_original_settlement(
-            session, lead_ctx, settlement_id, accept_loss=not report["ok"]
-        )
-        print(f"exported original {original_filename} ({len(original_bytes)} bytes), sha256={original_sha256}")
+            original_bytes, original_sha256, original_filename = await settlement_service.export_original_settlement(
+                session, lead_ctx, settlement_id, accept_loss=not report["ok"]
+            )
+            print(f"exported original {original_filename} ({len(original_bytes)} bytes), sha256={original_sha256}")
+    except ConflictError as exc:
+        print(f"original-workbook export skipped (BOQ spans several import batches on this shared project): {exc.detail}")
 
     async with session_scope(bd2_ctx) as session:
         won = await settlement_service.record_outcome(

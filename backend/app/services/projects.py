@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -120,4 +120,25 @@ async def add_member(session: AsyncSession, ctx: RequestContext, project_id: UUI
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="project", entity_id=project_id,
         project_id=project_id, payload={"member_added": str(user_id), "role": role},
+    )
+
+
+async def remove_member(session: AsyncSession, ctx: RequestContext, project_id: UUID, user_id: UUID) -> None:
+    """Removes a user from a project. Roles are enforced by the route (same
+    set as add_member) and again by project_members' RLS DELETE policy.
+    Raises NotFoundError rather than silently succeeding when the user was not
+    a member -- which also surfaces a deletion RLS silently refused, so it
+    can never look like a successful removal."""
+    await get_project(session, project_id)  # 404s if missing / not visible under RLS
+    result = await session.execute(
+        delete(ProjectMember)
+        .where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id)
+        .returning(ProjectMember.project_role)
+    )
+    row = result.first()
+    if row is None:
+        raise NotFoundError(f"User {user_id} is not a member of project {project_id}")
+    await audit.record(
+        session, ctx, action=AuditAction.DELETE, entity_type="project", entity_id=project_id,
+        project_id=project_id, payload={"member_removed": str(user_id), "role": row[0]},
     )

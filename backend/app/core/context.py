@@ -22,6 +22,8 @@ class RequestContext:
     # see app/security/deps.py::has_recent_step_up for why this, not acr
     # alone, is what a step-up check must verify recency against.
     auth_time: int | None = None
+    # Display-only login name (Keycloak preferred_username); see /auth/me.
+    username: str | None = None
     ip_address: str | None = None
     user_agent: str | None = None
     request_id: str | None = None

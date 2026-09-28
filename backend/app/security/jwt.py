@@ -42,6 +42,9 @@ class Principal:
     # recent step-up from an old one whose still-valid access/refresh token
     # just happens to carry acr=silver from long ago. See fix/keycloak-step-up.
     auth_time: int | None = None
+    # Keycloak's preferred_username (login name), for display only -- never
+    # used for authorization or as an identity key (sub is).
+    username: str | None = None
 
 
 class TokenValidator:
@@ -126,4 +129,5 @@ class TokenValidator:
             sid=claims.get("sid"),
             exp=int(claims["exp"]),
             auth_time=int(claims["auth_time"]) if claims.get("auth_time") is not None else None,
+            username=claims.get("preferred_username"),
         )
