@@ -83,7 +83,7 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
                     outcome: 'accepted',
                   })
                 }}
-                className="rounded text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Accept
               </button>

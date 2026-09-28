@@ -171,6 +171,39 @@ test.describe('Phase 4 accessibility -- procurement, quotation and settlement pa
   })
 })
 
+// BoqReconciliationPage: the Accept/Reject suggestion links only render once
+// a BOQ row is selected AND the server returns suggestions, and the real
+// dev data has none -- so the suggestions response (only) is stubbed to make
+// the previously-unscanned Accept button (bare text-success, 3.76:1) render.
+test.describe('BoqReconciliationPage accessibility', () => {
+  test('BoqReconciliationPage has no serious/critical axe violations, including a rendered suggestion', async ({ page }) => {
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
+    await page.route('**/api/v1/boq-line-items/*/measurement-suggestions*', (route) =>
+      route.fulfill({
+        json: [
+          {
+            target_id: '11111111-2222-3333-4444-555555555555',
+            fuzzy_score: 0.8,
+            semantic_score: 0.7,
+            combined_score: 0.75,
+            rag_adjustment: 0,
+            final_score: 0.75,
+          },
+        ],
+      }),
+    )
+    await page.goto(`/projects/${project.id}/boq`)
+    await expect(page.getByRole('heading', { name: 'BOQ reconciliation' })).toBeVisible()
+    await page.getByRole('gridcell', { name: /Excavation to formation/ }).first().click()
+    await expect(page.getByRole('button', { name: 'Accept' })).toBeVisible()
+
+    const results = await new AxeBuilder({ page }).analyze()
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    expect(serious, JSON.stringify(serious, null, 2)).toEqual([])
+  })
+})
+
 // Phase 4 (docs/ui-qa-brief.md): AdminPage (all six tabs) + AuditPage +
 // ModuleEPage + HomeDashboardPage -- the platform-admin/read-heavy chunk.
 // managing_director has write access on every Admin tab (see

@@ -29,7 +29,7 @@ export function DrawingUpload({ projectId }: { projectId: string }) {
         </span>
       )}
       {upload.isSuccess && (
-        <span role="status" className="text-sm text-success">
+        <span role="status" className="text-sm text-emerald-700">
           Uploaded -- extraction queued.
         </span>
       )}

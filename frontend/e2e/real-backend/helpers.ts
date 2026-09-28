@@ -1,5 +1,8 @@
 import type { Browser, Page } from '@playwright/test'
 import { DEMO_TOTP_SECRETS, generateTotp } from './totp'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // Fixture project app/cli.py::simulate_settlement builds/reuses (see
 // global-setup.ts) -- one BOQ line with an ACCEPTED quotation line item
@@ -59,12 +62,49 @@ export async function loginViaKeycloak(page: Page, username: string, password: s
 // any brute-force history left over from a PREVIOUS run so this always
 // starts from zero.
 async function submitTotpCode(page: Page, fieldSelector: string, submit: () => Promise<void>, secret: string): Promise<void> {
+  await waitForUnusedOtpStep(page, secret)
   await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
   if (!(await page.getByText('Invalid authenticator code.').isVisible().catch(() => false))) return
   await page.waitForTimeout(65_000)
+  await waitForUnusedOtpStep(page, secret)
   await page.locator(fieldSelector).fill(await generateTotp(secret))
   await submit()
+}
+
+// ROOT CAUSE of the ~1-minute logins and intermittent "Invalid authenticator
+// code" in back-to-back specs: the realm has otpPolicyCodeReusable=false, so
+// Keycloak rejects a TOTP code from a 30s step this user has ALREADY logged
+// in with. Two logins by the same user in the same step (a spec's login right
+// after the previous spec's, or after that spec's own 65s retry) therefore
+// fail the first attempt, and the retry's success lands late in a step that
+// the next login shares -- so the failure cascaded through a whole run. The
+// last step used per secret is kept in a temp file (shared across Playwright
+// processes) and the next login waits for a strictly later step instead.
+const OTP_STEP_MS = 30_000
+const OTP_STATE_FILE = join(tmpdir(), 'installtec-e2e-last-otp-step.json')
+
+function readOtpState(): Record<string, number> {
+  try {
+    return JSON.parse(readFileSync(OTP_STATE_FILE, 'utf-8')) as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+
+async function waitForUnusedOtpStep(page: Page, secret: string): Promise<void> {
+  const state = readOtpState()
+  const last = state[secret]
+  if (last !== undefined && Math.floor(Date.now() / OTP_STEP_MS) <= last) {
+    // +1.5s margin so the code is generated well inside the new step.
+    await page.waitForTimeout((last + 1) * OTP_STEP_MS - Date.now() + 1_500)
+  }
+  state[secret] = Math.floor(Date.now() / OTP_STEP_MS)
+  try {
+    writeFileSync(OTP_STATE_FILE, JSON.stringify(state))
+  } catch {
+    // Best effort: without the file we are back to the old (retrying) behaviour.
+  }
 }
 
 // lib/api.ts's ApiError.isStepUpRequired handling does a full

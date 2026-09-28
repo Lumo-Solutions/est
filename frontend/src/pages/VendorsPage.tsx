@@ -95,7 +95,7 @@ function NewVendorForm({ onDone }: { onDone: () => void }) {
       {checkDuplicates.isSuccess && (
         <div className="mt-2 text-sm">
           {checkDuplicates.data.candidates.length === 0 ? (
-            <p className="text-success">No likely duplicates found.</p>
+            <p className="text-emerald-700">No likely duplicates found.</p>
           ) : (
             <div className="rounded border border-amber-300 bg-warning-subtle p-2 text-amber-800">
               <p className="font-medium">Possible duplicates (highest match {Math.round(checkDuplicates.data.highest_score * 100)}%):</p>
