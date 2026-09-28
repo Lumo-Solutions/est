@@ -1880,5 +1880,72 @@ security-adjacent, so it stayed in the main session).
   test; two reruns were 193/193. It is not explained, so Phase 5's full run
   captures the log and treats any recurrence as a real failure.
 
+## Finish run: Phase 5 (final regression, lifecycle walkthrough, report)
+
+No subagents used for step 3, the Phase 4 close-out, or Phase 5 -- every
+change in this finish run was made directly by the main session, so
+rule A7's per-branch verification has nothing to check against; this is
+recorded here as that confirmation.
+
+### Lifecycle walkthrough (Playwright MCP, MFA off, new project WALK-1)
+estimator1 -> lead1 -> procurement1/lead1 -> bd1 -> md1, from project
+creation through win/loss, all through the real UI against the real dev
+stack. Findings, all confirmed live (not read from code):
+
+1. **Real, fixed:** `SettlementPage`'s per-line manual-cost override had no
+   field to enter the required reason (`source_note`) -- every attempt
+   422'd. Root-caused, fixed (added the "Why (required)" input),
+   `quotation-settlement-overrides.spec.ts`'s existing test only asserted
+   "no ROLE error" and so had been passing against this silent failure the
+   whole time; strengthened it to require the field and check for success.
+   See `docs/finish-brief.md`'s step 2 commit `c8876fd`.
+2. **Real, confirmed, not fixed -- needs a decision:** drawing extraction
+   gets permanently stuck at status `extracting` whenever `embed_drawing`
+   fails (confirmed live: this dev environment has no ONNX embedding model
+   downloaded, a pre-existing local-environment gap, not a code bug --
+   `ai-service/embeddings/download_model.py` was never run here). Root
+   cause: `index_sheets -> chord(group(extract_sheet), embed_drawing) ->
+   finalize_drawing` (`app/workers/tasks/takeoff.py`) is a Celery chord;
+   when one task in the group raises, Celery's default chord semantics
+   never call the callback, so `finalize_drawing` (the only place that sets
+   `ready`/`partial`) never runs, and the drawing's status is wrong
+   forever, with no error surfaced to the user either. This is the same
+   shape as the Phase 2 "GEO-TEST stuck in extracting since 2026-09-24"
+   observation that was flagged then but never confirmed -- now confirmed
+   with a fresh real upload. Fix options (not chosen without your input):
+   provision the embedding model in every environment that needs real
+   ingestion (operational fix, no code change), or make `finalize_drawing`
+   resilient to a permanently-failing task (e.g. `chord(..., immutable=True)`
+   with `link_error`, or a periodic sweep for stuck `extracting` drawings) --
+   the latter is a real code change to a pipeline this run's brief didn't
+   scope in, so left for your call.
+3. **Not a bug, learned in passing:** the BOQ import wizard's "Item No
+   column" etc. fields take the workbook's **header text** ("Item No"), not
+   a spreadsheet column letter ("A") -- an easy mistake (I made it) but the
+   preview's per-row error table catches it immediately and clearly. Also:
+   dot-numbered item numbers (e.g. "1.1") need their inferred parent ("1")
+   to exist as its own row in the same file, by design (`import_parser.py`'s
+   own docstring) -- confirmed live, not a bug.
+4. **Not a bug, operational note:** after a frontend rebuild+recreate, a
+   browser tab that already visited "/" keeps serving the stale
+   `index.html` (and therefore stale JS bundle) from the browser's own HTTP
+   cache until a hard reload or a URL the tab hasn't cached before -- `nginx`
+   serves `index.html` with only an `ETag`/`Last-Modified`, no explicit
+   `Cache-Control`, so a browser can apply heuristic freshness to it. A real
+   rebuild is invisible to an already-open tab. Worth a `Cache-Control:
+   no-cache` on `index.html` specifically (hashed assets already cache
+   fine), a P2 config nit, not fixed here.
+5. Server-side role enforcement re-confirmed live, not just read: `estimator1`
+   got a clean, correct 403 (`Requires one of roles: lead_estimator,
+   procurement_head, managing_director`) attempting the BOQ import commit.
+6. `GET /projects/{id}/members` correctly falls back to the raw UUID for
+   `estimator1` (no `GET /users` access, by design -- `_READ_ROLES` excludes
+   plain estimator) while `bd1`/`lead1`/`md1` see real usernames -- confirmed
+   both ways live, matches the documented design, not a bug.
+
+Screenshots: `docs/ui-qa/screenshots/phase-5/01`-`04` (projects list, BOQ
+reconciliation after import, settlement submitted with SoD visibly
+disabling Approve for the submitter, win/loss "won" outcome).
+
 ## Phase 5: final regression and report
 Not started.
