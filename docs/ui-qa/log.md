@@ -1590,5 +1590,16 @@ bare-`text-success`-on-white follow-up flagged in the procurement
 chunk; re-running the four spec files named in the verification gap
 above once host memory allows it.
 
+**Main session follow-up**: host memory recovered (2.71GB free, same
+order as the agent's own reading — confirmed independently, not assumed
+better). Ran the four previously-unverified spec files one at a time
+(reduced footprint, per the brief's own memory guidance): `taxonomy-tree.spec.ts`
+(2 passed), `costlib-module-e.spec.ts` (3 passed), `home-dashboard.spec.ts`
+(3 passed), `phase4-accessibility.spec.ts` full file including the new
+admin/audit/module-e/dashboard checks (15 passed + 1 flaky Keycloak-login
+timeout on `ProjectDetailPage`'s check, confirmed transient by an
+immediate solo re-run — passed cleanly, unrelated to this chunk's
+changes). This chunk is now fully verified; no remaining gap.
+
 ## Phase 5: final regression and report
 Not started.
