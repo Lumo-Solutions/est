@@ -66,3 +66,13 @@ async def add_member_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await projects_service.add_member(session, ctx, project_id, data.user_id, data.project_role)
+
+
+@router.delete("/{project_id}/members/{user_id}", status_code=204, response_model=None)
+async def remove_member_endpoint(
+    project_id: UUID,
+    user_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*_CREATE_ROLES, Role.LEAD_ESTIMATOR.value)),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    await projects_service.remove_member(session, ctx, project_id, user_id)
