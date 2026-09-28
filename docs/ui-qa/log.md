@@ -660,12 +660,50 @@ after Phase 2's merge.
      DB for this verification). `tsc --noEmit` clean, `oxlint` clean,
      `vitest`: 24 passed.
 
+4. **Cost library + Module E read views** (2 more "no UI at all"
+   capabilities): built directly by the main session this run (same
+   rigor as a delegated chunk — reviewed and tested the same way).
+   - **New endpoint**: `GET /cost-items` (list/search, paginated) — only
+     get-by-id existed before. Mirrors `vendors_service.list_vendors`'s
+     `Page`/`limit`/`offset` shape exactly; adds case-insensitive
+     `search` (code/description substring), `trade_node_id`, `is_active`
+     filters. 4 new integration tests + 2 api tests.
+   - **CostLibraryPage** (`/cost-library`): paginated browse/search
+     (real Previous/Next controls, not just a count), create-item form
+     (role-gated lead/proc/md, matching `_WRITE_ROLES`).
+   - **CostItemDetailPage** (`/cost-library/:id`): current rate as of a
+     chosen date (`GET /cost-items/{id}/rate?valid_on=...`) with a date
+     picker to see a different date's rate, and a record-new-rate form.
+     Deliberately did **not** add a separate rate-history-list endpoint —
+     per the brief's own "add backend endpoints only where a screen
+     genuinely needs one," picking different as-of dates already covers
+     "history" without a new screen need.
+   - **ModuleEPage** (`/projects/:id/module-e`, "Post-award"): 4 tabs
+     (Contracts incl. revisions/variations on selection, BOQ revisions,
+     Exclusion register with a status filter, Outturn costs) over the
+     existing all-read-only, any-role `module_e.py` endpoints. No forms,
+     no new role gating needed.
+   - **Reconfirmed, not fixed** (already flagged by the research pass,
+     out of this chunk's scope): `CostRateComponentOut`/`CostItemRateOut`
+     use bare `float` for money fields **end to end on the backend**
+     (`record_rate`'s own `total_rate` computation is plain Python float
+     arithmetic), not just at the JSON boundary — a different, older, and
+     arguably more serious issue than the JsonDecimal-string bug fixed in
+     Phase 2, since real precision is lost server-side before storage,
+     not just at serialization. Flagging again here for a deliberate
+     main-session decision (migrate `cost_item_rates`/
+     `cost_rate_components` to Decimal columns is a real schema/migration
+     job, well beyond a UI gap-fill chunk).
+   - 3 new real-backend Playwright tests, all passing against the
+     rebuilt frontend image. `tsc --noEmit` clean, `oxlint` clean,
+     `vitest`: 24 passed. `make test-unit`: 347 passed. `make
+     test-integration`: 172 passed. `make test-api`: 24 passed.
+
 Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
-before the next starts): cost library + Module E read-view UI; project
-location/members UI + saved-scenario delete; quotation
-attachments/exclusion-ack/fx-rate UI + settlement per-trade/per-line
-override UI; shared modal component + window.prompt replacement; taxonomy
-tree editor; home dashboard per role.
+before the next starts): project location/members UI + saved-scenario
+delete; quotation attachments/exclusion-ack/fx-rate UI + settlement
+per-trade/per-line override UI; shared modal component + window.prompt
+replacement; taxonomy tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
