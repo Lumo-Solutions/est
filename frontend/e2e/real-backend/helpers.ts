@@ -285,10 +285,15 @@ export async function resolveUnresolvedLines(page: Page, projectId: string): Pro
 export async function submitSettlementForApproval(page: Page, projectId: string): Promise<void> {
   await page.goto(`/projects/${projectId}/settlement`)
   const buildButton = page.getByRole('button', { name: /^Build( new)? settlement draft$/ })
-  if (await buildButton.isVisible().catch(() => false)) {
+  const submitButton = page.getByRole('button', { name: 'Submit for approval' })
+  // Wait for the page's data to land before deciding: isVisible() alone
+  // returns immediately, so it raced the settlement fetch and skipped the
+  // build click on an already-approved settlement (which has no Submit).
+  await buildButton.or(submitButton).first().waitFor({ state: 'visible' })
+  if (await buildButton.isVisible()) {
     await buildButton.click()
   }
-  await page.getByRole('button', { name: 'Submit for approval' }).waitFor({ state: 'visible' })
+  await submitButton.waitFor({ state: 'visible' })
   await forceZeroDefaults(page, projectId)
   await resolveUnresolvedLines(page, projectId)
   await page.reload()
