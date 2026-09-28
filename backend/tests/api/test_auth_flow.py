@@ -36,6 +36,23 @@ async def test_auth_me_without_token_returns_401(client):
     assert resp.status_code == 401
 
 
+async def test_auth_me_returns_the_login_name_for_display(authed_client):
+    """The header shows a name, not the Keycloak subject UUID."""
+    client = authed_client(frozenset({"estimator"}), username="estimator1")
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["username"] == "estimator1"
+    assert body["sub"] != "estimator1"
+
+
+async def test_auth_me_username_is_null_when_the_token_has_none(authed_client):
+    client = authed_client(frozenset({"estimator"}))
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["username"] is None
+
+
 async def test_auth_login_is_public_and_redirects(client):
     resp = await client.get("/api/v1/auth/login", follow_redirects=False)
     assert resp.status_code in (302, 307)

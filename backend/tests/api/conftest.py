@@ -58,7 +58,7 @@ def authed_client(client, monkeypatch):
 
     from app.security.jwt import Principal, TokenValidator
 
-    def _as(roles: frozenset[str], *, acr: str | None = None, auth_time: int | None = None):
+    def _as(roles: frozenset[str], *, acr: str | None = None, auth_time: int | None = None, username: str | None = None):
         tenant_id = uuid.UUID("8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00")
         sub = str(uuid.uuid4())
         # has_recent_step_up (fix/keycloak-step-up) requires acr AND a
@@ -69,7 +69,7 @@ def authed_client(client, monkeypatch):
             auth_time = int(time.time())
         principal = Principal(
             sub=sub, tenant_id=tenant_id, email=None, roles=roles, acr=acr, amr=[], sid=None, exp=0,
-            auth_time=auth_time,
+            auth_time=auth_time, username=username,
         )
         monkeypatch.setattr(TokenValidator, "validate", lambda self, token: principal)
         client.headers["Authorization"] = "Bearer test-token"

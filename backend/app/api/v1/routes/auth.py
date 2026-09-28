@@ -113,6 +113,7 @@ async def auth_logout(request: Request, settings: Settings = Depends(get_setting
 async def auth_me(ctx: RequestContext = CurrentUser, settings: Settings = Depends(get_settings)) -> dict:
     return {
         "sub": ctx.sub,
+        "username": ctx.username,
         "tenant_id": str(ctx.tenant_id),
         "roles": sorted(ctx.roles),
         "acr": ctx.acr,
