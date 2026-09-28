@@ -371,3 +371,70 @@ export async function attemptApprove(page: Page): Promise<'blocked' | 'approved'
   if (approved) return 'approved'
   throw new Error('Approve click neither redirected to step-up nor showed the approved banner within 15s')
 }
+
+const REBUILDABLE_SETTLEMENT_STATUSES = new Set(['approved', 'rejected', 'won', 'lost'])
+
+async function currentSettlementStatus(page: Page, projectId: string): Promise<string | null> {
+  const rows = (await (await page.request.get(`/api/v1/projects/${projectId}/bid-settlements`)).json()) as {
+    is_current: boolean
+    status: string
+  }[]
+  return rows.find((s) => s.is_current)?.status ?? null
+}
+
+// Approves the project's SUBMITTED settlement as md1 (a different user from
+// the bd1 submitter, so segregation of duties holds), completing a real MFA
+// step-up when the backend demands one and going straight through when
+// DEV_DISABLE_MFA is on.
+async function approveSubmittedSettlement(browser: Browser, projectId: string): Promise<void> {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  try {
+    const page = await context.newPage()
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    await page.goto(`/projects/${projectId}/settlement`)
+    if ((await attemptApprove(page)) === 'blocked') {
+      await completeMfaStepUp(page, DEMO_TOTP_SECRETS.md1)
+      const second = await attemptApprove(page)
+      if (second !== 'approved') throw new Error('settlement was still not approved after a real MFA step-up')
+    }
+  } finally {
+    await context.close()
+  }
+}
+
+// Puts the project's CURRENT settlement into a known lifecycle state through
+// the real UI/API flow, so a spec never has to skip because an earlier spec
+// (or `make dev-simulate-settlement`) left the shared D1-SIM fixture
+// somewhere else. `page` must be a logged-in bd1 (or md1) page.
+//   'draft'       -> a submittable draft (no outcome yet)
+//   'approved'    -> approved, exportable
+//   'rebuildable' -> any status the cockpit offers "Build new draft" from
+export async function driveSettlementTo(
+  page: Page,
+  browser: Browser,
+  projectId: string,
+  target: 'draft' | 'approved' | 'rebuildable',
+): Promise<void> {
+  let status = await currentSettlementStatus(page, projectId)
+  if (target === 'rebuildable' && status !== null && REBUILDABLE_SETTLEMENT_STATUSES.has(status)) return
+  if (target === 'approved' && status === 'approved') return
+  if (target === 'draft' && status === 'draft') return
+
+  if (status === 'submitted') {
+    await approveSubmittedSettlement(browser, projectId)
+    status = await currentSettlementStatus(page, projectId)
+    if (target === 'rebuildable' || target === 'approved') return
+  }
+  // From here the settlement is a draft, a rebuildable status, or absent:
+  // submitSettlementForApproval builds a new draft first when it has to.
+  if (target === 'draft') {
+    if (status !== 'draft') {
+      await page.goto(`/projects/${projectId}/settlement`)
+      await page.getByRole('button', { name: /^Build( new)? settlement draft$/ }).click()
+      await page.getByRole('button', { name: 'Submit for approval' }).waitFor({ state: 'visible' })
+    }
+    return
+  }
+  await submitSettlementForApproval(page, projectId)
+  await approveSubmittedSettlement(browser, projectId)
+}
