@@ -4,6 +4,11 @@ import { defineConfig, devices } from '@playwright/test'
 // never run for this project (standing instruction: don't download browsers).
 export default defineConfig({
   testDir: './e2e',
+  // e2e/real-backend/** needs the real dev stack, one worker at a time, and its
+  // own config (playwright.real-backend.config.ts, `npm run e2e:real-backend`).
+  // Picked up here it ran ~80 real-login specs on 6 parallel workers against the
+  // shared stack and failed en masse (TOTP replay protection, Keycloak brute-force).
+  testIgnore: ['**/real-backend/**'],
   fullyParallel: true,
   webServer: {
     command: 'npm run dev',
