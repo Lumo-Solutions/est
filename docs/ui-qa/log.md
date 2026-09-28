@@ -760,10 +760,74 @@ after Phase 2's merge.
    - Commits: `0e35208` (members-list endpoint), `e748906` (scenario
      delete endpoint + migration 0028), `3165a31` (frontend UI + e2e spec).
 
+4. **Quotation attachments/exclusion-ack/fx-rate UI, settlement per-trade/
+   per-line overrides.**
+   - **Attachments viewer** (`QuoteReviewPage.tsx`): `QuotationAttachmentOut`
+     never exposed a way to fetch an attachment's bytes (correctly not
+     `raw_object_key` directly), so there was no way to actually view one.
+     Added `GET /quotation-attachments/{id}/download`, mirroring
+     `app/services/takeoff.py::presigned_download_url`'s exact shape
+     (presign + redirect + audit `DOWNLOAD`) — only `safety_status=accepted`
+     attachments are servable; a rejected one may be exactly what
+     `attachment_safety.py` rejected it for, a still-pending one hasn't
+     been scanned yet.
+   - **Found and fixed in passing**: `acknowledge_exclusion_flag` was the
+     only reviewer action in `quotation_ingestion.py` that never called
+     `audit.record` — every sibling action (accept/reject line, set fx
+     rate) does. Fixed alongside its first-ever UI.
+   - **Exclusion-flag acknowledge** (`BidLevelingPage.tsx`): an
+     "Acknowledge" action next to each open flag, gated to the same
+     `_REVIEW_ROLES` as every other quotation-review action.
+   - **Quotation fx-rate override** (`QuoteReviewPage.tsx`): wired up
+     `useSetQuotationFxRate`, which already existed in
+     `features/quotations/api.ts` but had never been called from any page.
+   - **Settlement per-trade/per-line overrides** (`SettlementPage.tsx`,
+     explicit brief item): a trade-override panel (existing trades'
+     plant/overhead/volatility/markup % shown + editable, plus an "add
+     override for a new trade" form using the taxonomy trade-node picker)
+     and a per-line panel (manual unit cost via `PATCH .../lines/{id}`,
+     FX rate via the separate `POST .../lines/{id}/fx-rate` — `_LINE_ROLES`
+     vs `_HEADER_ROLES` respectively, so an estimator can override a
+     line's cost but not its FX rate, exactly matching the server).
+     **Found in the process**: `useCurrentSettlement` is built on the list
+     endpoint (`GET /projects/{id}/bid-settlements`), which never
+     populates `lines`/`trade_overrides` — only the single-settlement
+     detail endpoint's `_to_out()` does. Added a second `useSettlement(
+     current.id)` fetch for the detail data the override panels need,
+     rather than changing the list endpoint's shape (`docs/ui-qa/
+     coverage.md`'s own "harmless today, no frontend code reads it" note
+     about this gap is now out of date — this is the first code that does).
+   - Added `formatMoney` to `lib/format.ts` (thousands separators, 2dp,
+     currency code) — no shared money formatter existed anywhere in the
+     frontend before this (Phase 2's cross-cutting note). Used for the new
+     override panels; a broader pass to use it everywhere else money is
+     shown belongs to Phase 4.
+   - 4 new real-backend Playwright tests. Two real test-authoring bugs
+     caught and fixed on the first run, not just described: (a) called
+     `ensureProjectMember` with `'procurement1'`, a role outside that
+     helper's own `'estimator1' | 'lead_estimator'` type — TypeScript
+     doesn't check `frontend/e2e` from the root `tsc --noEmit`, so this
+     silently fell through to the helper's password lookup picking
+     `lead1`'s password for the `procurement1` account, producing real,
+     repeated failed-login attempts against Keycloak (not a flaky test —
+     removed the unnecessary call instead, since `procurement_head` is
+     already in `_PROJECT_VISIBLE_WITHOUT_MEMBERSHIP_ROLES` and never
+     needed it); (b) `getByRole('button', { name: 'Override' })`'s default
+     substring match also matched the trade-override panel's "Set
+     override" button, which starts disabled with no trade selected,
+     causing an indefinite click timeout — fixed with `exact: true`. All
+     4 pass after both fixes. `make test-unit`: 347 passed. `make
+     test-integration`: 181 passed (one transient/flaky failure seen on a
+     re-run, gone on the next — consistent with this suite's
+     already-documented occasional testcontainers flakiness, not caused
+     by this change). `make test-api`: 26 passed. `tsc --noEmit` clean,
+     `oxlint` clean, `vitest`: 24 passed.
+   - Commits: `8108d9b` (attachment download endpoint + audit fix),
+     `f9aea5c` (frontend UI + e2e spec).
+
 Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
-before the next starts): quotation attachments/exclusion-ack/fx-rate UI +
-settlement per-trade/per-line override UI; shared modal component +
-window.prompt replacement; taxonomy tree editor; home dashboard per role.
+before the next starts): shared modal component + window.prompt
+replacement; taxonomy tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
