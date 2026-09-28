@@ -713,11 +713,57 @@ after Phase 2's merge.
      `vitest`: 24 passed. `make test-unit`: 347 passed. `make
      test-integration`: 172 passed. `make test-api`: 24 passed.
 
+3. **Project location/members UI + saved-scenario delete** (a prior attempt
+   at this exact chunk fabricated a complete fake report with zero real
+   tool calls -- caught on review via `git log`/`git status` showing none
+   of it existed; redone for real):
+   - **`GET /projects/{id}/members`** (new): confirmed by reading `backend/app/api/v1/routes/projects.py`
+     that no members-list endpoint existed at all, only add. Any
+     authenticated role (matches `ProjectOut`'s own read gate), calls
+     `get_project` first so a 404 on an unauthorized/nonexistent project
+     matches `add_member`'s own check. 3 new integration tests + 2 api
+     tests.
+   - **`ProjectDetailPage.tsx`**: an "Edit location" form (role-gated
+     `_CREATE_ROLES` = bd/md) and a Members section — a real list with
+     usernames resolved via `GET /users` (falls back to the raw UUID if a
+     user isn't in that tenant's list) and an add-member form using a real
+     `<select>` picker (role-gated bd/md/lead), instead of requiring a
+     bare UUID.
+   - **`DELETE /bid-settlements/{id}/scenarios/{id}`** (new): confirmed no
+     delete endpoint existed for saved scenarios (brief's own explicit
+     Phase 3 item). Same `_LINE_ROLES` as saving one. **Found a second real
+     bug while testing this for real, not just reasoning about it**:
+     `bid_settlement_scenarios`' RLS policies (migration 0019) were created
+     with `write_roles` but no `delete_roles` at all (nobody had ever
+     needed one before), so `tenant_policies()` never emitted a DELETE
+     policy — with RLS force-enabled, the new `delete_scenario()` silently
+     deleted 0 rows on its very first real test run, the exact same
+     failure shape migration 0022 already found once for
+     `drawing_measurements`. Fixed with migration `0028`, `DELETE_ROLES`
+     matching the same 5 roles write already covers. Applied to the dev
+     stack and verified live, not just against the ephemeral test DB.
+   - **`SettlementPage.tsx`**: a "Delete" button per saved scenario
+     (role-gated to the same 5 `_LINE_ROLES`), using a two-step inline
+     "Delete / Confirm delete?" toggle rather than a new `window.confirm`
+     (Phase 3 removes those elsewhere; adding one here would be a step
+     backward) or a full modal (a separate chunk's job).
+   - **Judgment call**: member *removal* has no backend endpoint at all —
+     not mentioned in the brief's Phase 3 list, not built speculatively,
+     flagged here as a possible future gap.
+   - 3 new integration tests (project members) + 2 api tests, 3 new
+     integration tests (scenario delete: lowest role deletes, denied role
+     `ForbiddenError`, wrong-settlement 404s), 3 new e2e tests (one
+     self-skips on the already-documented D1-SIM shared-fixture state,
+     same as several existing Phase 2 specs). `make test-unit`: 347
+     passed. `make test-integration`: 178 passed. `make test-api`: 26
+     passed. `tsc --noEmit` clean, `oxlint` clean, `vitest`: 24 passed.
+   - Commits: `0e35208` (members-list endpoint), `e748906` (scenario
+     delete endpoint + migration 0028), `3165a31` (frontend UI + e2e spec).
+
 Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
-before the next starts): project location/members UI + saved-scenario
-delete; quotation attachments/exclusion-ack/fx-rate UI + settlement
-per-trade/per-line override UI; shared modal component + window.prompt
-replacement; taxonomy tree editor; home dashboard per role.
+before the next starts): quotation attachments/exclusion-ack/fx-rate UI +
+settlement per-trade/per-line override UI; shared modal component +
+window.prompt replacement; taxonomy tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
