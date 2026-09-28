@@ -31,10 +31,15 @@ export function TakeoffViewerPage() {
   if (sheetError || drawingError) {
     return (
       <div className="p-6">
-        <Link to={`/projects/${projectId}/drawings/${drawingId}`} className="text-sm text-slate-800 hover:underline">
+        <Link
+          to={`/projects/${projectId}/drawings/${drawingId}`}
+          className="rounded text-sm text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        >
           ← Sheets
         </Link>
-        <p className="mt-4 text-red-600">{(sheetErr ?? drawingErr)?.message}</p>
+        <p role="alert" className="mt-4 text-danger">
+          {(sheetErr ?? drawingErr)?.message}
+        </p>
       </div>
     )
   }
@@ -73,7 +78,7 @@ export function TakeoffViewerPage() {
         <div className="p-4">
           <Link
             to={`/projects/${projectId}/drawings/${drawingId}`}
-            className="text-xs text-slate-500 hover:text-slate-800 hover:underline"
+            className="rounded text-xs text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             ← Sheets
           </Link>
@@ -84,7 +89,7 @@ export function TakeoffViewerPage() {
             {sheet.drawing_number ?? '--'} · Rev {sheet.revision ?? '--'}
           </p>
           {sheet.scale_disagreement && (
-            <p className="mt-1 text-xs text-amber-600">⚠ Scale sources disagree -- verify calibration.</p>
+            <p className="mt-1 text-xs text-warning">⚠ Scale sources disagree -- verify calibration.</p>
           )}
         </div>
 
@@ -97,8 +102,8 @@ export function TakeoffViewerPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedMeasurementId(m.id)}
-                  className={`w-full rounded px-2 py-1 text-left text-xs ${
-                    m.id === selectedMeasurementId ? 'bg-slate-100' : 'hover:bg-slate-50'
+                  className={`w-full rounded px-2 py-1 text-left text-xs tabular-nums transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+                    m.id === selectedMeasurementId ? 'bg-brand-subtle text-brand font-medium' : 'hover:bg-slate-50'
                   }`}
                 >
                   {m.kind}: {m.effective_value} {m.unit}
