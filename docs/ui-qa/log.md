@@ -1827,5 +1827,58 @@ Run one at a time, `--workers=1`, MFA on, frontend image rebuilt:
   horizontal scroll (Item No is pinned), which I judged acceptable for a data
   grid rather than breakage.
 
+### Merges after step 2
+`phase-4-design-system` merged into `master` (`--no-ff`, `75984a3`), then
+`feat/dev-mfa-switch` (`ba545dc`): no conflicts (the AppShell / AuthContext /
+helpers changes touched different lines). Re-verified on the merged tree:
+`tsc` clean, vitest 26 passed, frontend image rebuilt, `login.spec.ts` 2/2
+(MFA on).
+
+## Finish run: step 3 (`feat/v2-gaps`)
+No subagents were used for step 3 either (the work was small and mostly
+security-adjacent, so it stayed in the main session).
+- **Header name**: `preferred_username` now flows Keycloak mapper (new, in
+  `bootstrap.sh`) -> `Principal` -> `RequestContext.username` -> `/auth/me`
+  `username` -> header (UUID only as a tooltip). Display only. 2 API tests +
+  3 vitest cases.
+- **NavLink `end`**: project Overview now matches exactly; before, it stayed
+  highlighted next to Drawings/BOQ/... on every sub-page. Vitest renders the
+  shell at a sub-page and at the overview.
+- **Remove project member**: `DELETE /projects/{id}/members/{user_id}` for
+  bd_director / managing_director / lead_estimator (same as add), audited
+  (payload `member_removed`, `role`), 404 if not a member. Tests: API (lead
+  removes, second removal 404, audit event present, estimator 403 and the
+  member is still there), integration under real RLS as a non-system
+  lead_estimator (row gone, audit payload checked, non-member 404), and an
+  e2e through the confirm modal that also checks the server's member list.
+  Note: `GET /projects/{id}` is tenant-wide by design (only child tables are
+  membership-scoped), so removal is verified through the members list, not
+  through a 403 on the project.
+- **`platform_admin` demo user `admin1`**: seeded under the existing
+  `is_dev_or_test_env` guard with a dev-fixed TOTP. **Found while doing it:**
+  the live realm had no `platform_admin` role at all (the realm JSON is only
+  imported once), so `add-roles` failed after the user had been created and
+  the next run skipped the whole user as "already exists". `bootstrap.sh` now
+  creates the role if missing and assigns roles outside the create branch.
+  e2e: admin1 logs in, `/auth/me` roles == [platform_admin], and the
+  quarantine page offers "Resolve tenant" (the action that was untestable).
+- **`JsonDecimal`** on `CostRateComponentOut` / `CostItemRateOut` (incl.
+  `confidence`); unit test on both.
+- **`make dev-simulate-settlement` idempotent**: it only resolved the first
+  BOQ line, so once other simulations added lines to D1-SIM every rerun died
+  with "Every settlement line needs a resolved cost". It now gives leftover
+  lines a manual cost and tolerates the correct refusal of the
+  original-workbook export when BOQ lines span import batches. Ran twice in a
+  row: both exit 0. The e2e skips that came from leftover state
+  (`settlement-winloss-roles.spec.ts`, 3 of 4 tests) are gone: a
+  `driveSettlementTo()` helper puts the settlement into the state each test
+  needs through the real flow (4/4 passed, 0 skipped).
+- Verified: unit 360, integration 193 (see note), api 34, `tsc` clean,
+  `oxlint` unchanged (3 pre-existing warnings), vitest 29, `npm run build` ok.
+  **Note:** one integration run reported `1 failed, 192 passed` (a
+  `_handle_exception_no_connection` DB trace) and I did not capture which
+  test; two reruns were 193/193. It is not explained, so Phase 5's full run
+  captures the log and treats any recurrence as a real failure.
+
 ## Phase 5: final regression and report
 Not started.
