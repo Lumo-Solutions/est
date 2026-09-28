@@ -824,10 +824,74 @@ after Phase 2's merge.
      `oxlint` clean, `vitest`: 24 passed.
    - Commits: `8108d9b` (attachment download endpoint + audit fix),
      `f9aea5c` (frontend UI + e2e spec).
+   - **Main-session follow-up on independent verification**: the chunk's
+     own e2e run reported all 4 new tests passing, but re-running the
+     same spec independently (including after a from-scratch frontend
+     rebuild) reproduced 1 real failure: `quotation-settlement-
+     overrides.spec.ts`'s FX-rate test located the input by
+     `getByPlaceholder(/FX rate/)`, but `QuoteReviewPage.tsx`'s FX input
+     placeholder is dynamic — `"FX rate to base"` when
+     `quotation.fx_rate_to_base` is unset, `"Current: <value>"` once a
+     rate has already been recorded — so the locator breaks the moment
+     any prior run (including this same test, re-run against the shared
+     D1-SIM fixture) already set one. A real test-authoring bug, not
+     flakiness or a product bug. Fixed by widening the regex to match
+     both placeholder states (`e1c1e31`); all 4 tests in the file pass
+     now, reproduced twice.
 
-Remaining Phase 3 work (delegated to subagents in chunks, each reviewed
-before the next starts): shared modal component + window.prompt
-replacement; taxonomy tree editor; home dashboard per role.
+10. **Shared modal component and window.prompt replacement** (Phase 3's
+    explicit "replace every window.prompt/window.confirm with proper
+    modals" item):
+    - No modal/dialog component existed anywhere in this codebase before
+      this (confirmed by the earlier research pass) — added
+      `frontend/src/components/Modal.tsx` (minimal: backdrop click +
+      Escape both dismiss, `role="dialog"`/`aria-modal`/`aria-label`, no
+      focus trap — not required for this pass's simple dialogs) and
+      `TextPromptModal.tsx` on top of it (title, optional message,
+      textarea, Cancel/Submit, Submit disabled until the trimmed value is
+      non-empty — matching every existing prompt's own `if (reason)
+      mutate(...)` guard).
+    - Replaced all 6 confirmed `window.prompt` call sites (no
+      `window.confirm` anywhere): `ProcurementPackagesPage.tsx` (resend
+      RFQ reason), `QuarantineQueuePage.tsx` (resolve-tenant note, attach
+      reason, dismiss note — lifted to page-level state keyed by
+      which email/action is open, rather than per-row, specifically to
+      avoid a modal's `<div>` ending up as an invalid direct child of
+      `<tbody>`/`<tr>`: harmless visually since the modal is
+      fixed-positioned, but React still emits a console warning for the
+      invalid nesting, which this app's own Phase 2 QA bar treats as a
+      console error worth avoiding), `QuoteReviewPage.tsx` (reject-
+      quotation reason), `SettlementPage.tsx` (settlement rejection note
+      — the Reject button's existing SoD disabled-state logic is
+      untouched, only the prompt mechanism changed).
+    - No server-side behavior, role gating, or mutation logic changed
+      anywhere — purely a UI-mechanism swap.
+    - 2 new real-backend Playwright tests verify the mechanism end to
+      end on 2 of the 6 sites (chosen to cover both the "cancel without
+      submitting" path and a full submit-through-a-real-MFA-step-up
+      path): `QuarantineQueuePage`'s Dismiss modal (open → validate
+      Submit stays disabled until non-empty → Cancel leaves the row
+      untouched, deliberately not consuming the shared QA-DEMO fixture
+      row other specs also read) and `SettlementPage`'s Reject modal
+      (bd1 submits a fresh draft via the existing
+      `submitSettlementForApproval` helper, md1 rejects through a real
+      MFA step-up — same redirect-and-retry shape as the pre-existing
+      Approve flow in `settlement.spec.ts` — and the settlement visibly
+      moves to `rejected`). Deliberately no `page.on('dialog')` handler
+      anywhere in the new spec file: a leftover native `window.prompt`
+      would hang the test waiting on a dialog nothing answers, which is
+      a stronger regression signal than asserting its absence directly.
+      The other 4 replaced sites use the identical component with the
+      same shape and aren't independently re-tested.
+    - `tsc --noEmit` clean, `oxlint` clean (same 3 pre-existing warnings
+      in files this change doesn't touch, zero new ones), `vitest`: 24
+      passed, `make test-unit`: 347 passed (no backend change this
+      chunk). Both new e2e tests verified passing (including the full
+      MFA step-up round-trip) against the rebuilt frontend image.
+    - Commits: `64879c7` (modal component + all 6 replacements),
+      `71070ce` (e2e tests).
+
+Remaining Phase 3 work: taxonomy tree editor; home dashboard per role.
 
 ## Phase 4: design system and redesign
 Not started.
