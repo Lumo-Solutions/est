@@ -71,6 +71,18 @@ def _to_out(request, steps) -> ApprovalRequestOut:
     return out
 
 
+@router.get("/pending-for-me", response_model=list[ApprovalRequestOut])
+async def list_pending_for_me_endpoint(
+    ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[ApprovalRequestOut]:
+    requests = await approvals_service.list_pending_for_caller(session, ctx)
+    out = []
+    for request in requests:
+        _, steps = await approvals_service.get_request(session, request.id)
+        out.append(_to_out(request, steps))
+    return out
+
+
 @router.post("", response_model=ApprovalRequestOut, status_code=201)
 async def create_request_endpoint(
     data: ApprovalRequestCreate,

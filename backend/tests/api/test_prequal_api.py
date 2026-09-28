@@ -18,3 +18,16 @@ async def test_any_authenticated_role_can_list_a_vendors_certificates(authed_cli
     resp = await reader.get(f"/api/v1/vendors/{vendor_id}/certificates")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+async def test_any_authenticated_role_can_list_expiring_certificates(authed_client):
+    """Phase 3 gap-fill (docs/ui-qa-brief.md): home dashboard's
+    "certificates expiring" tile. Read-only, no role restriction -- same
+    as the per-vendor list above."""
+    reader = authed_client(frozenset({Role.ESTIMATOR.value}))
+    resp = await reader.get("/api/v1/vendor-certificates/expiring")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    bad_days = await reader.get("/api/v1/vendor-certificates/expiring?days=-1")
+    assert bad_days.status_code == 422
