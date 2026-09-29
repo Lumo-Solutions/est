@@ -42,11 +42,6 @@
   --color-negative-fill: #FE5C73;
   --color-accent-teal: #16DBCC;
 
-  /* Decorative icon-tile backgrounds (icon on top carries its own 3:1). */
-  --color-tile-amber: #FFF5D9;
-  --color-tile-blue: #E7EDFF;
-  --color-tile-pink: #FFE0EB;
-  --color-tile-teal: #DCFAF8;
 
   --radius-card: 25px;
   --radius-control: 15px;

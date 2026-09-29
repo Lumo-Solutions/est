@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import type { InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type { InputHTMLAttributes, SelectHTMLAttributes } from 'react'
 
 // Figma forms: 16px label above a 15px-radius input. Border is
 // --color-outline (3.3:1) not Figma's #DFEAF2 (1.22:1 -- fails WCAG 1.4.11).
@@ -76,23 +76,6 @@ export function SelectField({
       <select id={id} aria-invalid={error ? true : undefined} className={`${controlClasses} ${className}`} {...rest}>
         {children}
       </select>
-    </FieldShell>
-  )
-}
-
-export function TextAreaField({
-  label,
-  error,
-  hint,
-  id: idProp,
-  className = '',
-  ...rest
-}: Common & TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const auto = useId()
-  const id = idProp ?? auto
-  return (
-    <FieldShell id={id} label={label} error={error} hint={hint}>
-      <textarea id={id} aria-invalid={error ? true : undefined} className={`${controlClasses} ${className}`} {...rest} />
     </FieldShell>
   )
 }
