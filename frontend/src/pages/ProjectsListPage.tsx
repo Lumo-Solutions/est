@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
-import { useCreateProject, useProjects } from '../features/projects/api'
+import { useCreateProject, useProjectsPage } from '../features/projects/api'
 import { Role } from '../lib/roles'
 
 const CREATE_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+const PAGE_SIZE = 20
 
 // docs/ui-design-system.md section 4.8 -- ProjectStatus (backend/app/core/enums.py)
 // mapped to the shared Badge's 4 semantic tones + neutral.
@@ -89,9 +90,14 @@ function NewProjectForm({ onDone }: { onDone: () => void }) {
 
 export function ProjectsListPage() {
   const { hasRole } = useAuth()
-  const { data: projects, isLoading, isError, error } = useProjects()
+  const [page, setPage] = useState(1)
+  const offset = (page - 1) * PAGE_SIZE
+  const { data, isLoading, isError, error } = useProjectsPage({ limit: PAGE_SIZE, offset })
+  const projects = data?.items
   const [showForm, setShowForm] = useState(false)
   const canCreate = hasRole(...CREATE_ROLES)
+  const hasNextPage = data ? offset + data.items.length < data.total : false
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
     <div className="p-6">
@@ -158,6 +164,31 @@ export function ProjectsListPage() {
             ))}
           </tbody>
         </table>
+      )}
+      {data && data.total > 0 && (
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-sm text-slate-500">
+            Page {page} of {totalPages} ({data.total} project{data.total === 1 ? '' : 's'})
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={!hasNextPage}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

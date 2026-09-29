@@ -2,25 +2,59 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_session, require_roles
 from app.core.context import RequestContext
 from app.core.enums import Role
-from app.schemas.projects import ProjectCreate, ProjectLocationUpdate, ProjectMemberAdd, ProjectMemberOut, ProjectOut
+from app.schemas.common import Page
+from app.schemas.projects import (
+    ProjectCreate,
+    ProjectLocationUpdate,
+    ProjectMemberAdd,
+    ProjectMemberOut,
+    ProjectOut,
+)
 from app.services import projects as projects_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 _CREATE_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
 
+# Mirrors app/services/{vendors,costlib}.py's list endpoints' page size.
+_DEFAULT_PAGE_SIZE = 20
+_MAX_PAGE_SIZE = 200
 
-@router.get("", response_model=list[ProjectOut])
+
+@router.get("", response_model=list[ProjectOut] | Page)
 async def list_projects_endpoint(
-    ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
-) -> list[ProjectOut]:
-    return [ProjectOut.model_validate(p) for p in await projects_service.list_projects(session)]
+    limit: int | None = Query(default=None, ge=1, le=_MAX_PAGE_SIZE),
+    offset: int | None = Query(default=None, ge=0),
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[ProjectOut] | Page:
+    """Backward compatibility: called with NEITHER `limit` nor `offset` --
+    as LayerTradeMappingAdmin.tsx and TolerancesAdmin.tsx's project-picker
+    dropdowns do via useProjects() -- this returns the exact same bare,
+    unbounded `list[ProjectOut]` JSON array it always has. Passing either
+    `limit` or `offset` (as ProjectsListPage's useProjectsPage() does)
+    switches to the paginated shape, mirroring GET /vendors and
+    GET /cost-items: a `Page` envelope ({items, total, limit, offset}),
+    same created_at-desc ordering as the unpaginated list."""
+    if limit is None and offset is None:
+        return [ProjectOut.model_validate(p) for p in await projects_service.list_projects(session)]
+    effective_limit = limit if limit is not None else _DEFAULT_PAGE_SIZE
+    effective_offset = offset if offset is not None else 0
+    projects, total = await projects_service.list_projects_page(
+        session, limit=effective_limit, offset=effective_offset
+    )
+    return Page(
+        items=[ProjectOut.model_validate(p) for p in projects],
+        total=total,
+        limit=effective_limit,
+        offset=effective_offset,
+    )
 
 
 @router.post("", response_model=ProjectOut, status_code=201)
