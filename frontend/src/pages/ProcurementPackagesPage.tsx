@@ -17,6 +17,7 @@ import {
   useRfqs,
 } from '../features/procurement/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/procurement.py's _STRUCTURE_ROLES --
 // creating a package, adding items, and drafting RFQs are all lead/proc/bd/md
@@ -64,9 +65,9 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
   const hasIneligibleSelected = (vendors ?? []).some((v) => selectedVendorIds.includes(v.vendor_id) && !v.eligible)
 
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">BOQ items in this package</h3>
-      <ul className="mt-1 text-sm text-slate-600">
+    <div className="mt-4 border-t border-hairline pt-4">
+      <h3 className="text-lg font-semibold text-ink-title">BOQ items in this package</h3>
+      <ul className="mt-1 text-sm text-ink-2">
         {(items ?? []).map((i) => (
           <li key={i.id}>
             {i.item_no}: {i.description}
@@ -79,7 +80,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
           aria-label="Available BOQ items to add to this package"
           value={selectedItemIds}
           onChange={(e) => setSelectedItemIds(Array.from(e.target.selectedOptions, (o) => o.value))}
-          className="h-24 w-64 rounded border border-slate-300 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="h-24 w-64 rounded-control border border-outline text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
         >
           {availableItems.map((i) => (
             <option key={i.id} value={i.id}>
@@ -91,7 +92,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
           type="button"
           disabled={selectedItemIds.length === 0 || addItems.isPending}
           onClick={() => addItems.mutate(selectedItemIds, { onSuccess: () => setSelectedItemIds([]) })}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           Add items
         </button>
@@ -102,10 +103,10 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
         </p>
       )}
 
-      <h3 className="mt-4 text-sm font-semibold text-slate-800">Matched vendors</h3>
+      <h3 className="mt-4 text-lg font-semibold text-ink-title">Matched vendors</h3>
       <ul className="mt-1 text-sm">
         {(vendors ?? []).map((v) => (
-          <li key={v.vendor_id} className={v.eligible ? 'text-slate-700' : 'text-slate-600'}>
+          <li key={v.vendor_id} className={v.eligible ? 'text-ink' : 'text-ink-2'}>
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -132,7 +133,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
             placeholder="Override reason (required for an ineligible vendor)"
             value={overrideReason}
             onChange={(e) => setOverrideReason(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-full rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
       )}
@@ -145,7 +146,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
             { onSuccess: () => setSelectedVendorIds([]) },
           )
         }
-        className="mt-2 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="mt-2 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Draft RFQs
       </button>
@@ -155,46 +156,48 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
         </p>
       )}
 
-      <h3 className="mt-4 text-sm font-semibold text-slate-800">RFQs</h3>
-      <table className="mt-1 w-full text-left text-sm">
-        <thead className="border-b border-slate-200 text-slate-500">
-          <tr>
-            <th className="py-2 font-medium">Ref</th>
-            <th className="font-medium">Status</th>
-            <th className="font-medium">Dispatch attempts</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {(rfqs ?? []).map((rfq) => (
-            <tr key={rfq.id} className="border-b border-slate-100 hover:bg-slate-50">
-              <td className="py-2">{rfq.rfq_ref ?? rfq.id.slice(0, 8)}</td>
-              <td>
-                <Badge tone={RFQ_STATUS_TONE[rfq.status] ?? 'neutral'}>{rfq.status}</Badge>
-              </td>
-              <td className="tabular-nums">{rfq.dispatch_attempts}</td>
-              <td className="space-x-2">
-                <button
-                  type="button"
-                  disabled={dispatch.isPending}
-                  onClick={() => dispatch.mutate(rfq.id)}
-                  className="rounded text-slate-500 underline hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                >
-                  Dispatch
-                </button>
-                <button
-                  type="button"
-                  disabled={resend.isPending}
-                  onClick={() => setResendTargetId(rfq.id)}
-                  className="rounded text-slate-500 underline hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                >
-                  Resend
-                </button>
-              </td>
+      <h3 className="mt-4 text-lg font-semibold text-ink-title">RFQs</h3>
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
+        <table className="mt-1 w-full text-left text-sm">
+          <thead className="border-b border-hairline text-muted">
+            <tr>
+              <th className="py-2 font-medium">Ref</th>
+              <th className="font-medium">Status</th>
+              <th className="font-medium">Dispatch attempts</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(rfqs ?? []).map((rfq) => (
+              <tr key={rfq.id} className="border-b border-row-rule hover:bg-canvas">
+                <td className="py-2">{rfq.rfq_ref ?? rfq.id.slice(0, 8)}</td>
+                <td>
+                  <Badge tone={RFQ_STATUS_TONE[rfq.status] ?? 'neutral'}>{rfq.status}</Badge>
+                </td>
+                <td className="tabular-nums">{rfq.dispatch_attempts}</td>
+                <td className="space-x-2">
+                  <button
+                    type="button"
+                    disabled={dispatch.isPending}
+                    onClick={() => dispatch.mutate(rfq.id)}
+                    className="rounded text-muted underline hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                  >
+                    Dispatch
+                  </button>
+                  <button
+                    type="button"
+                    disabled={resend.isPending}
+                    onClick={() => setResendTargetId(rfq.id)}
+                    className="rounded text-muted underline hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                  >
+                    Resend
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {dispatch.isError && (
         <p role="alert" className="mt-1 text-sm text-danger">
           Dispatch failed: {dispatch.error.message}
@@ -233,8 +236,8 @@ export function ProcurementPackagesPage() {
   const tradeNodeSelectId = useId()
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Procurement packages and RFQs</h1>
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
+      <PageTitle>Procurement packages and RFQs</PageTitle>
 
       {hasRole(...STRUCTURE_ROLES) && (
         <form
@@ -257,7 +260,7 @@ export function ProcurementPackagesPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <div>
@@ -272,7 +275,7 @@ export function ProcurementPackagesPage() {
               id={tradeNodeSelectId}
               value={tradeNodeId}
               onChange={(e) => setTradeNodeId(e.target.value)}
-              className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             >
               <option value="">No trade (vendor matching disabled)</option>
               {(tradeNodes ?? []).map((t) => (
@@ -284,7 +287,7 @@ export function ProcurementPackagesPage() {
           </div>
           <button
             type="submit"
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Create package
           </button>
@@ -297,7 +300,7 @@ export function ProcurementPackagesPage() {
       )}
 
       {packages && packages.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No procurement packages yet.</p>
+        <p className="mt-4 text-sm text-muted">No procurement packages yet.</p>
       )}
       <ul className="mt-4 space-y-1">
         {(packages ?? []).map((p) => (
@@ -306,7 +309,7 @@ export function ProcurementPackagesPage() {
               type="button"
               onClick={() => setSelectedPackageId(p.id)}
               className={`flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-                p.id === selectedPackageId ? 'bg-brand-subtle font-medium text-brand' : 'hover:bg-slate-50'
+                p.id === selectedPackageId ? 'bg-brand-subtle font-medium text-brand' : 'hover:bg-canvas'
               }`}
             >
               <span>{p.name} -- </span>

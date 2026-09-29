@@ -19,6 +19,7 @@ import {
 } from '../features/quotations/api'
 import { Role } from '../lib/roles'
 import type { QuotationOut } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
 // accept/reject/promote/resolve-currency-vat/reject-quotation are
@@ -58,21 +59,21 @@ function safetyStatusTone(status: string): BadgeTone {
 function AttachmentsList({ quotationId }: { quotationId: string }) {
   const { data: attachments, isLoading, isError, error } = useQuotationAttachments(quotationId)
 
-  if (isLoading) return <p className="mt-2 text-xs text-slate-500">Loading attachments...</p>
+  if (isLoading) return <p className="mt-2 text-xs text-muted">Loading attachments...</p>
   if (isError)
     return (
       <p role="alert" className="mt-2 text-xs text-danger">
         {error.message}
       </p>
     )
-  if (!attachments || attachments.length === 0) return <p className="mt-2 text-xs text-slate-500">No attachments.</p>
+  if (!attachments || attachments.length === 0) return <p className="mt-2 text-xs text-muted">No attachments.</p>
 
   return (
     <ul className="mt-2 space-y-1 text-xs">
       {attachments.map((a) => (
         <li key={a.id} className="flex items-center justify-between gap-2">
           <span>
-            {a.filename} {a.is_primary && <span className="text-slate-600">(primary)</span>} --{' '}
+            {a.filename} {a.is_primary && <span className="text-ink-2">(primary)</span>} --{' '}
             {(a.size_bytes / 1024).toFixed(1)} KB
           </span>
           {a.safety_status === 'accepted' ? (
@@ -80,7 +81,7 @@ function AttachmentsList({ quotationId }: { quotationId: string }) {
               href={attachmentDownloadHref(a.id)}
               target="_blank"
               rel="noreferrer"
-              className="rounded text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="rounded text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Download
             </a>
@@ -113,9 +114,9 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
   const fxRateInputId = useId()
 
   return (
-    <div className={`rounded border p-3 ${quotation.is_current ? 'border-slate-400' : 'border-slate-200'}`}>
+    <div className={`rounded border p-3 ${quotation.is_current ? 'border-brand' : 'border-hairline'}`}>
       <div className="flex items-center justify-between">
-        <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+        <h4 className="flex items-center gap-2 text-sm font-semibold text-ink">
           <span>
             v{quotation.version_no} {quotation.is_current && '(current)'}
           </span>
@@ -125,7 +126,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
           <button
             type="button"
             onClick={() => promote.mutate(quotation.id)}
-            className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Promote to current
           </button>
@@ -136,7 +137,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
           {promote.error.message}
         </p>
       )}
-      <p className="mt-1 text-xs tabular-nums text-slate-500">
+      <p className="mt-1 text-xs tabular-nums text-muted">
         {quotation.stated_total != null ? formatMoney(quotation.stated_total, quotation.currency ?? 'AED') : '--'}
         {quotation.total_mismatch && <span className="text-danger"> (total mismatch)</span>}
       </p>
@@ -152,13 +153,13 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
               value={currency}
               onChange={(e) => setCurrency(e.target.value)}
               placeholder="Currency"
-              className="w-16 rounded border border-slate-300 px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-16 rounded-lg border border-outline px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <button
             type="button"
             onClick={() => resolveCurrencyVat.mutate({ quotationId: quotation.id, currency, vatInclusive: true })}
-            className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Set currency (VAT-incl.)
           </button>
@@ -204,7 +205,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
               placeholder={quotation.fx_rate_to_base != null ? `Current: ${quotation.fx_rate_to_base}` : 'FX rate to base'}
               value={fxRate}
               onChange={(e) => setFxRateInput(e.target.value)}
-              className="w-32 rounded border border-slate-300 px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-32 rounded-lg border border-outline px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <button
@@ -216,7 +217,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
                 { onSuccess: () => setFxRateInput('') },
               )
             }
-            className="rounded text-xs text-slate-500 underline hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-xs text-muted underline hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Set FX rate
           </button>
@@ -231,69 +232,71 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
       <button
         type="button"
         onClick={() => setAttachmentsOpen((v) => !v)}
-        className="mt-2 rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="mt-2 rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         {attachmentsOpen ? 'Hide attachments' : 'Show attachments'}
       </button>
       {attachmentsOpen && <AttachmentsList quotationId={quotation.id} />}
 
-      <table className="mt-2 w-full text-left text-xs">
-        <thead className="border-b border-slate-200 text-slate-500">
-          <tr>
-            <th className="py-1 font-medium">Item</th>
-            <th className="font-medium">Unit price</th>
-            <th className="font-medium">Qty</th>
-            <th className="font-medium">Status</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {(lineItems ?? []).map((li) => (
-            <tr key={li.id} className="border-t border-slate-100 hover:bg-slate-50">
-              <td className="py-1">{li.vendor_description_text ?? li.vendor_item_text ?? '--'}</td>
-              <td className="tabular-nums">
-                {li.unit_price != null ? formatMoney(li.unit_price, quotation.currency ?? 'AED') : '--'}{' '}
-                {li.arithmetic_mismatch && (
-                  <span className="text-danger" title="Arithmetic mismatch">
-                    !
-                  </span>
-                )}
-              </td>
-              <td className="tabular-nums">
-                {li.quantity ?? '--'}{' '}
-                {li.quantity_mismatch && (
-                  <span className="text-danger" title="Quantity mismatch">
-                    !
-                  </span>
-                )}
-              </td>
-              <td>
-                <Badge tone={LINE_ITEM_STATUS_TONE[li.status] ?? 'neutral'}>{li.status}</Badge>
-              </td>
-              <td className="space-x-2">
-                {canReview && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => acceptItem.mutate(li.id)}
-                      className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                    >
-                      Accept
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => rejectItem.mutate(li.id)}
-                      className="rounded text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                    >
-                      Reject
-                    </button>
-                  </>
-                )}
-              </td>
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
+        <table className="mt-2 w-full text-left text-xs">
+          <thead className="border-b border-hairline text-muted">
+            <tr>
+              <th className="py-1 font-medium">Item</th>
+              <th className="font-medium">Unit price</th>
+              <th className="font-medium">Qty</th>
+              <th className="font-medium">Status</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(lineItems ?? []).map((li) => (
+              <tr key={li.id} className="border-t border-row-rule hover:bg-canvas">
+                <td className="py-1">{li.vendor_description_text ?? li.vendor_item_text ?? '--'}</td>
+                <td className="tabular-nums">
+                  {li.unit_price != null ? formatMoney(li.unit_price, quotation.currency ?? 'AED') : '--'}{' '}
+                  {li.arithmetic_mismatch && (
+                    <span className="text-danger" title="Arithmetic mismatch">
+                      !
+                    </span>
+                  )}
+                </td>
+                <td className="tabular-nums">
+                  {li.quantity ?? '--'}{' '}
+                  {li.quantity_mismatch && (
+                    <span className="text-danger" title="Quantity mismatch">
+                      !
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <Badge tone={LINE_ITEM_STATUS_TONE[li.status] ?? 'neutral'}>{li.status}</Badge>
+                </td>
+                <td className="space-x-2">
+                  {canReview && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => acceptItem.mutate(li.id)}
+                        className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => rejectItem.mutate(li.id)}
+                        className="rounded text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {acceptItem.isError && (
         <p role="alert" className="mt-1 text-xs text-danger">
           {acceptItem.error.message}
@@ -317,8 +320,8 @@ export function QuoteReviewPage() {
   const { data: quotations } = useQuotationsForRfq(rfqId ?? undefined)
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Quote review and acceptance</h1>
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
+      <PageTitle>Quote review and acceptance</PageTitle>
 
       <div className="mt-4 flex gap-4">
         <select
@@ -328,7 +331,7 @@ export function QuoteReviewPage() {
             setPackageId(e.target.value || null)
             setRfqId(null)
           }}
-          className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
         >
           <option value="">-- Package --</option>
           {(packages ?? []).map((p) => (
@@ -342,7 +345,7 @@ export function QuoteReviewPage() {
           value={rfqId ?? ''}
           onChange={(e) => setRfqId(e.target.value || null)}
           disabled={!packageId}
-          className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
         >
           <option value="">-- RFQ --</option>
           {(rfqs ?? []).map((r) => (
@@ -358,7 +361,7 @@ export function QuoteReviewPage() {
           {(quotations ?? []).map((q) => (
             <QuotationCard key={q.id} rfqId={rfqId} quotation={q} />
           ))}
-          {quotations && quotations.length === 0 && <p className="text-sm text-slate-500">No quotations yet.</p>}
+          {quotations && quotations.length === 0 && <p className="text-sm text-muted">No quotations yet.</p>}
         </div>
       )}
     </div>

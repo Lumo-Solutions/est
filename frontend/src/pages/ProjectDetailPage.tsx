@@ -1,8 +1,11 @@
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
+import { Button } from '../components/Button'
+import { Card, SectionHeading } from '../components/Card'
 import { ConfirmModal } from '../components/ConfirmModal'
+import { SelectField, TextField } from '../components/Field'
 import { SkeletonRows } from '../components/Skeleton'
 import { DrawingUpload } from '../features/drawings/DrawingUpload'
 import { useDrawings } from '../features/drawings/api'
@@ -15,6 +18,7 @@ import {
 } from '../features/projects/api'
 import { useUsers } from '../features/users/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8 -- drawing DrawingStatus's own
 // vocabulary mapped to the shared Badge's tones.
@@ -29,6 +33,15 @@ const DRAWING_STATUS_TONE: Record<string, BadgeTone> = {
 // allows lead_estimator, handled separately below).
 const LOCATION_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const MEMBER_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.LEAD_ESTIMATOR]
+// GET /users is restricted server-side (backend/app/api/v1/routes/users.py
+// _READ_ROLES). Requesting it as an estimator was a guaranteed 403 -- a
+// console error on every project page, previously masked by e2e timing.
+const USER_DIRECTORY_ROLES = [
+  Role.LEAD_ESTIMATOR,
+  Role.PROCUREMENT_HEAD,
+  Role.BD_DIRECTOR,
+  Role.MANAGING_DIRECTOR,
+]
 
 function LocationSection({ project }: { project: { id: string; emirate: string | null; area: string | null; latitude: number | null; longitude: number | null } }) {
   const { hasRole } = useAuth()
@@ -55,11 +68,11 @@ function LocationSection({ project }: { project: { id: string; emirate: string |
   }
 
   const inputClass =
-    'mt-0.5 block rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand'
+    'mt-0.5 block rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink'
 
   return (
     <form
-      className="mt-2 flex flex-wrap items-end gap-2 rounded border border-slate-200 p-3"
+      className="mt-2 flex flex-wrap items-end gap-2 rounded-card p-5 bg-white"
       onSubmit={(e) => {
         e.preventDefault()
         updateLocation.mutate(
@@ -73,33 +86,33 @@ function LocationSection({ project }: { project: { id: string; emirate: string |
         )
       }}
     >
-      <label className="text-xs text-slate-500">
+      <label className="text-xs text-muted">
         Emirate
         <input value={emirate} onChange={(e) => setEmirate(e.target.value)} className={inputClass} />
       </label>
-      <label className="text-xs text-slate-500">
+      <label className="text-xs text-muted">
         Area
         <input value={area} onChange={(e) => setArea(e.target.value)} className={inputClass} />
       </label>
-      <label className="text-xs text-slate-500">
+      <label className="text-xs text-muted">
         Latitude
         <input value={latitude} onChange={(e) => setLatitude(e.target.value)} className={`${inputClass} w-24`} />
       </label>
-      <label className="text-xs text-slate-500">
+      <label className="text-xs text-muted">
         Longitude
         <input value={longitude} onChange={(e) => setLongitude(e.target.value)} className={`${inputClass} w-24`} />
       </label>
       <button
         type="submit"
         disabled={updateLocation.isPending}
-        className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+        className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
       >
         Save
       </button>
       <button
         type="button"
         onClick={() => setEditing(false)}
-        className="rounded px-2 py-1.5 text-sm text-slate-500 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="rounded px-2 py-1.5 text-sm text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Cancel
       </button>
@@ -116,34 +129,32 @@ function MembersSection({ projectId }: { projectId: string }) {
   const { hasRole } = useAuth()
   const canWrite = hasRole(...MEMBER_ROLES)
   const { data: members, isLoading, isError, error } = useProjectMembers(projectId)
-  const { data: users } = useUsers()
+  const { data: users } = useUsers({ enabled: hasRole(...USER_DIRECTORY_ROLES) })
   const [selectedUserId, setSelectedUserId] = useState('')
   const [projectRole, setProjectRole] = useState('')
   const addMember = useAddProjectMember(projectId)
   const removeMember = useRemoveProjectMember(projectId)
   const [memberToRemove, setMemberToRemove] = useState<string | null>(null)
-  const userSelectId = useId()
-  const projectRoleId = useId()
 
   const usernameFor = (userId: string) => users?.find((u) => u.id === userId)?.username ?? userId
 
   return (
-    <div className="mt-6">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Members</h2>
+    <Card className="mt-6">
+      <SectionHeading>Members</SectionHeading>
       {isLoading && <SkeletonRows count={2} />}
       {isError && (
         <p role="alert" className="text-sm text-danger">
           {error.message}
         </p>
       )}
-      {members && members.length === 0 && <p className="text-sm text-slate-500">No members added yet.</p>}
+      {members && members.length === 0 && <p className="text-sm text-muted">No members added yet.</p>}
       {members && members.length > 0 && (
-        <ul className="space-y-1">
+        <ul className="divide-y divide-row-rule">
           {members.map((m) => (
-            <li key={m.user_id} className="flex items-center gap-2 text-sm text-slate-700">
+            <li key={m.user_id} className="flex items-center gap-3 py-3 text-base text-ink">
               <span>
                 {usernameFor(m.user_id)}
-                {m.project_role && <span className="ml-2 text-xs text-slate-500">({m.project_role})</span>}
+                {m.project_role && <span className="ml-2 text-xs text-muted">({m.project_role})</span>}
               </span>
               {canWrite && (
                 <button
@@ -178,7 +189,7 @@ function MembersSection({ projectId }: { projectId: string }) {
       />
       {canWrite && (
         <form
-          className="mt-3 flex flex-wrap items-end gap-2"
+          className="mt-4 flex flex-wrap items-end gap-4"
           onSubmit={(e) => {
             e.preventDefault()
             if (!selectedUserId) return
@@ -188,42 +199,22 @@ function MembersSection({ projectId }: { projectId: string }) {
             )
           }}
         >
-          <div>
-            <label htmlFor={userSelectId} className="block text-xs text-slate-500">
-              User
-            </label>
-            <select
-              id={userSelectId}
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-            >
-              <option value="">-- Select a user --</option>
-              {(users ?? []).map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.username} {u.roles.length > 0 ? `(${u.roles.join(', ')})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor={projectRoleId} className="block text-xs text-slate-500">
-              Project role (optional)
-            </label>
-            <input
-              id={projectRoleId}
-              value={projectRole}
-              onChange={(e) => setProjectRole(e.target.value)}
-              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={!selectedUserId || addMember.isPending}
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
-          >
+          <SelectField label="User" value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)}>
+            <option value="">-- Select a user --</option>
+            {(users ?? []).map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.username} {u.roles.length > 0 ? `(${u.roles.join(', ')})` : ''}
+              </option>
+            ))}
+          </SelectField>
+          <TextField
+            label="Project role (optional)"
+            value={projectRole}
+            onChange={(e) => setProjectRole(e.target.value)}
+          />
+          <Button type="submit" disabled={!selectedUserId} loading={addMember.isPending}>
             Add member
-          </button>
+          </Button>
           {addMember.isError && (
             <p role="alert" className="w-full text-sm text-danger">
               {addMember.error.message}
@@ -231,7 +222,7 @@ function MembersSection({ projectId }: { projectId: string }) {
           )}
         </form>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -243,7 +234,7 @@ export function ProjectDetailPage() {
   const backLink = (
     <Link
       to="/"
-      className="rounded text-sm text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      className="rounded text-sm text-muted hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
     >
       ← Projects
     </Link>
@@ -251,7 +242,7 @@ export function ProjectDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6">
+      <div className="px-6 py-6 xl:px-10">
         {backLink}
         <div className="mt-4">
           <SkeletonRows count={4} />
@@ -261,57 +252,55 @@ export function ProjectDetailPage() {
   }
   if (isError) {
     return (
-      <div className="p-6">
+      <div className="px-6 py-6 xl:px-10">
         {backLink}
         <p role="alert" className="mt-4 text-danger">
           {error.message}
         </p>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="mt-2 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-        >
+        <Button variant="secondary" size="sm" className="mt-2" onClick={() => refetch()}>
           Retry
-        </button>
+        </Button>
       </div>
     )
   }
   if (!project) return null
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       {backLink}
-      <h1 className="mt-2 text-xl font-semibold text-slate-800">
+      <PageTitle>
         {project.code} -- {project.name}
-      </h1>
-      <p className="mt-1 text-sm text-slate-500">
+      </PageTitle>
+      <p className="mt-1 text-sm text-muted">
         {project.client_name ?? 'No client set'} · {project.status} · {project.base_currency}
         {project.emirate ? ` · ${project.emirate}` : ''}
       </p>
       <LocationSection project={project} />
       <MembersSection projectId={project.id} />
 
-      <h2 className="mt-6 mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Drawings</h2>
-      <DrawingUpload projectId={project.id} />
-      {drawings && drawings.length === 0 && <p className="text-sm text-slate-500">No drawings uploaded yet.</p>}
-      {drawings && drawings.length > 0 && (
-        <ul className="divide-y divide-slate-100">
-          {drawings.map((d) => (
-            <li key={d.id} className="flex items-center justify-between py-2">
-              <Link
-                to={`/projects/${project.id}/drawings/${d.id}`}
-                className="rounded text-sm text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-              >
-                {d.original_filename}
-              </Link>
-              <div className="flex items-center gap-3 text-xs text-slate-500">
-                <span>{d.sheet_count ?? '?'} sheet(s)</span>
-                <Badge tone={DRAWING_STATUS_TONE[d.status] ?? 'neutral'}>{d.status}</Badge>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Card className="mt-6">
+        <SectionHeading>Drawings</SectionHeading>
+        <DrawingUpload projectId={project.id} />
+        {drawings && drawings.length === 0 && <p className="mt-3 text-base text-muted">No drawings uploaded yet.</p>}
+        {drawings && drawings.length > 0 && (
+          <ul className="mt-3 divide-y divide-row-rule">
+            {drawings.map((d) => (
+              <li key={d.id} className="flex items-center justify-between py-3">
+                <Link
+                  to={`/projects/${project.id}/drawings/${d.id}`}
+                  className="rounded text-base font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                >
+                  {d.original_filename}
+                </Link>
+                <div className="flex items-center gap-3 text-sm text-muted">
+                  <span>{d.sheet_count ?? '?'} sheet(s)</span>
+                  <Badge tone={DRAWING_STATUS_TONE[d.status] ?? 'neutral'}>{d.status}</Badge>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   )
 }

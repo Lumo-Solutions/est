@@ -1,12 +1,39 @@
+import { useState } from 'react'
+import {
+  Calculator,
+  ClipboardList,
+  Coins,
+  Download,
+  FolderKanban,
+  HardHat,
+  Inbox,
+  LayoutDashboard,
+  LogOut,
+  Handshake,
+  PencilRuler,
+  ScrollText,
+  Settings,
+  Shapes,
+  ShoppingCart,
+  Store,
+  Table2,
+  Trophy,
+  type LucideIcon,
+} from 'lucide-react'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { Avatar } from '../components/Avatar'
 import { DevMfaBanner } from '../components/DevMfaBanner'
+import { PageTitleSlotContext } from '../components/pageTitleContext'
 import { logout } from '../lib/api'
 import { Role } from '../lib/roles'
 
 export interface NavItem {
   label: string
   to: string
+  // Decorative (aria-hidden) -- the link's accessible name is still `label`,
+  // which every e2e spec locates by (getByRole('link', { name })).
+  icon?: LucideIcon
   requiresRoles?: string[]
   // Match only the exact path. Needed on any item whose path is a prefix of
   // its siblings' (Projects '/', a project's Overview) or it stays highlighted
@@ -22,12 +49,13 @@ export function filterVisibleNavItems(items: NavItem[], hasRole: (...roles: stri
 // real enforcement (see docs/preconstruction-build-brief.md Phase 8).
 function projectNavItems(projectId: string): NavItem[] {
   return [
-    { label: 'Overview', to: `/projects/${projectId}`, end: true },
-    { label: 'Drawings', to: `/projects/${projectId}/drawings` },
-    { label: 'Typology', to: `/projects/${projectId}/typology` },
-    { label: 'BOQ', to: `/projects/${projectId}/boq` },
+    { label: 'Overview', icon: ClipboardList, to: `/projects/${projectId}`, end: true },
+    { label: 'Drawings', icon: PencilRuler, to: `/projects/${projectId}/drawings` },
+    { label: 'Typology', icon: Shapes, to: `/projects/${projectId}/typology` },
+    { label: 'BOQ', icon: Table2, to: `/projects/${projectId}/boq` },
     {
       label: 'Procurement',
+      icon: ShoppingCart,
       to: `/projects/${projectId}/procurement/packages`,
       requiresRoles: [Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD],
     },
@@ -40,6 +68,7 @@ function projectNavItems(projectId: string): NavItem[] {
       // this page with no nav link to reach it (docs/ui-qa/issues.md
       // UI-P2-023).
       label: 'Settlement',
+      icon: Calculator,
       to: `/projects/${projectId}/settlement`,
       requiresRoles: [
         Role.ESTIMATOR,
@@ -49,10 +78,10 @@ function projectNavItems(projectId: string): NavItem[] {
         Role.MANAGING_DIRECTOR,
       ],
     },
-    { label: 'Export', to: `/projects/${projectId}/export` },
-    { label: 'Win/loss', to: `/projects/${projectId}/win-loss` },
+    { label: 'Export', icon: Download, to: `/projects/${projectId}/export` },
+    { label: 'Win/loss', icon: Trophy, to: `/projects/${projectId}/win-loss` },
     // module_e.py's endpoints are all CurrentUser (any role), read-only.
-    { label: 'Post-award', to: `/projects/${projectId}/module-e` },
+    { label: 'Post-award', icon: Handshake, to: `/projects/${projectId}/module-e` },
   ]
 }
 
@@ -65,20 +94,20 @@ function projectNavItems(projectId: string): NavItem[] {
 // two destinations that were either fully read-only-looking-but-broken or a
 // guaranteed 403 on load (docs/ui-qa/issues.md UI-P2-022).
 const GLOBAL_NAV_ITEMS: NavItem[] = [
-  { label: 'Projects', to: '/' },
+  { label: 'Projects', icon: FolderKanban, to: '/' },
   // No requiresRoles: HomeDashboardPage checks per-tile roles itself and
   // shows a sensible message for a role with no cross-project tile (an
   // estimator, whose relevant items are all project-scoped today).
-  { label: 'Dashboard', to: '/dashboard' },
+  { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   // No requiresRoles: reading the vendor directory is useful to every role
   // (matches GET /vendors's own "any authenticated user" server check) --
   // only the write actions inside VendorsPage/VendorDetailPage are gated.
-  { label: 'Vendors', to: '/vendors' },
+  { label: 'Vendors', icon: Store, to: '/vendors' },
   // Same reasoning as Vendors above: GET /cost-items has no role
   // restriction server-side, only create/record-rate do.
-  { label: 'Cost library', to: '/cost-library' },
-  { label: 'Admin', to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
-  { label: 'Audit', to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
+  { label: 'Cost library', icon: Coins, to: '/cost-library' },
+  { label: 'Admin', icon: Settings, to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
+  { label: 'Audit', icon: ScrollText, to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
   {
     // platform_admin IS included here, unlike the rest of this array --
     // deliberately, not an oversight. Its one and only exclusive action
@@ -87,16 +116,17 @@ const GLOBAL_NAV_ITEMS: NavItem[] = [
     // able to reach it via nav. Do not "fix" this back to match the usual
     // platform_admin-excluded pattern above.
     label: 'Inbox',
+    icon: Inbox,
     to: '/inbox',
     requiresRoles: [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.PLATFORM_ADMIN],
   },
 ]
 
-// docs/ui-design-system.md section 4.1 -- active item gets the brand tint,
-// not the old plain-dark-fill default. Link text/hrefs are untouched by
-// this pass (every existing e2e spec locates nav by getByRole('link',
-// {name}), which is layout-agnostic), only the visual treatment and the
-// vertical (sidebar) vs horizontal (old top-bar) arrangement changed.
+// docs/figma-implementation-plan.md 3.1 -- Figma's active state: a 6px brand
+// bar on the sidebar's left edge (rounded on its right corners) + brand text;
+// inactive items use --color-muted (Figma's #B1B1B1 is 2.14:1, fails AA).
+// Link text/hrefs are untouched (every existing e2e spec locates nav by
+// getByRole('link', {name}), which is layout-agnostic).
 function NavList({ items, hasRole }: { items: NavItem[]; hasRole: (...roles: string[]) => boolean }) {
   return (
     <>
@@ -106,14 +136,20 @@ function NavList({ items, hasRole }: { items: NavItem[]; hasRole: (...roles: str
           to={item.to}
           end={item.end ?? item.to === '/'}
           className={({ isActive }) =>
-            `block rounded px-3 py-1.5 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-              isActive
-                ? 'border-l-2 border-brand bg-brand-subtle font-medium text-brand'
-                : 'border-l-2 border-transparent text-slate-600 hover:bg-slate-100'
+            `relative flex items-center gap-3 rounded-control px-4 py-2.5 text-base font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+              isActive ? 'text-brand' : 'text-muted hover:bg-canvas hover:text-brand'
             }`
           }
         >
-          {item.label}
+          {({ isActive }) => (
+            <>
+              {isActive && (
+                <span aria-hidden="true" className="absolute -left-4 top-0 h-full w-1.5 rounded-r-bar bg-brand" />
+              )}
+              {item.icon && <item.icon aria-hidden="true" className="h-6 w-6 shrink-0" />}
+              {item.label}
+            </>
+          )}
         </NavLink>
       ))}
     </>
@@ -137,45 +173,57 @@ function NavList({ items, hasRole }: { items: NavItem[]; hasRole: (...roles: str
 export function AppShell() {
   const { user, hasRole } = useAuth()
   const { projectId } = useParams()
+  // The header slot the page <h1> is portalled into (components/PageTitle).
+  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null)
+  const displayName = user?.username ?? user?.sub ?? ''
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3">
-          <span className="text-sm font-semibold text-slate-800">InstallTec Estimating</span>
+    <div className="flex h-screen overflow-hidden bg-canvas">
+      <aside className="flex w-[230px] shrink-0 flex-col border-r border-hairline bg-white xl:w-[250px]">
+        <div className="flex h-20 shrink-0 items-center gap-3 px-6 xl:h-[100px]">
+          <HardHat aria-hidden="true" className="h-8 w-8 shrink-0 text-brand" />
+          <span className="text-lg font-bold leading-tight text-ink-title">InstallTec Estimating</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-4 pb-4">
           <NavList items={GLOBAL_NAV_ITEMS} hasRole={hasRole} />
           {projectId && (
             <>
-              <div className="mt-3 border-t border-slate-200 pt-3">
+              <div className="mt-3 border-t border-hairline pt-3">
                 {/* slate-400 measured at 2.63:1 on white via axe (Phase 4 QA) --
-                    fails AA's 4.5:1 text minimum; slate-600 clears it with
-                    margin (slate-500 is too close to the boundary to trust
-                    without measuring). */}
-                <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-slate-600">Project</p>
+                    fails AA's 4.5:1 text minimum; --color-muted clears it
+                    (5.06:1, locked by src/test/tokens.contrast.test.ts). */}
+                <p className="px-4 pb-1 text-xs font-medium uppercase tracking-wide text-muted">Project</p>
                 <NavList items={projectNavItems(projectId)} hasRole={hasRole} />
               </div>
             </>
           )}
         </nav>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DevMfaBanner active={user?.mfaDisabledDev === true} />
-        <header className="flex h-14 shrink-0 items-center justify-end border-b border-slate-200 bg-white px-4">
-          <div className="flex items-center gap-3 text-sm text-slate-500">
-            {user && <span title={user.sub}>{user.username ?? user.sub}</span>}
+        <header className="flex h-20 shrink-0 items-center gap-4 border-b border-hairline bg-white px-6 xl:h-[100px] xl:px-10">
+          <div ref={setTitleSlot} className="min-w-0 flex-1" />
+          <div className="flex shrink-0 items-center gap-3 text-base text-ink-2">
+            {user && (
+              <>
+                <Avatar name={displayName} />
+                <span title={user.sub}>{displayName}</span>
+              </>
+            )}
             <button
               type="button"
               onClick={() => logout()}
-              className="rounded text-slate-500 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="inline-flex items-center gap-2 rounded-pill border border-outline px-4 py-2 text-sm font-medium text-ink-2 hover:border-brand hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
             >
+              <LogOut aria-hidden="true" className="h-4 w-4" />
               Sign out
             </button>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          <PageTitleSlotContext.Provider value={titleSlot}>
+            <Outlet />
+          </PageTitleSlotContext.Provider>
         </main>
       </div>
     </div>

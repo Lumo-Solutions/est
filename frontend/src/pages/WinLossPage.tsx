@@ -6,6 +6,7 @@ import { useReasonCodes, useRecordOutcome } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
 import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/settlement.py's _OUTCOME_ROLES.
 const RECORD_OUTCOME_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
@@ -32,15 +33,15 @@ export function WinLossPage() {
   const outcomeSelectId = useId()
   const reasonCodesSelectId = useId()
 
-  if (isLoading) return <p className="p-6 text-slate-500">Loading...</p>
-  if (!current) return <p className="p-6 text-sm text-slate-500">No settlement yet for this project.</p>
+  if (isLoading) return <p className="px-6 py-6 xl:px-10 text-muted">Loading...</p>
+  if (!current) return <p className="px-6 py-6 xl:px-10 text-sm text-muted">No settlement yet for this project.</p>
   const canRecordOutcome = hasRole(...RECORD_OUTCOME_ROLES)
 
   if (current.outcome) {
     return (
-      <div className="p-6">
-        <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
-        <div className="mt-4 rounded border border-slate-200 p-4 text-sm">
+      <div className="px-6 py-6 xl:px-10">
+        <PageTitle>Win / loss</PageTitle>
+        <div className="mt-4 rounded-card p-5 text-sm bg-white">
           <p className="flex items-center gap-2 font-semibold">
             <Badge tone={OUTCOME_TONE[current.outcome] ?? 'neutral'}>{current.outcome}</Badge>
           </p>
@@ -61,9 +62,9 @@ export function WinLossPage() {
 
   if (!canRecordOutcome) {
     return (
-      <div className="p-6">
-        <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
-        <p className="mt-4 text-sm text-slate-500">
+      <div className="px-6 py-6 xl:px-10">
+        <PageTitle>Win / loss</PageTitle>
+        <p className="mt-4 text-sm text-muted">
           No outcome recorded yet. Only bd_director/managing_director can record it.
         </p>
       </div>
@@ -71,8 +72,8 @@ export function WinLossPage() {
   }
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
+      <PageTitle>Win / loss</PageTitle>
       <form
         className="mt-4 max-w-md space-y-3"
         onSubmit={(e) => {
@@ -87,21 +88,21 @@ export function WinLossPage() {
         }}
       >
         <div>
-          <label htmlFor={outcomeSelectId} className="block text-xs text-slate-500">
+          <label htmlFor={outcomeSelectId} className="mb-1 block text-sm text-ink">
             Outcome
           </label>
           <select
             id={outcomeSelectId}
             value={outcome}
             onChange={(e) => setOutcome(e.target.value as 'won' | 'lost')}
-            className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           >
             <option value="won">Won</option>
             <option value="lost">Lost</option>
           </select>
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="our-price">
+          <label className="mb-1 block text-sm text-ink" htmlFor="our-price">
             Our price
           </label>
           <input
@@ -110,11 +111,11 @@ export function WinLossPage() {
             step="any"
             value={ourPrice}
             onChange={(e) => setOurPrice(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-full rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="winning-price">
+          <label className="mb-1 block text-sm text-ink" htmlFor="winning-price">
             Winning price
           </label>
           <input
@@ -123,11 +124,11 @@ export function WinLossPage() {
             step="any"
             value={winningPrice}
             onChange={(e) => setWinningPrice(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-full rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label htmlFor={reasonCodesSelectId} className="block text-xs text-slate-500">
+          <label htmlFor={reasonCodesSelectId} className="mb-1 block text-sm text-ink">
             Reason codes
           </label>
           <select
@@ -135,7 +136,7 @@ export function WinLossPage() {
             multiple
             value={selectedReasonCodes}
             onChange={(e) => setSelectedReasonCodes(Array.from(e.target.selectedOptions, (o) => o.value))}
-            className="h-24 w-full rounded border border-slate-300 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="h-24 w-full rounded-control border border-outline text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           >
             {(reasonCodes ?? []).map((rc) => (
               <option key={rc.code} value={rc.code}>
@@ -145,20 +146,20 @@ export function WinLossPage() {
           </select>
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="note">
+          <label className="mb-1 block text-sm text-ink" htmlFor="note">
             Note
           </label>
           <textarea
             id="note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-full rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <button
           type="submit"
           disabled={recordOutcome.isPending}
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           Record outcome
         </button>

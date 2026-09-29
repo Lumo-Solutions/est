@@ -134,7 +134,7 @@ test.describe('Phase 4 accessibility -- procurement, quotation and settlement pa
     await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
     const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
     await page.goto(`/projects/${project.id}/export`)
-    await expect(page.getByRole('heading', { name: 'Export' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Export', exact: true })).toBeVisible()
 
     const results = await new AxeBuilder({ page }).analyze()
     const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')

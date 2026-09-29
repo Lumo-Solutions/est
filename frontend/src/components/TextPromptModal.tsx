@@ -31,19 +31,19 @@ export function TextPromptModal({
 
   return (
     <Modal open={open} title={title} onClose={close}>
-      {message && <p className="mt-1 text-sm text-slate-500">{message}</p>}
+      {message && <p className="mt-1 text-sm text-muted">{message}</p>}
       <textarea
         autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}
         rows={3}
-        className="mt-2 w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mt-2 w-full rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       />
       <div className="mt-3 flex justify-end gap-2">
         <button
           type="button"
           onClick={close}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           Cancel
         </button>
@@ -55,7 +55,7 @@ export function TextPromptModal({
             setValue('')
             onSubmit(submitted)
           }}
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {submitLabel}
         </button>

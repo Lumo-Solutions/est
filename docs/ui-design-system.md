@@ -10,6 +10,37 @@ AG Grid Community (Theming API, not the legacy CSS-file themes), and — most
 importantly — a large amount of already-correct, already-tested functional
 UI from Phases 0–3 that this phase re-skins, not rebuilds.
 
+## Update: Figma pass (`docs/figma-implementation-plan.md`)
+
+The BankDash Figma kit was applied on top of this system. Where the two
+disagree, **this section wins**; the sections below are otherwise still
+accurate. Font is unchanged (IBM Plex Sans).
+
+| Area | Was | Now |
+|---|---|---|
+| `--color-brand` | `#1D4ED8` | `#1814F3` (8.63:1 on white); hover `#120FC4` |
+| Page background | white / `slate-50` | `--color-canvas` `#F5F7FA`; panels are white cards on it |
+| Text colours | `slate-500/600/700/800` | `--color-muted` `#4F6FA5`, `--color-ink-2`, `--color-ink`, `--color-ink-title` |
+| Secondary text | (Figma `#718EBF` is 3.32:1) | **not used as text**; `#4F6FA5` (5.06:1 white / 4.72:1 canvas). `#718EBF` is `--color-outline`, borders/icons only |
+| Input/control border | `slate-300` | `--color-outline` (>= 3:1, WCAG 1.4.11; Figma's `#DFEAF2` is 1.22:1) |
+| `--color-danger` | `#DC2626` | `#B91C1C`: red-600 measures 4.49:1 on the canvas and fails AA as text there |
+| Radius | 4px / 8px, no `rounded-full` | cards 25px (`rounded-card`), inputs and solid buttons 15px (`rounded-control`), secondary/destructive buttons pill (`rounded-pill`), 10px bars; circles allowed for avatars, icon tiles, icon buttons. `Badge` keeps a small radius |
+| Type scale | title 20, section 18, body 14 | title 28/600 (`text-page-title`), section 18-22 (`text-section`), nav/buttons 16, inputs 15, KPI 20 (`text-kpi`); dense tables and AG Grid stay 14/13 |
+| Shell | 240px sidebar, 56px top bar, title in page | 250px (230 at 1024) icon sidebar with a 6px active bar, 100px header (80 at 1024) holding the page `<h1>` (via `PageTitle` portal), initials avatar, visible "Sign out" |
+| Tables | one density | `comfortable` (Projects, Vendors, Cost library, Inbox, Post-award) and `dense` (everything else); AG Grid untouched |
+| Dependencies | `@fontsource/ibm-plex-sans` only | + `lucide-react` (ISC, bundled/tree-shaken, no CDN) for icons |
+
+Non-text colours that stay **fill/icon/chart only** (never text):
+`--color-negative-fill` `#FE5C73` (3.0:1), `--color-accent-teal` `#16DBCC`
+(1.74:1), and, as before, `success`/`warning`/`info`. Locked by
+`src/test/tokens.contrast.test.ts`, which reads the real `@theme`.
+
+Shared components added: `Button`, `Card`/`SectionHeading`, `StatCard`,
+`TextField`/`SelectField`/`TextAreaField`, `TabBar`, `Table`/`Th`/`Td`/
+`TableCard`, `Pagination`, `Avatar`, `PageTitle`. `TabBar` has a `buttons`
+pattern for pages whose existing specs locate tabs by role `button`
+(Admin, Post-award); the `tabs` pattern is full WAI-ARIA.
+
 ## 1. Product style
 
 **Professional enterprise B2B for construction estimating and procurement.**
@@ -429,4 +460,4 @@ redirecting (Keycloak's own page is the step-up UI).
   phase.
 - No AG Grid Enterprise, no new paid/GPL/AGPL dependency of any kind —
   `@fontsource/ibm-plex-sans` (MIT) is the only new dependency this phase
-  adds.
+  adds (the later Figma pass added `lucide-react`, ISC).

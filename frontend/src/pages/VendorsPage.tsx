@@ -6,6 +6,8 @@ import { SkeletonRows } from '../components/Skeleton'
 import { useCheckDuplicates, useCreateVendor, useVendors } from '../features/vendors/api'
 import { Role } from '../lib/roles'
 import type { VendorCreate } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
+import { Table, TableCard, Td, Th } from '../components/Table'
 
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
@@ -34,7 +36,7 @@ function NewVendorForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form
-      className="mb-6 rounded border border-slate-200 p-4"
+      className="mb-6 rounded-card p-5 bg-white"
       onSubmit={(e) => {
         e.preventDefault()
         createVendor.mutate({ data: asPayload() }, { onSuccess: onDone })
@@ -42,7 +44,7 @@ function NewVendorForm({ onDone }: { onDone: () => void }) {
     >
       <div className="flex flex-wrap items-end gap-2">
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="legal-name">
+          <label className="mb-1 block text-sm text-ink" htmlFor="legal-name">
             Legal name
           </label>
           <input
@@ -50,22 +52,22 @@ function NewVendorForm({ onDone }: { onDone: () => void }) {
             required
             value={legalName}
             onChange={(e) => setLegalName(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="trade-license">
+          <label className="mb-1 block text-sm text-ink" htmlFor="trade-license">
             Trade license no.
           </label>
           <input
             id="trade-license"
             value={tradeLicenseNo}
             onChange={(e) => setTradeLicenseNo(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="primary-email">
+          <label className="mb-1 block text-sm text-ink" htmlFor="primary-email">
             Primary email
           </label>
           <input
@@ -73,21 +75,21 @@ function NewVendorForm({ onDone }: { onDone: () => void }) {
             type="email"
             value={primaryEmail}
             onChange={(e) => setPrimaryEmail(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <button
           type="button"
           disabled={!legalName || checkDuplicates.isPending}
           onClick={() => checkDuplicates.mutate(asPayload())}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           Check for duplicates
         </button>
         <button
           type="submit"
           disabled={createVendor.isPending}
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
         >
           Create vendor
         </button>
@@ -131,14 +133,14 @@ export function VendorsPage() {
   const { data, isLoading, isError, error } = useVendors({ status: status || undefined })
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Vendors</h1>
+        <PageTitle>Vendors</PageTitle>
         <div className="flex items-center gap-2">
           {hasRole(...WRITE_ROLES) && (
             <Link
               to="/vendors/duplicates"
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Review duplicates
             </Link>
@@ -147,7 +149,7 @@ export function VendorsPage() {
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               {showForm ? 'Cancel' : 'New vendor'}
             </button>
@@ -163,7 +165,7 @@ export function VendorsPage() {
           id="vendor-status-filter"
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
         >
           {/* Options match backend/app/core/enums.py's VendorStatus exactly
               -- "Suspended" (not a real status) silently returned zero rows
@@ -183,39 +185,41 @@ export function VendorsPage() {
           {error.message}
         </p>
       )}
-      {data && data.items.length === 0 && <p className="text-slate-500">No vendors yet.</p>}
+      {data && data.items.length === 0 && <p className="text-muted">No vendors yet.</p>}
       {data && data.items.length > 0 && (
         <>
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-slate-500">
-              <tr>
-                <th className="py-2 font-medium">Legal name</th>
-                <th className="font-medium">Trade license</th>
-                <th className="font-medium">Emirate</th>
-                <th className="font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((v) => (
-                <tr key={v.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2">
-                    <Link
-                      to={`/vendors/${v.id}`}
-                      className="rounded text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                    >
-                      {v.legal_name}
-                    </Link>
-                  </td>
-                  <td>{v.trade_license_no ?? '--'}</td>
-                  <td>{v.emirate ?? '--'}</td>
-                  <td>
-                    <Badge tone={STATUS_TONE[v.status] ?? 'neutral'}>{v.status}</Badge>
-                  </td>
+          <TableCard>
+            <Table density="comfortable">
+              <thead className="border-b border-hairline text-muted">
+                <tr>
+                  <Th>Legal name</Th>
+                  <Th>Trade license</Th>
+                  <Th>Emirate</Th>
+                  <Th>Status</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-2 text-xs text-slate-500">
+              </thead>
+              <tbody>
+                {data.items.map((v) => (
+                  <tr key={v.id} className="border-b border-row-rule hover:bg-canvas">
+                    <Td>
+                      <Link
+                        to={`/vendors/${v.id}`}
+                        className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      >
+                        {v.legal_name}
+                      </Link>
+                    </Td>
+                    <Td>{v.trade_license_no ?? '--'}</Td>
+                    <Td>{v.emirate ?? '--'}</Td>
+                    <Td>
+                      <Badge tone={STATUS_TONE[v.status] ?? 'neutral'}>{v.status}</Badge>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableCard>
+          <p className="mt-2 text-xs text-muted">
             Showing {data.items.length} of {data.total}
           </p>
         </>

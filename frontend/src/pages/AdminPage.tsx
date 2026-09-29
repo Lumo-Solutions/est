@@ -5,6 +5,8 @@ import { ReasonCodesAdmin } from '../features/admin/ReasonCodesAdmin'
 import { TaxonomyAdmin } from '../features/admin/TaxonomyAdmin'
 import { TolerancesAdmin } from '../features/admin/TolerancesAdmin'
 import { VendorRegionsAdmin } from '../features/admin/VendorRegionsAdmin'
+import { PageTitle } from '../components/PageTitle'
+import { TabBar } from '../components/TabBar'
 
 const TABS = [
   { key: 'taxonomy', label: 'Taxonomy', Component: TaxonomyAdmin },
@@ -20,24 +22,22 @@ export function AdminPage() {
   const Active = TABS.find((t) => t.key === activeTab)?.Component ?? TaxonomyAdmin
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Admin</h1>
-      {/* docs/ui-design-system.md section 4.5. */}
-      <nav className="mt-3 flex gap-1 border-b border-slate-200">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setActiveTab(tab.key)}
-            className={`px-3 py-2 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-              tab.key === activeTab ? '-mb-px border-b-2 border-brand text-brand' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-      <div className="mt-4">
+    <div className="px-6 py-6 xl:px-10">
+      <PageTitle>Admin</PageTitle>
+      {/* docs/ui-design-system.md section 4.5 / Figma Setting-page tabs. Kept as
+          buttons (pattern="buttons") because admin-audit-permissions.spec.ts
+          locates them with getByRole('button', { name }). */}
+      <div className="mt-2">
+        <TabBar
+          pattern="buttons"
+          label="Admin sections"
+          idPrefix="admin"
+          value={activeTab}
+          onChange={(id) => setActiveTab(id as (typeof TABS)[number]['key'])}
+          tabs={TABS.map((t) => ({ id: t.key, label: t.label }))}
+        />
+      </div>
+      <div className="mt-6 rounded-card bg-white p-6">
         <Active />
       </div>
     </div>

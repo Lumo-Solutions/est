@@ -2,9 +2,14 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
+import { Button } from '../components/Button'
+import { TextField } from '../components/Field'
+import { Pagination } from '../components/Pagination'
 import { SkeletonRows } from '../components/Skeleton'
+import { Table, TableCard, Td, Th } from '../components/Table'
 import { useCreateProject, useProjectsPage } from '../features/projects/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 const CREATE_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const PAGE_SIZE = 20
@@ -28,7 +33,7 @@ function NewProjectForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form
-      className="mb-6 flex flex-wrap items-end gap-2 rounded border border-slate-200 p-4"
+      className="mb-6 flex flex-wrap items-end gap-4 rounded-card bg-white p-6"
       onSubmit={(e) => {
         e.preventDefault()
         createProject.mutate(
@@ -37,50 +42,14 @@ function NewProjectForm({ onDone }: { onDone: () => void }) {
         )
       }}
     >
-      <div>
-        <label className="block text-xs text-slate-500" htmlFor="code">
-          Code
-        </label>
-        <input
-          id="code"
-          required
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-        />
-      </div>
-      <div>
-        <label className="block text-xs text-slate-500" htmlFor="name">
-          Name
-        </label>
-        <input
-          id="name"
-          required
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-        />
-      </div>
-      <div>
-        <label className="block text-xs text-slate-500" htmlFor="client">
-          Client
-        </label>
-        <input
-          id="client"
-          value={clientName}
-          onChange={(e) => setClientName(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-        />
-      </div>
-      <button
-        type="submit"
-        disabled={createProject.isPending}
-        className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
-      >
+      <TextField label="Code" required value={code} onChange={(e) => setCode(e.target.value)} />
+      <TextField label="Name" required value={name} onChange={(e) => setName(e.target.value)} />
+      <TextField label="Client" value={clientName} onChange={(e) => setClientName(e.target.value)} />
+      <Button type="submit" loading={createProject.isPending}>
         Create project
-      </button>
+      </Button>
       {createProject.isError && (
-        <span role="alert" className="text-sm text-danger">
+        <span role="alert" className="text-sm text-red-700">
           {createProject.error.message}
         </span>
       )}
@@ -96,98 +65,74 @@ export function ProjectsListPage() {
   const projects = data?.items
   const [showForm, setShowForm] = useState(false)
   const canCreate = hasRole(...CREATE_ROLES)
-  const hasNextPage = data ? offset + data.items.length < data.total : false
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
-    <div className="p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Projects</h1>
+    <div className="px-6 py-6 xl:px-10">
+      <div className="mb-6 flex items-center justify-between">
+        <PageTitle>Projects</PageTitle>
         {canCreate && (
-          <button
-            type="button"
-            onClick={() => setShowForm((v) => !v)}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-          >
+          <Button variant="secondary" onClick={() => setShowForm((v) => !v)}>
             {showForm ? 'Cancel' : 'New project'}
-          </button>
+          </Button>
         )}
       </div>
       {showForm && <NewProjectForm onDone={() => setShowForm(false)} />}
       {isLoading && <SkeletonRows count={5} />}
       {isError && (
-        <p role="alert" className="text-danger">
+        <p role="alert" className="text-red-700">
           {error.message}
         </p>
       )}
       {projects && projects.length === 0 && (
-        <div className="rounded border border-slate-200 p-6 text-center">
-          <p className="text-sm text-slate-500">No projects yet.</p>
+        <div className="rounded-card bg-white p-10 text-center">
+          <p className="text-base text-muted">No projects yet.</p>
           {canCreate && !showForm && (
-            <button
-              type="button"
-              onClick={() => setShowForm(true)}
-              className="mt-3 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover"
-            >
+            <Button className="mt-4" onClick={() => setShowForm(true)}>
               New project
-            </button>
+            </Button>
           )}
         </div>
       )}
       {projects && projects.length > 0 && (
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-200 text-slate-500">
-            <tr>
-              <th className="py-2 font-medium">Code</th>
-              <th className="font-medium">Name</th>
-              <th className="font-medium">Client</th>
-              <th className="font-medium">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {projects.map((p) => (
-              <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="py-2">
-                  <Link
-                    to={`/projects/${p.id}`}
-                    className="text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                  >
-                    {p.code}
-                  </Link>
-                </td>
-                <td>{p.name}</td>
-                <td>{p.client_name ?? '--'}</td>
-                <td>
-                  <Badge tone={STATUS_TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
-                </td>
+        <TableCard>
+          <Table density="comfortable">
+            <thead>
+              <tr>
+                <Th>Code</Th>
+                <Th>Name</Th>
+                <Th>Client</Th>
+                <Th>Status</Th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {projects.map((p) => (
+                <tr key={p.id} className="hover:bg-canvas">
+                  <Td>
+                    <Link
+                      to={`/projects/${p.id}`}
+                      className="rounded font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                    >
+                      {p.code}
+                    </Link>
+                  </Td>
+                  <Td>{p.name}</Td>
+                  <Td>{p.client_name ?? '--'}</Td>
+                  <Td>
+                    <Badge tone={STATUS_TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableCard>
       )}
       {data && data.total > 0 && (
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm text-slate-500">
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm text-muted">
             Page {page} of {totalPages} ({data.total} project{data.total === 1 ? '' : 's'})
           </p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-            >
-              Previous
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage((p) => p + 1)}
-              disabled={!hasNextPage}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-            >
-              Next
-            </button>
-          </div>
+          <Pagination page={page} pageCount={totalPages} onPageChange={setPage} />
         </div>
       )}
     </div>

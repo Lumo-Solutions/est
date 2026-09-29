@@ -26,19 +26,19 @@ export function MeasurementPanel({
   const isOverridden = measurement.effective_value !== measurement.value
 
   return (
-    <div className="border-t border-slate-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">
+    <div className="border-t border-hairline p-4">
+      <h3 className="text-lg font-semibold text-ink-title">
         {measurement.capability} / {measurement.kind}
       </h3>
-      <p className="mt-1 text-sm text-slate-600">
+      <p className="mt-1 text-sm text-ink-2">
         Raw: {measurement.value} {measurement.unit}
         {isOverridden && (
-          <span className="ml-2 text-slate-800">
+          <span className="ml-2 text-ink">
             → Effective: {measurement.effective_value} {measurement.unit}
           </span>
         )}
       </p>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-xs text-muted">
         {BAND_LABEL[confidenceBand(measurement.confidence)]} ({(measurement.confidence * 100).toFixed(0)}%)
       </p>
 
@@ -47,7 +47,7 @@ export function MeasurementPanel({
           type="button"
           onClick={() => revert.mutate(measurement.id)}
           disabled={revert.isPending}
-          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded-pill border border-brand px-2 py-1 text-xs text-brand hover:bg-brand-subtle"
         >
           Revert to raw value
         </button>
@@ -64,7 +64,7 @@ export function MeasurementPanel({
         }}
       >
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="override-value">
+          <label className="mb-1 block text-sm text-ink" htmlFor="override-value">
             Override value
           </label>
           <input
@@ -73,22 +73,22 @@ export function MeasurementPanel({
             step="any"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-24 rounded border border-outline px-2 py-1 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="override-unit">
+          <label className="mb-1 block text-sm text-ink" htmlFor="override-unit">
             Unit
           </label>
           <input
             id="override-unit"
             value={unit}
             onChange={(e) => setUnit(e.target.value)}
-            className="w-16 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-16 rounded border border-outline px-2 py-1 text-sm"
           />
         </div>
         <div className="flex-1">
-          <label className="block text-xs text-slate-500" htmlFor="override-note">
+          <label className="mb-1 block text-sm text-ink" htmlFor="override-note">
             Note (why)
           </label>
           <input
@@ -96,13 +96,13 @@ export function MeasurementPanel({
             required
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-full rounded border border-outline px-2 py-1 text-sm"
           />
         </div>
         <button
           type="submit"
           disabled={override.isPending}
-          className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 hover:bg-brand-hover"
         >
           Override
         </button>

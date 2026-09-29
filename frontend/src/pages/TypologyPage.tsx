@@ -15,6 +15,7 @@ import {
 } from '../features/typology/api'
 import { Role } from '../lib/roles'
 import type { ConfirmClusterDeltaIn, ConfirmClusterGroupIn, TypologyClusterStatus } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8.
 const STATUS_TONE: Record<TypologyClusterStatus, BadgeTone> = {
@@ -52,51 +53,53 @@ function ConfirmForm({
     setDeltas((prev) => [...prev, { group_label: labels[0] ?? '', description: '', quantity_delta: null, unit: null }])
 
   return (
-    <div className="mt-4 rounded border border-slate-200 p-4">
-      <h4 className="text-sm font-semibold text-slate-800">Confirm cluster</h4>
-      <table className="mt-2 w-full text-left text-sm">
-        <thead className="text-slate-500">
-          <tr>
-            <th>Master</th>
-            <th>Group label</th>
-            <th>Instances</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((g, i) => (
-            <tr key={i}>
-              <td>
-                <input
-                  type="radio"
-                  name="master"
-                  aria-label={`Use "${labels[i]}" as the master group`}
-                  checked={masterIndex === i}
-                  onChange={() => setMasterIndex(i)}
-                  className="accent-brand"
-                />
-              </td>
-              <td>
-                <input
-                  aria-label={`Group label ${i + 1}`}
-                  value={labels[i]}
-                  onChange={(e) => setLabels((prev) => prev.map((l, j) => (j === i ? e.target.value : l)))}
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-                />
-              </td>
-              <td>{g.handles.length}</td>
+    <div className="mt-4 rounded-card p-5 bg-white">
+      <h4 className="text-sm font-semibold text-ink">Confirm cluster</h4>
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
+        <table className="mt-2 w-full text-left text-sm">
+          <thead className="text-muted">
+            <tr>
+              <th>Master</th>
+              <th>Group label</th>
+              <th>Instances</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {groups.map((g, i) => (
+              <tr key={i}>
+                <td>
+                  <input
+                    type="radio"
+                    name="master"
+                    aria-label={`Use "${labels[i]}" as the master group`}
+                    checked={masterIndex === i}
+                    onChange={() => setMasterIndex(i)}
+                    className="accent-brand"
+                  />
+                </td>
+                <td>
+                  <input
+                    aria-label={`Group label ${i + 1}`}
+                    value={labels[i]}
+                    onChange={(e) => setLabels((prev) => prev.map((l, j) => (j === i ? e.target.value : l)))}
+                    className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
+                  />
+                </td>
+                <td>{g.handles.length}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      <h5 className="mt-3 text-xs font-semibold uppercase text-slate-500">Variant deltas</h5>
+      <h5 className="mt-3 text-xs font-semibold uppercase text-muted">Variant deltas</h5>
       {deltas.map((delta, i) => (
         <div key={i} className="mt-1 flex flex-wrap items-end gap-2">
           <select
             aria-label="Variant delta group label"
             value={delta.group_label}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, group_label: e.target.value } : d)))}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           >
             {labels.map((l) => (
               <option key={l} value={l}>
@@ -109,7 +112,7 @@ function ConfirmForm({
             placeholder="Description"
             value={delta.description}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, description: e.target.value } : d)))}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <select
             aria-label="Variant delta BOQ item"
@@ -117,7 +120,7 @@ function ConfirmForm({
             onChange={(e) =>
               setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, boq_line_item_id: e.target.value || null } : d)))
             }
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           >
             <option value="">-- BOQ item --</option>
             {(boqItems ?? []).map((item) => (
@@ -135,14 +138,14 @@ function ConfirmForm({
             onChange={(e) =>
               setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, quantity_delta: Number(e.target.value) } : d)))
             }
-            className="w-24 rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-24 rounded-control border border-outline px-3 py-2 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <input
             aria-label="Variant delta unit"
             placeholder="Unit"
             value={delta.unit ?? ''}
             onChange={(e) => setDeltas((prev) => prev.map((d, j) => (j === i ? { ...d, unit: e.target.value } : d)))}
-            className="w-16 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-16 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
       ))}
@@ -168,7 +171,7 @@ function ConfirmForm({
               { onSuccess: onDone },
             )
           }
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
         >
           Confirm cluster
         </button>
@@ -191,9 +194,9 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
   const reject = useRejectTypologyCluster(projectId, clusterId)
 
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">Instances</h3>
-      <ul className="mt-1 text-sm text-slate-600">
+    <div className="mt-4 border-t border-hairline pt-4">
+      <h3 className="text-lg font-semibold text-ink-title">Instances</h3>
+      <ul className="mt-1 text-sm text-ink-2">
         {(instances ?? []).map((i) => (
           <li key={i.id}>
             {i.group_label}: {i.instance_count} instance(s), {i.source_handles.length} handle(s)
@@ -203,8 +206,8 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
 
       {(deltas ?? []).length > 0 && (
         <>
-          <h3 className="mt-3 text-sm font-semibold text-slate-800">Variant deltas</h3>
-          <ul className="mt-1 text-sm text-slate-600">
+          <h3 className="mt-3 text-lg font-semibold text-ink-title">Variant deltas</h3>
+          <ul className="mt-1 text-sm text-ink-2">
             {(deltas ?? []).map((d) => (
               <li key={d.id}>
                 {d.group_label}: {d.description} ({d.quantity_delta ?? 0} {d.unit ?? ''})
@@ -219,7 +222,7 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
           <button
             type="button"
             onClick={() => setConfirming((v) => !v)}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {confirming ? 'Cancel' : 'Review and confirm'}
           </button>
@@ -227,7 +230,7 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
             type="button"
             disabled={reject.isPending}
             onClick={() => reject.mutate()}
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-red-700 px-4 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-danger-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Reject
           </button>
@@ -250,25 +253,27 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
 
       {rollup && (
         <div className="mt-3">
-          <h3 className="text-sm font-semibold text-slate-800">Rollup ({rollup.total_instance_count} instances)</h3>
-          <table className="mt-1 w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-slate-500">
-              <tr>
-                <th className="font-medium">Item</th>
-                <th className="font-medium">Master qty</th>
-                <th className="font-medium">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rollup.items.map((item) => (
-                <tr key={item.boq_line_item_id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td>{item.item_no}</td>
-                  <td className="tabular-nums">{item.master_quantity}</td>
-                  <td className="tabular-nums">{item.total}</td>
+          <h3 className="text-lg font-semibold text-ink-title">Rollup ({rollup.total_instance_count} instances)</h3>
+          <div className="relative overflow-x-auto rounded-card bg-white p-2">
+            <table className="mt-1 w-full text-left text-sm">
+              <thead className="border-b border-hairline text-muted">
+                <tr>
+                  <th className="font-medium">Item</th>
+                  <th className="font-medium">Master qty</th>
+                  <th className="font-medium">Total</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rollup.items.map((item) => (
+                  <tr key={item.boq_line_item_id} className="border-b border-row-rule hover:bg-canvas">
+                    <td>{item.item_no}</td>
+                    <td className="tabular-nums">{item.master_quantity}</td>
+                    <td className="tabular-nums">{item.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -285,15 +290,15 @@ export function TypologyPage() {
   const selectedCluster = clusters?.find((c) => c.id === selectedClusterId) ?? null
 
   return (
-    <div className="p-6">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Typology cluster review</h1>
+        <PageTitle>Typology cluster review</PageTitle>
         {hasRole(...STRUCTURE_ROLES) && (
           <button
             type="button"
             onClick={() => detect.mutate()}
             disabled={detect.isPending}
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Detect clusters
           </button>
@@ -318,7 +323,7 @@ export function TypologyPage() {
         </p>
       )}
       {!isLoading && !isError && (clusters ?? []).length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No typology clusters yet.</p>
+        <p className="mt-4 text-sm text-muted">No typology clusters yet.</p>
       )}
       <ul className="mt-4 space-y-1">
         {(clusters ?? []).map((c) => (
@@ -327,7 +332,7 @@ export function TypologyPage() {
               type="button"
               onClick={() => setSelectedClusterId(c.id)}
               className={`flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-                c.id === selectedClusterId ? 'bg-brand-subtle font-medium text-brand' : 'hover:bg-slate-50'
+                c.id === selectedClusterId ? 'bg-brand-subtle font-medium text-brand' : 'hover:bg-canvas'
               }`}
             >
               <span>

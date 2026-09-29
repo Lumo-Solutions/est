@@ -25,6 +25,7 @@ import { useCurrentSettlement } from '../features/settlement/useCurrentSettlemen
 import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import type { BidSettlementLineItemOut, BidSettlementOut, BidSettlementTradeOverrideOut, SimulateRequest, SimulateResult } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8. backend/app/core/enums.py's
 // BidSettlementStatus (draft/submitted/approved/rejected/won/lost).
@@ -78,9 +79,9 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
   if (!hasRole(...TRADE_OVERRIDE_ROLES)) return null
 
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">Per-trade overrides</h3>
-      <p className="mt-1 text-xs text-slate-500">
+    <div className="mt-4 border-t border-hairline pt-4">
+      <h3 className="text-lg font-semibold text-ink-title">Per-trade overrides</h3>
+      <p className="mt-1 text-xs text-muted">
         Away from the project defaults above, for one trade at a time. Leave a field blank to keep whatever override
         already exists for that trade (or the project default, if none).
       </p>
@@ -89,12 +90,12 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
           {tradeOverrides.map((o) => {
             const tradeName = tradeNodes?.find((t) => t.id === o.trade_node_id)?.name ?? o.trade_node_id
             return (
-              <li key={o.id} className="rounded border border-slate-200 px-2 py-1">
+              <li key={o.id} className="rounded border border-hairline px-2 py-1">
                 <span className="font-medium">{tradeName}</span>{' '}
                 {PCT_FIELDS.map(({ key, label }) => {
                   const value = o[key as keyof BidSettlementTradeOverrideOut] as number | null
                   return (
-                    <span key={key} className="ml-2 text-xs text-slate-600">
+                    <span key={key} className="ml-2 text-xs text-ink-2">
                       {label}: <span className="tabular-nums">{value != null ? `${value}%` : 'default'}</span>
                     </span>
                   )
@@ -119,7 +120,7 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
           aria-label="Trade"
           value={newTradeNodeId}
           onChange={(e) => setNewTradeNodeId(e.target.value)}
-          className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
         >
           <option value="">-- Select trade --</option>
           {(tradeNodes ?? []).map((t) => (
@@ -135,13 +136,13 @@ function TradeOverridesPanel({ projectId, settlementId, tradeOverrides }: { proj
             placeholder={label}
             value={newValues[key] ?? ''}
             onChange={(e) => setNewValues((v) => ({ ...v, [key]: e.target.value }))}
-            className="w-24 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-24 rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         ))}
         <button
           type="submit"
           disabled={!newTradeNodeId || setOverride.isPending}
-          className="inline-flex items-center gap-1.5 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="inline-flex items-center gap-1.5 rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {setOverride.isPending && <Spinner />}
           Set override
@@ -176,7 +177,7 @@ function LineOverrideRow({
   const [fxRate, setFxRateInput] = useState('')
 
   return (
-    <li className="rounded border border-slate-200 px-2 py-1 text-sm">
+    <li className="rounded border border-hairline px-2 py-1 text-sm">
       <div className="flex items-center justify-between">
         <span>
           Line {line.id.slice(0, 8)} -- qty <span className="tabular-nums">{line.quantity}</span> -- sell rate{' '}
@@ -187,16 +188,16 @@ function LineOverrideRow({
           <button
             type="button"
             onClick={() => setEditing((v) => !v)}
-            className="rounded text-xs text-slate-600 underline transition-colors duration-150 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-xs text-ink-2 underline transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {editing ? 'Close' : 'Override'}
           </button>
         )}
       </div>
       {editing && (
-        <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-slate-100 pt-2">
+        <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-row-rule pt-2">
           <div>
-            <label className="block text-xs text-slate-500" htmlFor={`manual-${line.id}`}>
+            <label className="mb-1 block text-sm text-ink" htmlFor={`manual-${line.id}`}>
               Manual unit cost
             </label>
             <input
@@ -204,11 +205,11 @@ function LineOverrideRow({
               placeholder={line.direct_unit_cost != null ? String(line.direct_unit_cost) : ''}
               value={manualCost}
               onChange={(e) => setManualCost(e.target.value)}
-              className="w-32 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-32 rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <div>
-            <label className="block text-xs text-slate-500" htmlFor={`manual-note-${line.id}`}>
+            <label className="mb-1 block text-sm text-ink" htmlFor={`manual-note-${line.id}`}>
               Why (required)
             </label>
             <input
@@ -216,7 +217,7 @@ function LineOverrideRow({
               placeholder="e.g. no accepted quote yet, budget estimate"
               value={manualCostNote}
               onChange={(e) => setManualCostNote(e.target.value)}
-              className="w-48 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-48 rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <button
@@ -231,7 +232,7 @@ function LineOverrideRow({
                 { onSuccess: () => { setManualCost(''); setManualCostNote('') } },
               )
             }
-            className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="inline-flex items-center gap-1 rounded-pill border border-brand px-2 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {updateLine.isPending && <Spinner className="h-3 w-3" />}
             Set cost
@@ -239,7 +240,7 @@ function LineOverrideRow({
           {hasRole(...LINE_FX_RATE_ROLES) && (
             <>
               <div>
-                <label className="block text-xs text-slate-500" htmlFor={`fx-${line.id}`}>
+                <label className="mb-1 block text-sm text-ink" htmlFor={`fx-${line.id}`}>
                   FX rate (to {'>'} base)
                 </label>
                 <input
@@ -247,7 +248,7 @@ function LineOverrideRow({
                   placeholder={line.fx_rate != null ? String(line.fx_rate) : '1.0'}
                   value={fxRate}
                   onChange={(e) => setFxRateInput(e.target.value)}
-                  className="w-24 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                  className="w-24 rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
                 />
               </div>
               <button
@@ -259,7 +260,7 @@ function LineOverrideRow({
                     { onSuccess: () => setFxRateInput('') },
                   )
                 }
-                className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="inline-flex items-center gap-1 rounded-pill border border-brand px-2 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 {setFxRate.isPending && <Spinner className="h-3 w-3" />}
                 Set FX rate
@@ -297,8 +298,8 @@ function LineOverridesPanel({
   if (!hasRole(...LINE_OVERRIDE_ROLES) || lines.length === 0) return null
 
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">Per-line overrides</h3>
+    <div className="mt-4 border-t border-hairline pt-4">
+      <h3 className="text-lg font-semibold text-ink-title">Per-line overrides</h3>
       <ul className="mt-2 space-y-1">
         {lines.map((line) => (
           <LineOverrideRow key={line.id} projectId={projectId} settlementId={settlementId} currency={currency} line={line} />
@@ -339,7 +340,7 @@ function ScenarioDeleteButton({ settlementId, scenarioId }: { settlementId: stri
       <button
         type="button"
         onClick={() => setConfirming(false)}
-        className="rounded text-slate-500 underline transition-colors duration-150 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="rounded text-muted underline transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Cancel
       </button>
@@ -390,12 +391,12 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
   }
 
   return (
-    <div className="border-t border-slate-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">Live simulation</h3>
+    <div className="border-t border-hairline p-4">
+      <h3 className="text-lg font-semibold text-ink-title">Live simulation</h3>
       <div className="mt-2 grid grid-cols-2 gap-4">
         {SLIDERS.map(({ key, label }) => (
           <div key={key}>
-            <label className="block text-xs text-slate-500" htmlFor={key}>
+            <label className="mb-1 block text-sm text-ink" htmlFor={key}>
               {label}: <span className="tabular-nums">{values[key].toFixed(1)}%</span>
             </label>
             <input
@@ -413,11 +414,11 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
       </div>
 
       {result && (
-        <div className="mt-3 rounded border border-slate-200 p-3 text-sm">
+        <div className="mt-3 rounded-card p-5 text-sm bg-white">
           <p className="tabular-nums">
             Tender total: <span className="font-semibold">{formatMoney(result.tender_total, settlement.currency)}</span>
           </p>
-          <p className="tabular-nums text-xs text-slate-500">
+          <p className="tabular-nums text-xs text-muted">
             Direct cost {formatMoney(result.direct_cost_total, settlement.currency)} + plant{' '}
             {formatMoney(result.plant_total, settlement.currency)} + overhead {formatMoney(result.overhead_total, settlement.currency)} +
             volatility {formatMoney(result.volatility_total, settlement.currency)} + markup{' '}
@@ -430,7 +431,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
             // escalates to managing_director must not be shown as a
             // rounded "8.00%" that looks like it should stay at
             // bd_director. See docs/build-log.md's Phase 10 section.
-            <p className="tabular-nums text-xs text-slate-500">Margin on sell: {formatMarginPct(result.margin_on_sell_pct)}%</p>
+            <p className="tabular-nums text-xs text-muted">Margin on sell: {formatMarginPct(result.margin_on_sell_pct)}%</p>
           )}
           {result.required_role && (
             <p className="mt-1 text-xs font-medium text-amber-800">Requires approval by: {result.required_role}</p>
@@ -453,7 +454,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
             placeholder="Scenario label"
             value={scenarioLabel}
             onChange={(e) => setScenarioLabel(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <button
@@ -462,7 +463,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
           onClick={() =>
             saveScenario.mutate({ label: scenarioLabel, inputs: values as SimulateRequest }, { onSuccess: () => setScenarioLabel('') })
           }
-          className="inline-flex items-center gap-1.5 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="inline-flex items-center gap-1.5 rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {saveScenario.isPending && <Spinner />}
           Save scenario
@@ -474,7 +475,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
         </p>
       )}
       {scenarios && scenarios.length > 0 && (
-        <ul className="mt-2 space-y-1 text-xs text-slate-600">
+        <ul className="mt-2 space-y-1 text-xs text-ink-2">
           {scenarios.map((s) => (
             <li key={s.id}>
               <button
@@ -484,7 +485,7 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
                   setValues(inputs)
                   runSimulate(inputs)
                 }}
-                className="rounded underline transition-colors duration-150 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="rounded underline transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 {s.label}
               </button>{' '}
@@ -526,7 +527,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           type="button"
           onClick={() => submit.mutate()}
           disabled={submit.isPending}
-          className="inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="inline-flex items-center gap-1.5 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {submit.isPending && <Spinner className="text-white" />}
           Submit for approval
@@ -553,7 +554,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
           // Same 3dp precision as the cockpit's live simulation -- this is
           // the value that actually routed this request, so the approver
           // must see it exactly, not rounded to 2dp.
-          <span className="text-xs tabular-nums text-slate-500">Margin on sell: {formatMarginPct(settlement.margin_on_sell_pct)}%</span>
+          <span className="text-xs tabular-nums text-muted">Margin on sell: {formatMarginPct(settlement.margin_on_sell_pct)}%</span>
         )}
         <div className="flex items-center gap-2">
           <button
@@ -561,7 +562,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
             disabled={isSubmitter || decide.isPending}
             title={isSubmitter ? 'Segregation of duties: the submitter cannot decide their own request' : ''}
             onClick={() => decide.mutate({ approve: true })}
-            className="inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="inline-flex items-center gap-1.5 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {decide.isPending && <Spinner className="text-white" />}
             Approve
@@ -570,15 +571,15 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
             type="button"
             disabled={isSubmitter || decide.isPending}
             onClick={() => setRejectPromptOpen(true)}
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-red-700 px-4 py-1.5 text-sm text-red-700 transition-colors duration-150 hover:bg-danger-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Reject
           </button>
-          {isSubmitter && <span className="text-xs text-slate-500">Awaiting a different approver (SoD)</span>}
+          {isSubmitter && <span className="text-xs text-muted">Awaiting a different approver (SoD)</span>}
         </div>
         {stepUpPending ? (
-          <p role="status" className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-            <Spinner className="text-slate-500" />
+          <p role="status" className="inline-flex items-center gap-1.5 text-xs text-muted">
+            <Spinner className="text-muted" />
             Verifying... redirecting you to confirm your identity before this decision can complete.
           </p>
         ) : (
@@ -603,7 +604,7 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
     )
   }
 
-  return <p className="text-sm text-slate-500">Status: {settlement.status}</p>
+  return <p className="text-sm text-muted">Status: {settlement.status}</p>
 }
 
 // app/services/settlement.py::build_settlement_draft can always be called
@@ -634,8 +635,8 @@ export function SettlementPage() {
   const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Settlement cockpit</h1>
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
+      <PageTitle>Settlement cockpit</PageTitle>
       {isLoading && <SkeletonRows count={4} />}
       {isError && (
         <p role="alert" className="mt-4 text-sm text-danger">
@@ -647,7 +648,7 @@ export function SettlementPage() {
           type="button"
           onClick={() => buildDraft.mutate()}
           disabled={buildDraft.isPending}
-          className="mt-4 inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {buildDraft.isPending && <Spinner className="text-white" />}
           {current ? 'Build new settlement draft' : 'Build settlement draft'}
@@ -661,7 +662,7 @@ export function SettlementPage() {
       {current && projectId && (
         <div className="mt-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm text-slate-600">
+            <div className="flex items-center gap-2 text-sm text-ink-2">
               <span className="tabular-nums">v{current.version_no}</span>
               <Badge tone={SETTLEMENT_STATUS_TONE[current.status] ?? 'neutral'}>{current.status}</Badge>
               <span>{current.currency}</span>
@@ -672,7 +673,7 @@ export function SettlementPage() {
                   type="button"
                   onClick={() => refreshQuantities.mutate()}
                   disabled={refreshQuantities.isPending}
-                  className="inline-flex items-center gap-1 rounded text-xs text-slate-600 underline transition-colors duration-150 hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                  className="inline-flex items-center gap-1 rounded text-xs text-ink-2 underline transition-colors duration-150 hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                 >
                   {refreshQuantities.isPending && <Spinner className="h-3 w-3" />}
                   Refresh quantities

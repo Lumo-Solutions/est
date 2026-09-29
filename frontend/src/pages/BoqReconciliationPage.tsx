@@ -13,6 +13,7 @@ import {
 } from '../features/boq/api'
 import { BoqReconciliationGrid } from '../features/boq/BoqReconciliationGrid'
 import type { BoqLineItemOut } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLineItemOut }) {
   const { data: links } = useMeasurementLinks(item.id)
@@ -23,18 +24,18 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
   const feedback = useRecordSemanticFeedback()
 
   return (
-    <div className="border-t border-slate-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">
+    <div className="border-t border-hairline p-4">
+      <h3 className="text-lg font-semibold text-ink-title">
         {item.item_no} -- {item.description}
       </h3>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-xs text-muted">
         Variance: {item.variance ?? '--'} ({item.variance_pct?.toFixed(1) ?? '--'}%) {item.discrepancy_class ?? ''}
       </p>
       <button
         type="button"
         onClick={() => reconcile.mutate(item.id)}
         disabled={reconcile.isPending}
-        className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="mt-2 rounded-pill border border-brand px-2 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         Reconcile
       </button>
@@ -44,8 +45,8 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
         </p>
       )}
 
-      <h4 className="mt-3 text-xs font-semibold uppercase text-slate-500">Linked measurements</h4>
-      {(links ?? []).length === 0 && <p className="text-xs text-slate-500">None linked yet.</p>}
+      <h4 className="mt-3 text-xs font-semibold uppercase text-muted">Linked measurements</h4>
+      {(links ?? []).length === 0 && <p className="text-xs text-muted">None linked yet.</p>}
       <ul className="mt-1 space-y-1">
         {(links ?? []).map((m) => (
           <li key={m.id} className="flex items-center justify-between text-xs">
@@ -55,7 +56,7 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
             <button
               type="button"
               onClick={() => unlinkMeasurement.mutate(m.id)}
-              className="rounded text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="rounded text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Unlink
             </button>
@@ -68,8 +69,8 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
         </p>
       )}
 
-      <h4 className="mt-3 text-xs font-semibold uppercase text-slate-500">Suggested links</h4>
-      {(suggestions ?? []).length === 0 && <p className="text-xs text-slate-500">No suggestions.</p>}
+      <h4 className="mt-3 text-xs font-semibold uppercase text-muted">Suggested links</h4>
+      {(suggestions ?? []).length === 0 && <p className="text-xs text-muted">No suggestions.</p>}
       {/* linkMeasurement can genuinely fail (e.g. a suggestion whose
           measurement unit isn't dimensionally compatible with this BOQ
           item's UoM -- the backend validates that and 422s) -- found live
@@ -139,10 +140,10 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
 function UnlinkedMeasurementsPanel({ projectId }: { projectId: string }) {
   const { data: unlinked } = useUnlinkedMeasurements(projectId)
   return (
-    <div className="border-t border-slate-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">Unlinked measurements</h3>
-      {(unlinked ?? []).length === 0 && <p className="mt-1 text-xs text-slate-500">None.</p>}
-      <ul className="mt-1 space-y-1 text-xs text-slate-600">
+    <div className="border-t border-hairline p-4">
+      <h3 className="text-lg font-semibold text-ink-title">Unlinked measurements</h3>
+      {(unlinked ?? []).length === 0 && <p className="mt-1 text-xs text-muted">None.</p>}
+      <ul className="mt-1 space-y-1 text-xs text-ink-2">
         {(unlinked ?? []).map((m) => (
           <li key={m.id}>
             {m.kind}: {m.effective_value} {m.unit} (confidence {(m.confidence * 100).toFixed(0)}%)
@@ -159,25 +160,25 @@ export function BoqReconciliationPage() {
   const [selectedItem, setSelectedItem] = useState<BoqLineItemOut | null>(null)
 
   return (
-    <div className="flex h-[calc(100vh-49px)] flex-col">
-      <div className="flex items-center justify-between p-4">
-        <h1 className="text-xl font-semibold text-slate-800">BOQ reconciliation</h1>
+    <div className="flex h-full flex-col px-6 py-6 xl:px-10">
+      <div className="mb-4 flex items-center justify-between">
+        <PageTitle>BOQ reconciliation</PageTitle>
         {projectId && (
           <Link
             to={`/projects/${projectId}/boq/import`}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Import BOQ
           </Link>
         )}
       </div>
       {isError && (
-        <p role="alert" className="px-4 text-danger">
+        <p role="alert" className="mb-2 text-danger">
           {error.message}
         </p>
       )}
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1">
+      <div className="flex min-h-0 flex-1 gap-6">
+        <div className="min-w-0 flex-1 rounded-card bg-white p-2">
           {isLoading ? (
             <div className="p-4">
               <SkeletonRows count={8} />
@@ -186,7 +187,7 @@ export function BoqReconciliationPage() {
             <BoqReconciliationGrid rows={items ?? []} onRowClick={setSelectedItem} />
           )}
         </div>
-        <div className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white">
+        <div className="w-80 shrink-0 overflow-y-auto rounded-card bg-white">
           {selectedItem && projectId && <ItemDetailPanel projectId={projectId} item={selectedItem} />}
           {projectId && <UnlinkedMeasurementsPanel projectId={projectId} />}
         </div>

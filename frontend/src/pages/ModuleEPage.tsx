@@ -11,6 +11,9 @@ import {
   useOutturnCostObservations,
 } from '../features/moduleE/api'
 import { formatMoney } from '../lib/format'
+import { PageTitle } from '../components/PageTitle'
+import { Table, TableCard, Td, Th } from '../components/Table'
+import { TabBar } from '../components/TabBar'
 
 // All read-only, any authenticated role server-side (module_e.py uses
 // CurrentUser throughout) -- no write forms, no role gating needed.
@@ -43,10 +46,10 @@ function ContractDetail({ contractId }: { contractId: string }) {
   const { data: variations, isLoading: varLoading } = useContractVariations(contractId)
 
   return (
-    <div className="mt-3 rounded border border-slate-200 p-3">
-      <h3 className="text-sm font-semibold text-slate-800">Revisions</h3>
+    <div className="mt-3 rounded-card p-5 bg-white">
+      <h3 className="text-lg font-semibold text-ink-title">Revisions</h3>
       {revLoading && <SkeletonRows count={2} />}
-      {revisions && revisions.length === 0 && <p className="mt-1 text-sm text-slate-500">No revisions.</p>}
+      {revisions && revisions.length === 0 && <p className="mt-1 text-sm text-muted">No revisions.</p>}
       {revisions && revisions.length > 0 && (
         <ul className="mt-1 space-y-1 text-sm">
           {revisions.map((r) => (
@@ -57,32 +60,34 @@ function ContractDetail({ contractId }: { contractId: string }) {
         </ul>
       )}
 
-      <h3 className="mt-3 text-sm font-semibold text-slate-800">Variations</h3>
+      <h3 className="mt-3 text-lg font-semibold text-ink-title">Variations</h3>
       {varLoading && <SkeletonRows count={2} />}
-      {variations && variations.length === 0 && <p className="mt-1 text-sm text-slate-500">No variations.</p>}
+      {variations && variations.length === 0 && <p className="mt-1 text-sm text-muted">No variations.</p>}
       {variations && variations.length > 0 && (
-        <table className="mt-1 w-full text-left text-sm">
-          <thead className="border-b border-slate-200 font-medium text-slate-500">
-            <tr>
-              <th className="py-1">Ref</th>
-              <th>Description</th>
-              <th className="text-right">Delta amount</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {variations.map((v) => (
-              <tr key={v.id} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="py-1">{v.variation_ref ?? '--'}</td>
-                <td>{v.description}</td>
-                <td className="text-right tabular-nums">{v.delta_amount === null ? '--' : formatMoney(v.delta_amount)}</td>
-                <td>
-                  <Badge tone={VARIATION_STATUS_TONE[v.status] ?? 'neutral'}>{v.status}</Badge>
-                </td>
+        <TableCard>
+          <Table density="comfortable" className="mt-1">
+            <thead className="border-b border-hairline font-medium text-muted">
+              <tr>
+                <Th>Ref</Th>
+                <Th>Description</Th>
+                <Th numeric>Delta amount</Th>
+                <Th>Status</Th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {variations.map((v) => (
+                <tr key={v.id} className="border-b border-row-rule hover:bg-canvas">
+                  <Td>{v.variation_ref ?? '--'}</Td>
+                  <Td>{v.description}</Td>
+                  <Td numeric className="tabular-nums">{v.delta_amount === null ? '--' : formatMoney(v.delta_amount)}</Td>
+                  <Td>
+                    <Badge tone={VARIATION_STATUS_TONE[v.status] ?? 'neutral'}>{v.status}</Badge>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableCard>
       )}
     </div>
   )
@@ -99,7 +104,7 @@ function ContractsTab({ projectId }: { projectId: string }) {
         {error.message}
       </p>
     )
-  if (!contracts || contracts.length === 0) return <p className="text-sm text-slate-500">No contracts awarded yet.</p>
+  if (!contracts || contracts.length === 0) return <p className="text-sm text-muted">No contracts awarded yet.</p>
 
   return (
     <div>
@@ -109,7 +114,7 @@ function ContractsTab({ projectId }: { projectId: string }) {
             <button
               type="button"
               onClick={() => setSelectedId(selectedId === c.id ? null : c.id)}
-              className="flex items-center gap-2 rounded text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="flex items-center gap-2 rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               <span>{c.contract_ref ?? c.id}</span>
               <Badge tone={CONTRACT_STATUS_TONE[c.status] ?? 'neutral'}>{c.status}</Badge>
@@ -131,7 +136,7 @@ function BoqRevisionsTab({ projectId }: { projectId: string }) {
         {error.message}
       </p>
     )
-  if (!data || data.length === 0) return <p className="text-sm text-slate-500">No BOQ revisions yet.</p>
+  if (!data || data.length === 0) return <p className="text-sm text-muted">No BOQ revisions yet.</p>
   return (
     <ul className="space-y-1 text-sm">
       {data.map((r) => (
@@ -155,7 +160,7 @@ function ExclusionRegisterTab({ projectId }: { projectId: string }) {
         id="exclusion-status-filter"
         value={status}
         onChange={(e) => setStatus(e.target.value)}
-        className="mb-3 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mb-3 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       >
         <option value="">All statuses</option>
         <option value="open">Open</option>
@@ -167,28 +172,30 @@ function ExclusionRegisterTab({ projectId }: { projectId: string }) {
           {error.message}
         </p>
       )}
-      {data && data.length === 0 && <p className="text-sm text-slate-500">No exclusion register entries.</p>}
+      {data && data.length === 0 && <p className="text-sm text-muted">No exclusion register entries.</p>}
       {data && data.length > 0 && (
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-200 font-medium text-slate-500">
-            <tr>
-              <th className="py-1">Description</th>
-              <th>Status</th>
-              <th>Resolution note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((e) => (
-              <tr key={e.id} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="py-1">{e.description}</td>
-                <td>
-                  <Badge tone={EXCLUSION_STATUS_TONE[e.status] ?? 'neutral'}>{e.status}</Badge>
-                </td>
-                <td>{e.resolution_note ?? '--'}</td>
+        <TableCard>
+          <Table density="comfortable">
+            <thead className="border-b border-hairline font-medium text-muted">
+              <tr>
+                <Th>Description</Th>
+                <Th>Status</Th>
+                <Th>Resolution note</Th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.map((e) => (
+                <tr key={e.id} className="border-b border-row-rule hover:bg-canvas">
+                  <Td>{e.description}</Td>
+                  <Td>
+                    <Badge tone={EXCLUSION_STATUS_TONE[e.status] ?? 'neutral'}>{e.status}</Badge>
+                  </Td>
+                  <Td>{e.resolution_note ?? '--'}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableCard>
       )}
     </div>
   )
@@ -203,28 +210,30 @@ function OutturnCostsTab({ projectId }: { projectId: string }) {
         {error.message}
       </p>
     )
-  if (!data || data.length === 0) return <p className="text-sm text-slate-500">No outturn cost observations yet.</p>
+  if (!data || data.length === 0) return <p className="text-sm text-muted">No outturn cost observations yet.</p>
   return (
-    <table className="w-full text-left text-sm">
-      <thead className="border-b border-slate-200 font-medium text-slate-500">
-        <tr>
-          <th className="py-1">Observed at</th>
-          <th className="text-right">Unit cost</th>
-          <th className="text-right">Quantity</th>
-          <th>Note</th>
-        </tr>
-      </thead>
-      <tbody>
-        {data.map((o) => (
-          <tr key={o.id} className="border-b border-slate-100 hover:bg-slate-50">
-            <td className="py-1">{o.observed_at}</td>
-            <td className="text-right tabular-nums">{formatMoney(o.observed_unit_cost, o.currency)}</td>
-            <td className="text-right tabular-nums">{o.observed_quantity ?? '--'}</td>
-            <td>{o.source_note ?? '--'}</td>
+    <TableCard>
+      <Table density="comfortable">
+        <thead className="border-b border-hairline font-medium text-muted">
+          <tr>
+            <Th>Observed at</Th>
+            <Th numeric>Unit cost</Th>
+            <Th numeric>Quantity</Th>
+            <Th>Note</Th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {data.map((o) => (
+            <tr key={o.id} className="border-b border-row-rule hover:bg-canvas">
+              <Td>{o.observed_at}</Td>
+              <Td numeric className="tabular-nums">{formatMoney(o.observed_unit_cost, o.currency)}</Td>
+              <Td numeric className="tabular-nums">{o.observed_quantity ?? '--'}</Td>
+              <Td>{o.source_note ?? '--'}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </TableCard>
   )
 }
 
@@ -243,24 +252,21 @@ export function ModuleEPage() {
   if (!projectId) return null
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Post-award (Module E)</h1>
-      {/* docs/ui-design-system.md section 4.5. */}
-      <nav className="mt-3 flex gap-1 border-b border-slate-200">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setActiveTab(tab.key)}
-            className={`px-3 py-2 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-              tab.key === activeTab ? '-mb-px border-b-2 border-brand text-brand' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-      <div className="mt-4">
+    <div className="px-6 py-6 xl:px-10">
+      <PageTitle>Post-award (Module E)</PageTitle>
+      {/* Figma tabs; buttons pattern because costlib-module-e.spec.ts locates
+          them by role button. */}
+      <div className="mt-2">
+        <TabBar
+          pattern="buttons"
+          label="Post-award sections"
+          idPrefix="module-e"
+          value={activeTab}
+          onChange={(id) => setActiveTab(id as (typeof TABS)[number]['key'])}
+          tabs={TABS.map((t) => ({ id: t.key, label: t.label }))}
+        />
+      </div>
+      <div className="mt-6">
         <Active projectId={projectId} />
       </div>
     </div>
