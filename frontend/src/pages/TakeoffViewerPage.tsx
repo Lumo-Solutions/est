@@ -53,7 +53,7 @@ export function TakeoffViewerPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-49px)]">
+    <div className="flex h-full">
       <div className="flex-1 overflow-auto bg-slate-100">
         {sheet.is_raster === false && drawing.kind === 'dxf' ? (
           <DxfSheetView
@@ -89,7 +89,7 @@ export function TakeoffViewerPage() {
             {sheet.drawing_number ?? '--'} · Rev {sheet.revision ?? '--'}
           </p>
           {sheet.scale_disagreement && (
-            <p className="mt-1 text-xs text-warning">⚠ Scale sources disagree -- verify calibration.</p>
+            <p className="mt-1 text-xs text-amber-800">⚠ Scale sources disagree -- verify calibration.</p>
           )}
         </div>
 

@@ -6,17 +6,20 @@ import type { BoqLineItemOut } from '../../types/api'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
-// docs/ui-design-system.md section 4.4 -- Theming API params only (a
+// docs/ui-design-system.md section 4.4 + docs/figma-implementation-plan.md 6 -- Theming API params only (a
 // CSS-variable-level change AG Grid already optimizes for), no row/column
 // virtualization or other perf setting touched. The 5,000-row benchmark
 // (frontend/e2e/boq-reconciliation.spec.ts) is re-run after this change,
 // not assumed safe.
 const installtecGridTheme = themeQuartz.withParams({
-  accentColor: '#1D4ED8',
-  headerBackgroundColor: '#F8FAFC',
-  headerTextColor: '#475569',
+  accentColor: '#1814F3', // --color-brand
+  foregroundColor: '#232323', // --color-ink
+  headerBackgroundColor: '#F5F7FA', // --color-canvas
+  headerTextColor: '#4F6FA5', // --color-muted (4.72:1 on canvas)
   oddRowBackgroundColor: '#FFFFFF',
-  rowHoverColor: '#F8FAFC',
+  rowHoverColor: '#F5F7FA',
+  borderColor: '#E6EFF5', // --color-hairline
+  wrapperBorderRadius: 20,
   fontFamily: 'IBM Plex Sans, system-ui, sans-serif',
   fontSize: 13,
 })

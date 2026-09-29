@@ -29,7 +29,7 @@ const NON_TEXT_MIN = 3
 describe('token contrast (WCAG AA)', () => {
   const canvas = token('canvas')
 
-  it.each(['brand', 'brand-hover', 'accent', 'ink', 'ink-2', 'ink-title', 'muted'])(
+  it.each(['brand', 'brand-hover', 'accent', 'danger', 'ink', 'ink-2', 'ink-title', 'muted'])(
     'text token %s is >= 4.5:1 on white and on canvas',
     (name) => {
       expect(ratio(token(name), WHITE)).toBeGreaterThanOrEqual(TEXT_MIN)

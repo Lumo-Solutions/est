@@ -178,7 +178,7 @@ export function AppShell() {
   const displayName = user?.username ?? user?.sub ?? ''
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex h-screen overflow-hidden bg-canvas">
       <aside className="flex w-[230px] shrink-0 flex-col border-r border-hairline bg-white xl:w-[250px]">
         <div className="flex h-20 shrink-0 items-center gap-3 px-6 xl:h-[100px]">
           <HardHat aria-hidden="true" className="h-8 w-8 shrink-0 text-brand" />
@@ -199,7 +199,7 @@ export function AppShell() {
           )}
         </nav>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DevMfaBanner active={user?.mfaDisabledDev === true} />
         <header className="flex h-20 shrink-0 items-center gap-4 border-b border-hairline bg-white px-6 xl:h-[100px] xl:px-10">
           <div ref={setTitleSlot} className="min-w-0 flex-1" />

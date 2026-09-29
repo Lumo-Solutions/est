@@ -116,7 +116,7 @@ export function SheetIndexPage() {
                   <td className="tabular-nums">
                     {s.scale_text ?? (s.scale_ratio ? `1:${Math.round(1 / s.scale_ratio)}` : '--')}
                     {s.scale_disagreement && (
-                      <span className="ml-1 text-warning" title="Scale sources disagree">
+                      <span className="ml-1 text-amber-800" title="Scale sources disagree">
                         ⚠
                       </span>
                     )}

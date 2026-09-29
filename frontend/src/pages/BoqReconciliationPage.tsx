@@ -160,8 +160,8 @@ export function BoqReconciliationPage() {
   const [selectedItem, setSelectedItem] = useState<BoqLineItemOut | null>(null)
 
   return (
-    <div className="flex h-[calc(100vh-49px)] flex-col">
-      <div className="flex items-center justify-between p-4">
+    <div className="flex h-full flex-col px-6 py-6 xl:px-10">
+      <div className="mb-4 flex items-center justify-between">
         <PageTitle>BOQ reconciliation</PageTitle>
         {projectId && (
           <Link
@@ -173,12 +173,12 @@ export function BoqReconciliationPage() {
         )}
       </div>
       {isError && (
-        <p role="alert" className="px-4 text-danger">
+        <p role="alert" className="mb-2 text-danger">
           {error.message}
         </p>
       )}
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1">
+      <div className="flex min-h-0 flex-1 gap-6">
+        <div className="min-w-0 flex-1 overflow-hidden rounded-card bg-white">
           {isLoading ? (
             <div className="p-4">
               <SkeletonRows count={8} />
@@ -187,7 +187,7 @@ export function BoqReconciliationPage() {
             <BoqReconciliationGrid rows={items ?? []} onRowClick={setSelectedItem} />
           )}
         </div>
-        <div className="w-80 shrink-0 overflow-y-auto border-l border-hairline bg-white">
+        <div className="w-80 shrink-0 overflow-y-auto rounded-card bg-white">
           {selectedItem && projectId && <ItemDetailPanel projectId={projectId} item={selectedItem} />}
           {projectId && <UnlinkedMeasurementsPanel projectId={projectId} />}
         </div>

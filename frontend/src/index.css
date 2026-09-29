@@ -35,7 +35,7 @@
   --color-success-subtle: #D1FAE5;
   --color-warning: #D97706;
   --color-warning-subtle: #FEF3C7;
-  --color-danger: #DC2626;
+  --color-danger: #B91C1C; /* red-700: red-600 is 4.49:1 on --color-canvas, fails AA as text there */
   --color-danger-subtle: #FEE2E2;
   --color-info: #0284C7;
   --color-info-subtle: #E0F2FE;
