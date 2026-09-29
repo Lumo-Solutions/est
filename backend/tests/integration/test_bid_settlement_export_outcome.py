@@ -175,6 +175,14 @@ async def test_export_succeeds_once_approved_and_is_audited(rls_session):
     file_bytes, sha256, filename = await settlement_service.export_settlement(rls_session, estimator_ctx, settlement.id, ExportRequest())
     assert filename.endswith(".xlsx")
     assert len(sha256) == 64
+    # UI-P2-020 (docs/ui-qa/issues.md): the filename must be built from the
+    # project's readable code, not its raw UUID (a downloads folder full of
+    # UUIDs is useless) -- e.g. "settlement-D2X-ab12cd34-v1.xlsx".
+    project_code = (
+        await rls_session.execute(text("SELECT code FROM projects WHERE id = :p"), {"p": str(project_id)})
+    ).scalar_one()
+    assert filename == f"settlement-{project_code}-v{settlement.version_no}.xlsx"
+    assert str(project_id) not in filename
 
     wb = load_workbook(io.BytesIO(file_bytes))
     assert wb.sheetnames == ["BOQ"]
@@ -191,6 +199,31 @@ async def test_export_succeeds_once_approved_and_is_audited(rls_session):
     ).first()
     assert audit_row is not None
     assert audit_row[1]["sha256"] == sha256
+
+
+async def test_export_filename_sanitizes_an_unsafe_project_code(rls_session):
+    """Project.code is free-form user input with no format validation
+    (app/schemas/projects.py) and the route builds Content-Disposition as a
+    bare f-string with no escaping (app/api/v1/routes/settlement.py) -- a
+    `"` in the code would otherwise break out of the quoted header value.
+    _project_code_for_filename must strip that down to a safe slug rather
+    than passing it through raw."""
+    tenant_id, project_id, settlement = await _approved_settlement(rls_session)
+    await _system_ctx(rls_session, tenant_id)
+    await rls_session.execute(
+        text("UPDATE projects SET code = :c WHERE id = :p"),
+        {"c": 'D2X "weird"/code\r\nX-Injected: yes', "p": str(project_id)},
+    )
+
+    estimator_ctx = _ctx(ESTIMATOR, tenant_id=tenant_id, user_id=_MEMBER_USER_ID)
+    await set_rls_context(rls_session, estimator_ctx)
+    _file_bytes, _sha256, filename = await settlement_service.export_settlement(
+        rls_session, estimator_ctx, settlement.id, ExportRequest()
+    )
+
+    assert filename == f"settlement-D2X-weird-code-X-Injected-yes-v{settlement.version_no}.xlsx"
+    for unsafe in ('"', "/", "\r", "\n", ":"):
+        assert unsafe not in filename
 
 
 async def test_export_denies_role_with_no_settlement_access(rls_session):

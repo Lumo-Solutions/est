@@ -203,6 +203,13 @@ async def test_happy_path_writes_rate_cell_and_reports_ok(rls_session, monkeypat
     )
     assert filename.endswith("-original.xlsx")
     assert len(sha256) == 64
+    # UI-P2-020 (docs/ui-qa/issues.md): built from the project's readable
+    # code, not its raw UUID.
+    project_code = (
+        await rls_session.execute(text("SELECT code FROM projects WHERE id = :p"), {"p": str(project_id)})
+    ).scalar_one()
+    assert filename == f"settlement-{project_code}-v{settlement.version_no}-original.xlsx"
+    assert str(project_id) not in filename
     wb = load_workbook(io.BytesIO(file_bytes))
     assert wb["BOQ"]["E2"].value == 50.05  # unit_sell_rate: 45.50 cost x 250 qty x 1.10 markup / 250
 
