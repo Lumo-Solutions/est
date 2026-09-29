@@ -32,6 +32,11 @@ def set_session_cookies(response: Response, settings: Settings, session_id: str,
     )
 
 
-def clear_session_cookies(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    response.delete_cookie(CSRF_COOKIE, path="/")
+def clear_session_cookies(response: Response, settings: Settings) -> None:
+    # A __Host- cookie is only accepted (and only deleted) when the
+    # Set-Cookie carries Secure + Path=/ -- browsers silently ignore a
+    # deletion that omits Secure, which is what this did before, leaving the
+    # cookie behind (harmless only because the server-side session was
+    # revoked too).
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=settings.cookie_secure, httponly=True, samesite="lax")
+    response.delete_cookie(CSRF_COOKIE, path="/", secure=settings.cookie_secure, samesite="lax")

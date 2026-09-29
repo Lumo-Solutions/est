@@ -22,6 +22,7 @@ import { QuarantineQueuePage } from './pages/QuarantineQueuePage'
 import { QuoteReviewPage } from './pages/QuoteReviewPage'
 import { SettlementPage } from './pages/SettlementPage'
 import { SheetIndexPage } from './pages/SheetIndexPage'
+import { SignedOutPage } from './pages/SignedOutPage'
 import { TakeoffViewerPage } from './pages/TakeoffViewerPage'
 import { TypologyPage } from './pages/TypologyPage'
 import { VendorDetailPage } from './pages/VendorDetailPage'
@@ -93,13 +94,24 @@ function AppRoutes() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <RequireAuth>
-            <AppRoutes />
-          </RequireAuth>
-        </BrowserRouter>
-      </AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public: Keycloak's post-logout redirect target. Outside AuthProvider
+              on purpose -- no /auth/me call (it would 401 for a signed-out user)
+              and no auto sign-in. */}
+          <Route path="/signed-out" element={<SignedOutPage />} />
+          <Route
+            path="*"
+            element={
+              <AuthProvider>
+                <RequireAuth>
+                  <AppRoutes />
+                </RequireAuth>
+              </AuthProvider>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
     </QueryClientProvider>
   )
 }

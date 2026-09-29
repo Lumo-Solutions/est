@@ -196,7 +196,7 @@
         "installtec-claims"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "+"
+        "post.logout.redirect.uris": "https://localhost:8443/signed-out##http://localhost:3000/signed-out"
       }
     },
     {

@@ -39,8 +39,7 @@ test.describe('ProjectsListPage', () => {
     await expect(link).toBeVisible()
     await link.click()
     await expect(page.getByRole('heading', { name: new RegExp(`^${code}`) })).toBeVisible()
-    await expect(page.getByRole('main').getByText('lead1')).toBeVisible()
-    await expect(page.getByText('(owner)')).toBeVisible()
+    await expect(page.getByRole('listitem').filter({ hasText: 'lead1' })).toContainText('(owner)')
   })
 })
 

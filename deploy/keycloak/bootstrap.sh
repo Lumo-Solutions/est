@@ -30,6 +30,19 @@ echo "Setting installtec-backend client secret..."
 CLIENT_UUID=$(run get clients -r "$REALM" -q clientId=installtec-backend --fields id --format csv --noquotes | tail -n1)
 run update "clients/${CLIENT_UUID}" -r "$REALM" -s "secret=${KEYCLOAK_CLIENT_SECRET}"
 
+# Sign-out: POST /api/v1/auth/logout 303s the browser to Keycloak's end-session
+# endpoint with post_logout_redirect_uri=<app origin>/signed-out. Keycloak
+# rejects any post-logout URI not registered on the client (the realm export's
+# old value "+" only mirrors the client's *redirect* URIs, i.e. the
+# /api/v1/auth/callback path, so it never matched). The realm JSON only
+# applies to a fresh import; this makes an already-imported realm match, and
+# re-running it is a no-op (a plain attribute overwrite). Multiple URIs are
+# separated by "##". APP_PUBLIC_URL is the origin users load the SPA from
+# (dev: the same as KEYCLOAK_PUBLIC_URL, Caddy on :8443).
+APP_PUBLIC_URL="${APP_PUBLIC_URL:-${KEYCLOAK_PUBLIC_URL:-https://localhost:8443}}"
+echo "Registering post-logout redirect URIs on installtec-backend (${APP_PUBLIC_URL}/signed-out)..."
+run update "clients/${CLIENT_UUID}" -r "$REALM"     -s "attributes.\"post.logout.redirect.uris\"=${APP_PUBLIC_URL}/signed-out##http://localhost:3000/signed-out"
+
 # Phase 3 (docs/ui-qa-brief.md): a read-only GET /users endpoint needs the
 # backend itself to call Keycloak's admin API (listing users + their realm
 # roles for an "add project member"/"users & roles" screen) -- this is a
