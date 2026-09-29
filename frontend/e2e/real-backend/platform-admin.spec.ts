@@ -21,7 +21,12 @@ test('admin1 (platform_admin) can log in and is offered Resolve tenant on unknow
   expect(me.roles).toEqual(['platform_admin'])
   expect(me.username).toBe('admin1')
 
+  // Deliberately still the OLD project-scoped URL here (not /inbox) --
+  // this is the one spec in the suite that also proves the redirect itself
+  // works, since every other quarantine-queue spec now goes straight to
+  // /inbox.
   await page.goto(`/projects/${project.id}/procurement/quarantine`)
+  await expect(page).toHaveURL(/\/inbox$/)
   await expect(page.getByRole('heading', { name: /quarantine/i })).toBeVisible()
   // The dev DB holds quarantined mail with no resolved tenant (seeded by the
   // inbound-email simulations); each such row offers the platform_admin-only action.

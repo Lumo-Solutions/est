@@ -56,12 +56,13 @@ function projectNavItems(projectId: string): NavItem[] {
   ]
 }
 
-// platform_admin is deliberately absent from both of these: it's a narrow,
-// Keycloak-only role scoped to the quarantine queue's tenant-resolution
-// action (docs/ui-qa/coverage.md's role glossary), not a general admin
-// persona. None of Admin's six tabs or Audit's endpoints grant it any
-// read or write access server-side -- the nav previously linked it to two
-// destinations that were either fully read-only-looking-but-broken or a
+// platform_admin is deliberately absent from Admin and Audit below (but see
+// the Inbox item further down, which is the one deliberate exception): it's
+// a narrow, Keycloak-only role scoped to the quarantine queue's
+// tenant-resolution action (docs/ui-qa/coverage.md's role glossary), not a
+// general admin persona. None of Admin's six tabs or Audit's endpoints grant
+// it any read or write access server-side -- the nav previously linked it to
+// two destinations that were either fully read-only-looking-but-broken or a
 // guaranteed 403 on load (docs/ui-qa/issues.md UI-P2-022).
 const GLOBAL_NAV_ITEMS: NavItem[] = [
   { label: 'Projects', to: '/' },
@@ -78,6 +79,17 @@ const GLOBAL_NAV_ITEMS: NavItem[] = [
   { label: 'Cost library', to: '/cost-library' },
   { label: 'Admin', to: '/admin', requiresRoles: [Role.MANAGING_DIRECTOR] },
   { label: 'Audit', to: '/audit', requiresRoles: [Role.MANAGING_DIRECTOR, Role.BD_DIRECTOR] },
+  {
+    // platform_admin IS included here, unlike the rest of this array --
+    // deliberately, not an oversight. Its one and only exclusive action
+    // anywhere in the app ("Resolve tenant" on an unknown-tenant
+    // quarantined email) lives exclusively on this page, so it must be
+    // able to reach it via nav. Do not "fix" this back to match the usual
+    // platform_admin-excluded pattern above.
+    label: 'Inbox',
+    to: '/inbox',
+    requiresRoles: [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.PLATFORM_ADMIN],
+  },
 ]
 
 // docs/ui-design-system.md section 4.1 -- active item gets the brand tint,

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
@@ -59,6 +59,10 @@ function AppRoutes() {
         <Route path="/vendors/:vendorId" element={<VendorDetailPage />} />
         <Route path="/cost-library" element={<CostLibraryPage />} />
         <Route path="/cost-library/:costItemId" element={<CostItemDetailPage />} />
+        {/* Global, not project-scoped: QuarantineQueuePage's data hook
+            (useInboundReviewQueue) never took a projectId, so its old
+            project-prefixed URL didn't reflect what it actually showed. */}
+        <Route path="/inbox" element={<QuarantineQueuePage />} />
         <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
         <Route path="/projects/:projectId/drawings/:drawingId" element={<SheetIndexPage />} />
         <Route
@@ -69,7 +73,9 @@ function AppRoutes() {
         <Route path="/projects/:projectId/boq/import" element={<BoqImportWizardPage />} />
         <Route path="/projects/:projectId/boq" element={<BoqReconciliationPage />} />
         <Route path="/projects/:projectId/procurement/packages" element={<ProcurementPackagesPage />} />
-        <Route path="/projects/:projectId/procurement/quarantine" element={<QuarantineQueuePage />} />
+        {/* Old project-scoped URL -- kept registered, just redirecting, for
+            any bookmarked/old links. See the /inbox route above. */}
+        <Route path="/projects/:projectId/procurement/quarantine" element={<Navigate to="/inbox" replace />} />
         <Route path="/projects/:projectId/procurement/quotes" element={<QuoteReviewPage />} />
         <Route path="/projects/:projectId/procurement/bid-leveling" element={<BidLevelingPage />} />
         <Route path="/projects/:projectId/settlement" element={<SettlementPage />} />

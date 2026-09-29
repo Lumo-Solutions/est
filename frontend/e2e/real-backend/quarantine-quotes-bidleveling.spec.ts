@@ -32,8 +32,7 @@ test.describe('QuarantineQueuePage', () => {
     expect(queue.length).toBeGreaterThan(0)
     for (const row of queue) expect(row.needs_review).toBe(true)
 
-    const project = await findProjectByCode(page, 'QA-DEMO')
-    await page.goto(`/projects/${project.id}/procurement/quarantine`)
+    await page.goto('/inbox')
     await expect(page.getByRole('heading', { name: 'Quarantine and review queue' })).toBeVisible()
     // Not "Nothing needs review" -- the demo tenant has real needs_review
     // rows (seeded by earlier make dev-simulate-* runs), so an empty state
@@ -44,8 +43,7 @@ test.describe('QuarantineQueuePage', () => {
 
   test('resolve-tenant is not offered to a non-platform_admin role', async ({ page }) => {
     await loginViaKeycloak(page, 'procurement1', 'Procurement1Pass!')
-    const project = await findProjectByCode(page, 'QA-DEMO')
-    await page.goto(`/projects/${project.id}/procurement/quarantine`)
+    await page.goto('/inbox')
     await expect(page.getByPlaceholder('Tenant ID')).toHaveCount(0)
 
     // No platform_admin demo user is seeded anywhere in this repo (checked

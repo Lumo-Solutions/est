@@ -23,8 +23,7 @@ import { DEMO_TOTP_SECRETS } from './totp'
 test.describe('QuarantineQueuePage: dismiss uses a modal, not window.prompt', () => {
   test('the modal opens, requires non-empty text, and Cancel leaves the row untouched', async ({ page }) => {
     await loginViaKeycloak(page, 'procurement1', 'Procurement1Pass!')
-    const project = await findProjectByCode(page, 'QA-DEMO')
-    await page.goto(`/projects/${project.id}/procurement/quarantine`)
+    await page.goto('/inbox')
 
     const firstRow = page.locator('table tbody tr').first()
     await expect(firstRow).toBeVisible()

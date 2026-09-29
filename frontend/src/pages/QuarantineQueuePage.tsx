@@ -106,12 +106,28 @@ function ReviewRow({
   )
 }
 
+// Mirrors the nav gate on AppShell's Inbox item (see the comment there for
+// why platform_admin is included). UX nicety only -- the server remains the
+// only real enforcement (_REVIEW_ROLES / require_roles(Role.PLATFORM_ADMIN)
+// in backend/app/api/v1/routes/quotation_ingestion.py).
+const PAGE_ROLES = [Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.PLATFORM_ADMIN]
+
 export function QuarantineQueuePage() {
+  const { hasRole } = useAuth()
   const { data: queue, isLoading, isError, error } = useInboundReviewQueue()
   const [openPrompt, setOpenPrompt] = useState<OpenPrompt>(null)
   const resolveTenant = useResolveInboundTenant()
   const dismiss = useDismissInboundEmail()
   const attach = useAttachInboundEmail()
+
+  if (!hasRole(...PAGE_ROLES)) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-semibold text-slate-800">Quarantine and review queue</h1>
+        <p className="mt-2 text-sm text-slate-500">You don't have access to this page.</p>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6">
