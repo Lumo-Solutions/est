@@ -1,6 +1,18 @@
-# Production overlay: adds TLS termination via Caddy and stops publishing
-# internal service ports on the host. Usage:
+# Production overlay: adds TLS termination via Caddy, stops publishing
+# internal service ports on the host, and hard-pins APP_ENV/PRODUCTION_MODE
+# for every backend-family service (literal values, not ${...} -- so they
+# always win over whatever deploy/.env or the shell environment supplies,
+# same reasoning as the ports: !reset [] entries below). Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env up -d
+#
+# PRODUCTION_MODE=true (app/core/config.py) makes the backend/every worker/
+# beat refuse to start unless APP_ENV is exactly "production" -- see that
+# setting's docstring and docs/deploy-deltas.md for why it's a separate flag
+# from APP_ENV rather than an unconditional check.
+x-prod-app-env: &prod-app-env
+  APP_ENV: production
+  PRODUCTION_MODE: "true"
+
 services:
   postgres:
     ports: !reset []
@@ -13,6 +25,24 @@ services:
 
   keycloak:
     ports: !reset []
+
+  backend:
+    environment: *prod-app-env
+
+  celery-worker:
+    environment: *prod-app-env
+
+  celery-worker-vlm:
+    environment: *prod-app-env
+
+  celery-worker-email:
+    environment: *prod-app-env
+
+  celery-worker-quotation:
+    environment: *prod-app-env
+
+  celery-beat:
+    environment: *prod-app-env
 
   caddy:
     image: caddy:2-alpine

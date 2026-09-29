@@ -23,6 +23,7 @@ actually runnable; each is marked inline in the compose file with a
 | `postgres` port | Published as `5433:5432`, not `5432:5432`. | SRS §6 has Postgres on the host's default 5432, which commonly collides with a locally-installed Postgres or another project's stack. `DATABASE_URL`/`APP_DATABASE_URL`/`MIGRATOR_DATABASE_URL` inside the compose network are unaffected (they use the container port, 5432, via the `postgres` hostname) -- this only changes how you reach it from the host, e.g. `psql -h localhost -p 5433`. **Not the same stack as `deploy/docker-compose.test.yml`** (`make test-integration`) -- that one's Postgres/Redis have no host port at all (tests reach them via `testcontainers`, dynamically-ported, never this file), and its SeaweedFS/mock-vllm are on `58333`/`59333`/`58000`, specifically chosen not to collide with this port or with `8333`/`9333`/`8000` below. See `docs/takeoff-pipeline.md`'s Compose-collision note for the incident that made this collision-avoidance explicit. |
 | `frontend` | Gated behind `profiles: ["frontend"]`; not started by `make up`/`docker compose up` until `frontend/` exists (Phase 5). Enable explicitly with `docker compose --profile frontend up -d`. | The SRS §6 template's `frontend` service (`build: ../frontend`) fails outright today -- there is no `frontend/` directory yet -- which would otherwise break every `make up`. |
 | `backend`, `celery-*` | Added `TAKEOFF_PERSIST_GEOMETRY: ${TAKEOFF_PERSIST_GEOMETRY:-false}` to both `x-backend-env` and `backend`'s own separate environment list. | The `Settings()` field existed but had no Compose wiring at all -- setting it in `.env` had zero effect on any container. Found while verifying Phase 2 geometry extraction end-to-end. See `docs/takeoff-pipeline.md`'s "Two real bugs..." section for this and two other bugs the same verification pass found. |
+| `docker-compose.prod.yml` | New `x-prod-app-env` block: `backend`, `celery-worker`, `celery-worker-vlm`, `celery-worker-email`, `celery-worker-quotation`, `celery-beat` each get a literal (not `${...}`) `APP_ENV: production` / `PRODUCTION_MODE: "true"` override. New `Settings.production_mode` (`app/core/config.py`) makes the backend/every worker/beat refuse to start (fail-closed at `Settings()` construction, same pattern as `DEV_DISABLE_MFA`'s validator) if `PRODUCTION_MODE=true` but `APP_ENV` isn't exactly `production`. | Nothing previously forced `APP_ENV=production` for a production deployment at all -- the base compose file's `APP_ENV: ${APP_ENV:-dev}` meant a forgotten/blank `.env` value silently ran a "production" deployment with dev-mode defaults (weaker CORS, `bootstrap.sh`'s demo-user seeding gate, `EMAIL_REDIRECT_ALL_TO`'s safety net, etc. are all keyed off `app_env`). `PRODUCTION_MODE` is deliberately a *separate* flag from `APP_ENV`, not an unconditional "must be production" check, so every non-prod deployment (a bare `docker compose up`, dev, test) is unaffected -- see the validator's own docstring. `deploy/check-prod-app-env.sh` (`make check-prod-app-env`) renders the real merged config and asserts it, rather than trusting the YAML source alone. `bootstrap.sh`'s own demo-user-seeding guard (`is_dev_or_test_env`, `deploy/keycloak/lib-env-guard.sh`) already refused outside `dev`/`test` before this change and needed no change here. |
 
 ### Local development on Windows (Git Bash)
 
@@ -171,7 +172,14 @@ and used extensively during development, not just for `config --quiet`
 validation:
 
 - `docker compose -f deploy/docker-compose.yml config` and the
-  `.test`/`.prod` overlays parse correctly.
+  `.test`/`.prod` overlays parse correctly. `make check-prod-app-env`
+  (`deploy/check-prod-app-env.sh`) renders the real `.yml` + `.prod.yml`
+  merged config against the local `.env` and confirms `backend`/every
+  `celery-*`/`celery-beat` actually comes out with `APP_ENV: production` /
+  `PRODUCTION_MODE: "true"` -- passed. `Settings(PRODUCTION_MODE=True,
+  APP_ENV=...)` refusing to construct for every non-`production` `APP_ENV`
+  is covered by `backend/tests/unit/test_config.py` (part of `make
+  test-unit`).
 - The real `backend` image was built from the repo-root context (see the
   build-context delta above) and `alembic upgrade head` was run against a
   live `pgvector/pgvector:pg16` container — all 9 migrations apply cleanly.

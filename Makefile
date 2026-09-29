@@ -51,6 +51,13 @@ render-s3-identities:
 check-s3-identities:
 	bash deploy/seaweedfs/check-identity-grants.sh deploy/.env deploy/seaweedfs/s3-identities.json
 
+# Renders docker-compose.yml + docker-compose.prod.yml's real merged config
+# (no containers started) and asserts every backend-family service actually
+# gets APP_ENV=production/PRODUCTION_MODE=true out of it. See
+# deploy/check-prod-app-env.sh and docs/deploy-deltas.md.
+check-prod-app-env:
+	bash deploy/check-prod-app-env.sh deploy/.env
+
 up: render-s3-identities
 	$(COMPOSE) up -d --build
 
