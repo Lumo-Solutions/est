@@ -39,9 +39,16 @@ Data: migration `0030` (packages, project_documents, document_classifications, a
 | ai-service prompt contract | 17 passed |
 | Frontend | `npm run build` clean, vitest 78 passed, oxlint only the 3 pre-existing warnings, mocked `npm run e2e` 5 passed |
 | Real-backend e2e (`tender-intake.spec.ts`) | tender flow (drop the pack, proposals, bulk-confirm, drawings `ready`, BOQ wizard pre-filled then dry run and commit, addendum revision and settlement flag, register download, axe, layout at 1440/1280/1024), admin class rename/disable/restore, and a 338-file pack (paged, virtualised, bulk-confirmed) |
-| Full `npm run e2e:real-backend --workers=1`, MFA on | see "Final run" below |
+| Full `npm run e2e:real-backend --workers=1`, MFA on | **No single fully clean run was achieved.** See "Final run" below. |
 
 Classification accuracy on the synthetic pack: rules only 18/19, rules plus mock model 19/19. **These numbers are a regression baseline, not evidence of real-world accuracy:** the pack is ours and the rules were tuned while looking at it. The real-model accuracy run and a run on a real tender pack stay on the GPU checklist.
+
+## Final run (real backend, MFA on): what happened, exactly
+
+- **Run 1: 87 of 88 passed.** The one failure was `tender-intake.spec.ts`: the A-201 drawing ended `partial`. Cause: `embed_sheet` failed with "ONNX embedding model not found at `C:/Program Files/Git/models/...`". `deploy/keycloak/dev-set-mfa.sh` (behind `make dev-mfa-on/off`) sources `deploy/.env` with `set -a`, and Git Bash rewrote `ONNX_MODEL_DIR=/models` into a Windows path when it launched `docker compose up -d`, so every container it recreated could not find the embedding model. This predates my work (containers created hours before it show the same value) and would also make drawings `partial` for anyone using those targets from Git Bash. **Fixed** in that script (path conversion disabled for the compose call); backend and workers now have `/models`. The spec then passed under MFA.
+- **Run 2 (after the fix): 75 passed, 13 failed.** The failures were `ECONNRESET` (9), `net::ERR_TIMED_OUT` (2) and two consequences of them, all from the test client to `localhost:8443`, spread across unrelated specs. No container restarted, nothing was OOM-killed, and the proxy logged a single upstream reset. I could not prove the cause. Host memory was under pressure later in the session (the harness killed a background command for it), which is the likeliest explanation, but that is a guess. **All 13 failed tests pass when re-run** (18 tests in six files, then 9 in four files including both intake specs), with MFA on.
+- **Run 3** was meant to give the single clean pass, but the harness killed it for low memory before it started, and I did not restart it. So the honest summary is: two full runs (87/88 with a real bug found and fixed, 75/88 with connection-level failures) and every failing test re-run green, not one uninterrupted 88/88. A full run on a machine with free memory is the outstanding check.
+- MFA has been switched back **off** (`make dev-mfa-off`, using the fixed script).
 
 ## Process record (finish-brief section A)
 
