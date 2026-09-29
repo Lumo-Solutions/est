@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -51,6 +51,22 @@ async def get_project(session: AsyncSession, project_id: UUID) -> Project:
 
 async def list_projects(session: AsyncSession) -> list[Project]:
     return list((await session.execute(select(Project).order_by(Project.created_at.desc()))).scalars().all())
+
+
+async def list_projects_page(session: AsyncSession, *, limit: int, offset: int) -> tuple[list[Project], int]:
+    """Paginated counterpart to list_projects(), mirroring
+    app/services/{vendors,costlib}.py::list_{vendors,cost_items}'s
+    (rows, total) pagination shape. Same created_at-desc ordering as
+    list_projects(), with id-desc as a tiebreaker so page boundaries stay
+    stable even when two projects share a created_at timestamp (e.g. rows
+    inserted in the same transaction/test) -- without it, offset/limit
+    slicing across two calls could re-show or skip a row whose relative
+    order among created_at-ties isn't otherwise deterministic."""
+    total = (await session.execute(select(func.count()).select_from(Project))).scalar_one()
+    result = await session.execute(
+        select(Project).order_by(Project.created_at.desc(), Project.id.desc()).limit(limit).offset(offset)
+    )
+    return list(result.scalars().all()), total
 
 
 async def assert_can_see_project(session: AsyncSession, ctx: RequestContext, project_id: UUID) -> None:
