@@ -11,7 +11,9 @@ import { useCreateProject, useProjectsPage } from '../features/projects/api'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
 
-const CREATE_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
+// Mirrors backend/app/api/v1/routes/projects.py's _CREATE_ROLES (lead_estimator
+// joined bd/md with migration 0029).
+const CREATE_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.LEAD_ESTIMATOR]
 const PAGE_SIZE = 20
 
 // docs/ui-design-system.md section 4.8 -- ProjectStatus (backend/app/core/enums.py)

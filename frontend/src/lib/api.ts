@@ -154,17 +154,23 @@ export async function downloadFile(path: string, body: unknown, fallbackFilename
   URL.revokeObjectURL(url)
 }
 
-export async function logout(): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/auth/logout`, {
-      method: 'POST',
-      headers: { [CSRF_HEADER_NAME]: readCookie(CSRF_COOKIE_NAME) },
-      credentials: 'same-origin',
-    })
-  } catch {
-    // Best-effort RP-initiated Keycloak logout via the redirect chain; our
-    // own session cookie is cleared by the first hop regardless of whether
-    // the rest of the chain completes from here.
-  }
-  window.location.href = '/'
+// Sign-out is a top-level form POST, NOT a fetch: the backend ends the
+// Keycloak SSO session and answers 303 -> Keycloak's end-session URL ->
+// /signed-out, and only a real browser navigation follows that chain (a
+// fetch would follow it invisibly, and the browser's own Keycloak cookies
+// would never be cleared -- the next "Sign in" would silently auto-login as
+// the previous user). A form cannot set request headers, so the CSRF token
+// (double-submit, same value as the cookie) travels as a form field.
+export function logout(): void {
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = `${API_BASE}/auth/logout`
+  form.style.display = 'none'
+  const field = document.createElement('input')
+  field.type = 'hidden'
+  field.name = 'csrf_token'
+  field.value = readCookie(CSRF_COOKIE_NAME)
+  form.appendChild(field)
+  document.body.appendChild(form)
+  form.submit()
 }

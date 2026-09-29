@@ -31,6 +31,14 @@ interface ProjectSummary {
 // deploy/keycloak/dev-reset-totp-user.sh first (see docs/keycloak-setup.md).
 export async function loginViaKeycloak(page: Page, username: string, password: string): Promise<boolean> {
   await page.goto('/api/v1/auth/login')
+  return completeKeycloakLogin(page, username, password)
+}
+
+// The credential half of loginViaKeycloak: fills the Keycloak username/password
+// form the page is ALREADY on (plus the TOTP step when MFA is on) and waits for
+// the round trip back to the SPA. Split out so logout.spec.ts can prove that,
+// after sign-out, "Sign in" lands on this form instead of auto-logging in.
+export async function completeKeycloakLogin(page: Page, username: string, password: string): Promise<boolean> {
   await page.locator('#username').fill(username)
   await page.locator('#password').fill(password)
   await page.locator('#kc-login').click()

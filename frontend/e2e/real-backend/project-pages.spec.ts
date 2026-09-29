@@ -23,6 +23,24 @@ test.describe('ProjectsListPage', () => {
     })
     expect(response.status()).toBe(403)
   })
+
+  test('lead_estimator sees New project, creates a project through the UI, and owns it', async ({ page }) => {
+    await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New project' }).click()
+
+    const code = `QA-LEAD-${Date.now()}`
+    await page.getByLabel('Code').fill(code)
+    await page.getByLabel('Name').fill('Created by lead_estimator')
+    await page.getByRole('button', { name: 'Create project' }).click()
+
+    // Newest first, so the new project is on page 1; and the creator is its owner.
+    const link = page.getByRole('link', { name: code })
+    await expect(link).toBeVisible()
+    await link.click()
+    await expect(page.getByRole('heading', { name: new RegExp(`^${code}`) })).toBeVisible()
+    await expect(page.getByRole('listitem').filter({ hasText: 'lead1' })).toContainText('(owner)')
+  })
 })
 
 test.describe('ProjectDetailPage', () => {

@@ -70,8 +70,17 @@ browser is auto-attaching credentials.
 
 `GET /auth/login` → PKCE challenge + `state`/`nonce` stashed in Redis →
 redirect to Keycloak. `GET /auth/callback` exchanges the code, validates the
-access token, and creates the Redis session. `POST /auth/logout` revokes it
-and does an RP-initiated logout redirect. `GET /auth/step-up` re-runs the
+access token, and creates the Redis session. `POST /auth/logout` ends the
+user's Keycloak SSO session (back-channel POST of the stored refresh token with
+the client credentials), revokes the Redis session, clears both `__Host-`
+cookies (with `Secure`) and answers **303** (not 307) to Keycloak's end-session
+URL with `id_token_hint` + `post_logout_redirect_uri=<origin>/signed-out`, so the
+next sign-in asks for a password again. It is a top-level browser form POST
+(the CSRF token travels as a `csrf_token` form field, checked in the route
+because `/auth/logout` is a public path), never a fetch. The client's
+`post.logout.redirect.uris` must contain `<origin>/signed-out`: the realm JSON
+sets it for fresh imports and `bootstrap.sh` sets it idempotently for an
+already-imported realm (`APP_PUBLIC_URL`, default `KEYCLOAK_PUBLIC_URL`). `GET /auth/step-up` re-runs the
 same flow with `acr_values=silver&prompt=login` for MFA re-verification
 immediately before a sensitive action (see `security/deps.py::require_mfa_step_up`
 and `services/approvals.py::decide()`, which both check `ctx.acr`).

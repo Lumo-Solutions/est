@@ -95,3 +95,137 @@ async def test_openapi_schema_is_generated(client):
     schema = resp.json()
     assert schema["info"]["title"] == "INSTALLTEC AI Platform API"
     assert "/api/v1/vendors" in schema["paths"]
+
+
+# --- POST /auth/logout ------------------------------------------------------
+# The real Keycloak round trip (SSO session actually ended, next sign-in asks
+# for a password again) is proven by frontend/e2e/real-backend/logout.spec.ts;
+# these pin the server-side contract: 303 (not 307), back-channel call, session
+# revoked, cookies cleared with Secure, CSRF enforced, id_token_hint present.
+
+import time
+from urllib.parse import parse_qs, urlparse
+
+import httpx
+
+from app.security.oidc import OidcClient
+from app.security.sessions import SessionData
+
+
+def _session(**overrides) -> SessionData:
+    base = dict(
+        sub="sub-1",
+        tenant_id="8f14e45f-ceea-4e97-8d0c-3d3b3f3c1a00",
+        access_token="access",
+        refresh_token="refresh-tok",
+        id_token="id-tok",
+        access_expires_at=time.time() + 300,
+        refresh_expires_at=time.time() + 1800,
+        csrf_token="csrf-abc",
+    )
+    base.update(overrides)
+    return SessionData(**base)
+
+
+def _cookie(session_id: str, csrf: str = "csrf-abc") -> dict[str, str]:
+    return {"Cookie": f"__Host-ins_sid={session_id}; __Host-ins_csrf={csrf}"}
+
+
+def _store_of(client):
+    return client._transport.app.state.session_store
+
+
+async def test_logout_ends_the_session_and_303s_to_keycloak_end_session(client, monkeypatch):
+    store = _store_of(client)
+    session_id = await store.create(_session())
+    calls: list[str] = []
+
+    async def fake_backchannel(self, refresh_token: str) -> None:
+        calls.append(refresh_token)
+
+    monkeypatch.setattr(OidcClient, "backchannel_logout", fake_backchannel)
+
+    resp = await client.post(
+        "/api/v1/auth/logout", data={"csrf_token": "csrf-abc"}, headers=_cookie(session_id), follow_redirects=False
+    )
+
+    assert resp.status_code == 303  # NOT 307: a 307 would re-POST the form to Keycloak
+    assert calls == ["refresh-tok"]  # back-channel logout used the stored refresh token
+    assert await store.get(session_id) is None  # our own session is revoked
+
+    url = urlparse(resp.headers["location"])
+    assert url.path.endswith("/protocol/openid-connect/logout")
+    q = parse_qs(url.query)
+    assert q["id_token_hint"] == ["id-tok"]
+    assert q["post_logout_redirect_uri"] == ["http://test/signed-out"]
+
+    # Both __Host- cookies are expired, and with Secure (browsers ignore a
+    # __Host- deletion that lacks it).
+    set_cookies = resp.headers.get_list("set-cookie")
+    for name in ("__Host-ins_sid", "__Host-ins_csrf"):
+        line = next(c for c in set_cookies if c.startswith(name + "="))
+        assert "Max-Age=0" in line or "expires=" in line.lower()
+        assert "Secure" in line
+
+
+async def test_logout_still_completes_when_the_keycloak_back_channel_call_fails(client, monkeypatch):
+    store = _store_of(client)
+    session_id = await store.create(_session())
+
+    async def boom(self, refresh_token: str) -> None:
+        raise httpx.ConnectError("keycloak unreachable")
+
+    monkeypatch.setattr(OidcClient, "backchannel_logout", boom)
+
+    resp = await client.post(
+        "/api/v1/auth/logout", data={"csrf_token": "csrf-abc"}, headers=_cookie(session_id), follow_redirects=False
+    )
+
+    assert resp.status_code == 303
+    assert await store.get(session_id) is None  # revoked regardless
+    assert "id_token_hint=id-tok" in resp.headers["location"]  # front-channel still ends the SSO session
+
+
+async def test_logout_rejects_a_missing_or_wrong_csrf_token_and_keeps_the_session(client, monkeypatch):
+    store = _store_of(client)
+    session_id = await store.create(_session())
+    called = False
+
+    async def fake_backchannel(self, refresh_token: str) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(OidcClient, "backchannel_logout", fake_backchannel)
+
+    for form in ({}, {"csrf_token": "wrong"}):
+        resp = await client.post(
+            "/api/v1/auth/logout", data=form, headers=_cookie(session_id), follow_redirects=False
+        )
+        assert resp.status_code == 403
+
+    assert called is False
+    assert await store.get(session_id) is not None  # a forged cross-site POST cannot log the user out
+
+
+async def test_logout_without_a_session_is_idempotent_and_lands_on_the_signed_out_page(client):
+    resp = await client.post("/api/v1/auth/logout", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "http://test/signed-out"
+
+
+async def test_logout_with_a_session_that_has_no_refresh_token_skips_the_back_channel(client, monkeypatch):
+    store = _store_of(client)
+    session_id = await store.create(_session(refresh_token=""))
+    called = False
+
+    async def fake_backchannel(self, refresh_token: str) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(OidcClient, "backchannel_logout", fake_backchannel)
+    resp = await client.post(
+        "/api/v1/auth/logout", data={"csrf_token": "csrf-abc"}, headers=_cookie(session_id), follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert called is False
+    assert await store.get(session_id) is None

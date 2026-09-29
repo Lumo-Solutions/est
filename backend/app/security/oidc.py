@@ -55,6 +55,15 @@ class OidcClient:
             "/protocol/openid-connect/logout"
         )
 
+    @property
+    def _backchannel_logout_endpoint(self) -> str:
+        # Server-to-server: the internal Keycloak URL, not the public one the
+        # browser is sent to.
+        return (
+            f"{self._settings.keycloak_base_url}/realms/{self._settings.keycloak_realm}"
+            "/protocol/openid-connect/logout"
+        )
+
     def build_authorize_url(
         self, redirect_uri: str, state: str, nonce: str, code_challenge: str, *, acr_values: str | None = None
     ) -> str:
@@ -122,6 +131,24 @@ class OidcClient:
             )
         resp.raise_for_status()
         return resp.json()
+
+    async def backchannel_logout(self, refresh_token: str) -> None:
+        """End the user's Keycloak SSO session server-side (standard Keycloak
+        behaviour: POST the refresh token with the client credentials to the
+        logout endpoint; 204 on success). Raises httpx.HTTPError /
+        HTTPStatusError on failure -- callers treat that as best-effort,
+        because the browser front-channel end-session redirect that follows
+        ends the same SSO session on its own."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                self._backchannel_logout_endpoint,
+                data={
+                    "client_id": self._settings.keycloak_client_id,
+                    "client_secret": self._settings.keycloak_client_secret,
+                    "refresh_token": refresh_token,
+                },
+            )
+        resp.raise_for_status()
 
     def validate_access_token(self, access_token: str) -> Principal:
         return self._validator.validate(access_token)
