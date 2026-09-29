@@ -33,6 +33,15 @@ const DRAWING_STATUS_TONE: Record<string, BadgeTone> = {
 // allows lead_estimator, handled separately below).
 const LOCATION_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const MEMBER_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.LEAD_ESTIMATOR]
+// GET /users is restricted server-side (backend/app/api/v1/routes/users.py
+// _READ_ROLES). Requesting it as an estimator was a guaranteed 403 -- a
+// console error on every project page, previously masked by e2e timing.
+const USER_DIRECTORY_ROLES = [
+  Role.LEAD_ESTIMATOR,
+  Role.PROCUREMENT_HEAD,
+  Role.BD_DIRECTOR,
+  Role.MANAGING_DIRECTOR,
+]
 
 function LocationSection({ project }: { project: { id: string; emirate: string | null; area: string | null; latitude: number | null; longitude: number | null } }) {
   const { hasRole } = useAuth()
@@ -120,7 +129,7 @@ function MembersSection({ projectId }: { projectId: string }) {
   const { hasRole } = useAuth()
   const canWrite = hasRole(...MEMBER_ROLES)
   const { data: members, isLoading, isError, error } = useProjectMembers(projectId)
-  const { data: users } = useUsers()
+  const { data: users } = useUsers({ enabled: hasRole(...USER_DIRECTORY_ROLES) })
   const [selectedUserId, setSelectedUserId] = useState('')
   const [projectRole, setProjectRole] = useState('')
   const addMember = useAddProjectMember(projectId)

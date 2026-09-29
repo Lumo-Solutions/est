@@ -1,9 +1,6 @@
 # Figma implementation plan — BankDash UI kit → InstallTec Estimating
 
-**Status: PLAN ONLY. No file under `frontend/` has been edited.** Implementation
-starts only after the drawing-pipeline-resilience run has merged (it currently
-touches `frontend/src/features/drawings/api.ts` and
-`frontend/src/pages/SheetIndexPage.tsx`, both of which this plan also touches).
+**Status: IMPLEMENTED on branch `feat/figma-ui` (not pushed). See section 11 for what was built, what deviated from this plan, and the verification results.** The sections below are the original plan.
 
 **Decisions D1–D7 are resolved — see §8.** Summary: keep IBM Plex Sans (no font
 change); comfortable + dense table variants; 100px/80px header; omit
@@ -394,3 +391,56 @@ Estimated scope: ~26 pages restyled, ~10 new shared components, 0 backend change
 | Larger type + 25px cards reduce information density on Settlement/BOQ | D2 dense variant; screenshot-review at 1280×720 |
 | Icon/sidebar overflow with 15 items | 44px pitch; nav already `overflow-y-auto`; verify at 1024×768 |
 | Sampled hexes (tile pastels, teal, amber, gradient) are from rendered pixels, not Figma variables | Values are stable flat fills; re-sample if design changes |
+
+
+---
+
+## 11. Implementation report
+
+### Built
+
+- **Tokens** (`frontend/src/index.css`): section 1.5 set, IBM Plex Sans kept (D1). Figma colours that fail AA are replaced as planned (1.6). `--color-danger` was additionally moved `#DC2626` -> `#B91C1C`: red-600 measures 4.49:1 on the new `#F5F7FA` canvas and failed axe on Quote Review. `src/test/tokens.contrast.test.ts` reads the real `@theme` and locks the AA pairs.
+- **Shell** (`AppShell.tsx`): 250/230px icon sidebar, 6px active bar, 100/80px header holding the page `<h1>` via `PageTitle` (portal), initials `Avatar`, visible "Sign out". `filterVisibleNavItems`, `requiresRoles`, `end` and the platform_admin Inbox exception are unchanged; the shell is now `h-screen` so pages can size with `h-full`.
+- **Shared components**: `Button`, `Card`/`SectionHeading`, `TextField`/`SelectField`, `TabBar`, `Table`/`Th`/`Td`/`TableCard`, `Pagination`, `Avatar`, `PageTitle`.
+- **Pages**: all routed pages restyled. Comfortable tables: Projects, Vendors, Cost library, Inbox, Post-award. Dense pages get a single white content sheet. AG Grid: colour/font theme params only.
+- **Icons**: `lucide-react` (D6), bundled; production bundle grew 13 KB (+0.7%).
+- **Air-gap guard**: `src/test/airgap.test.ts` fails on any remote URL/CDN/Figma host in source.
+
+### Deviations from the plan
+
+| Plan | What happened |
+|---|---|
+| `StatCard`, `TextAreaField`, tile tokens (3.2) | Built, then **removed**: no page needed them (dense estimating pages have no KPI row; HomeDashboard tiles already show counts). Re-add when a page uses one. |
+| `Toggle`, `ListRow`, `IconButton` | Not built (no consumer). |
+| `TabBar` for Admin/Post-award | Added a `pattern="buttons"` mode: existing specs locate those tabs with `getByRole('button')`, so `role="tab"` would have needed spec edits. The `tabs` pattern exists and is unit-tested but unused by any page yet. |
+| Grid card radius | No `wrapperBorderRadius` / `overflow-hidden` on the BOQ grid card (a dev-server A/B showed the extra clip cost scroll time); the card has `p-2` instead. |
+| Page-level charts (D5) | None, as decided. |
+
+### Bugs found while verifying (all fixed)
+
+1. `--color-danger` contrast on the canvas (above).
+2. `sr-only` labels inside table cells are `position:absolute`; their containing block was outside the table's scroll container, so they widened the document (`/inbox` at 1024: 1059 > 1024). `TableCard` and every table wrapper are now `relative`.
+3. `MembersSection` requested `GET /users` for every role although the server restricts it to lead/procurement/bd/md; estimators got a guaranteed 403 (a console error) on every project page, previously masked by e2e timing. The request is now enabled only for those roles.
+4. `phase4-accessibility.spec.ts`: `getByRole('heading', { name: 'Export' })` also matched "Generated export" by substring; now `exact: true` (same assertion).
+5. `text-warning` used as plain text on `SheetIndexPage` and `TakeoffViewerPage` (design-system 2.1 forbids it) -> `text-amber-800`.
+
+### Verification (final build)
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit`, `npm run build` | clean |
+| vitest | 60/60 (was 29; adds contrast, air-gap, shared-component tests) |
+| oxlint | same 3 pre-existing warnings, no new |
+| `npm run e2e` (mocked, incl. 5,000-row virtualisation) | 5/5 |
+| `e2e:real-backend --workers=1`, MFA **on** | **78/78**, 0 skipped: includes axe 18/18, layout-widths at 1440/1280/1024 (no page overflow), SoD and step-up specs |
+| `step-up-freshness` (separate script, MFA on) | 1/1 |
+| 5,000-row grid, production build, master vs branch (7 runs x 3 alternating pairs, same mocked data) | time-to-first-row ~497 ms vs ~624 ms; p95 scroll frame ~62 ms vs ~62 ms; long frames ~18 vs ~25. No regression. On the Vite **dev** server the branch looked 10-20% slower; that is dev-only overhead (unminified, unbundled deps), not present in the production build |
+
+An earlier full run had 3 failures (Export locator race, the `/users` 403 console-error race, and a Keycloak login-page hang that passed on rerun); items 3-4 above are the root-cause fixes, and the final full run was clean.
+
+### Known gaps / left alone
+
+- The PDF viewer cannot render on the nginx-served build: `.mjs` is served as `application/octet-stream`, so pdf.js's worker fails to load. Pre-existing (nginx.conf never mapped `.mjs`); not part of this change. One-line fix if wanted.
+- Admin/Post-award tabs are still role `button` (see above).
+- `docs/ui-qa/screenshots/phase-4/layout-*.png` were regenerated by the final run and now show the Figma design; the before/after `*-before/after.png` set is historical.
+- Dark theme and mobile frames remain out of scope.
