@@ -28,9 +28,8 @@ const DRAWING_STATUS_TONE: Record<string, BadgeTone> = {
   partial: 'warning',
 }
 
-// Mirrors backend/app/api/v1/routes/projects.py's _CREATE_ROLES -- location
-// editing and member-adding both key off this (member-adding additionally
-// allows lead_estimator, handled separately below).
+// Mirrors backend/app/api/v1/routes/projects.py's _LOCATION_ROLES (project
+// creation and member-adding have their own, wider lists there).
 const LOCATION_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const MEMBER_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR, Role.LEAD_ESTIMATOR]
 // GET /users is restricted server-side (backend/app/api/v1/routes/users.py

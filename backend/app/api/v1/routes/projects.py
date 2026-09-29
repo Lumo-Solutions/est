@@ -20,7 +20,13 @@ from app.services import projects as projects_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-_CREATE_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
+# Creating a project is open to lead_estimator too (migration 0029 widens the
+# projects INSERT policy to match -- RLS, not this tuple, is the real
+# enforcement). Editing a project's location stays bd/md-only, and adding
+# members stays bd/md/lead, exactly as before this split.
+_CREATE_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value, Role.LEAD_ESTIMATOR.value)
+_LOCATION_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value)
+_MEMBER_ROLES = (Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value, Role.LEAD_ESTIMATOR.value)
 
 # Mirrors app/services/{vendors,costlib}.py's list endpoints' page size.
 _DEFAULT_PAGE_SIZE = 20
@@ -78,7 +84,7 @@ async def get_project_endpoint(
 async def update_project_location_endpoint(
     project_id: UUID,
     data: ProjectLocationUpdate,
-    ctx: RequestContext = Depends(require_roles(*_CREATE_ROLES)),
+    ctx: RequestContext = Depends(require_roles(*_LOCATION_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> ProjectOut:
     project = await projects_service.update_location(session, ctx, project_id, data)
@@ -96,7 +102,7 @@ async def list_members_endpoint(
 async def add_member_endpoint(
     project_id: UUID,
     data: ProjectMemberAdd,
-    ctx: RequestContext = Depends(require_roles(*_CREATE_ROLES, Role.LEAD_ESTIMATOR.value)),
+    ctx: RequestContext = Depends(require_roles(*_MEMBER_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await projects_service.add_member(session, ctx, project_id, data.user_id, data.project_role)
@@ -106,7 +112,7 @@ async def add_member_endpoint(
 async def remove_member_endpoint(
     project_id: UUID,
     user_id: UUID,
-    ctx: RequestContext = Depends(require_roles(*_CREATE_ROLES, Role.LEAD_ESTIMATOR.value)),
+    ctx: RequestContext = Depends(require_roles(*_MEMBER_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await projects_service.remove_member(session, ctx, project_id, user_id)

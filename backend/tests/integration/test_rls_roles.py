@@ -105,3 +105,36 @@ async def test_audit_events_cannot_be_updated_or_deleted_even_as_managing_direct
         await rls_session.execute(
             text("UPDATE audit_events SET action = 'delete' WHERE id = :id"), {"id": event_id}
         )
+
+
+async def _insert_project(session, code: str):
+    return await session.execute(
+        text("INSERT INTO projects (tenant_id, code, name) VALUES (:t, :c, 'rls project') RETURNING id"),
+        {"t": TENANT, "c": code},
+    )
+
+
+async def test_lead_estimator_can_insert_a_project(rls_session):
+    # Migration 0029: projects' INSERT policy now includes lead_estimator.
+    await _set_guc(rls_session, roles="lead_estimator")
+    result = await _insert_project(rls_session, "RLS-LEAD-1")
+    assert result.scalar_one() is not None
+
+
+@pytest.mark.parametrize("role", ["estimator", "procurement_head"])
+async def test_other_roles_cannot_insert_a_project(rls_session, role):
+    await _set_guc(rls_session, roles=role)
+    with pytest.raises(Exception, match=r"(?i)row-level security"):
+        async with rls_session.begin_nested():
+            await _insert_project(rls_session, f"RLS-{role}-1")
+
+
+async def test_lead_estimator_still_cannot_update_a_project(rls_session):
+    # UPDATE keeps bd/md: an RLS-filtered UPDATE affects 0 rows rather than raising.
+    await _set_guc(rls_session, roles="managing_director")
+    project_id = (await _insert_project(rls_session, "RLS-UPD-1")).scalar_one()
+    await _set_guc(rls_session, roles="lead_estimator")
+    result = await rls_session.execute(
+        text("UPDATE projects SET client_name = 'x' WHERE id = :id"), {"id": project_id}
+    )
+    assert result.rowcount == 0

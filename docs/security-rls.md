@@ -132,7 +132,7 @@ explanation.
 | Table family | Write roles | Delete |
 |---|---|---|
 | `users`, `project_members` | lead_estimator+ | lead_estimator+ |
-| `projects` | bd_director, managing_director | managing_director |
+| `projects` | INSERT: bd_director, managing_director, lead_estimator (migration 0029); UPDATE: bd_director, managing_director | managing_director |
 | `vendors`, `vendor_contacts`, `vendor_trades` | lead_estimator+ | procurement_head, managing_director |
 | `vendor_duplicate_candidates` | lead_estimator+ | — |
 | `trade_nodes` | lead_estimator, procurement_head, managing_director | managing_director |

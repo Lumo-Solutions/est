@@ -71,3 +71,39 @@ async def test_estimator_cannot_remove_a_member(authed_client):
 
     members = (await md.get(f"/api/v1/projects/{project_id}/members")).json()
     assert any(m["user_id"] == user_id for m in members)
+
+
+async def test_lead_estimator_can_create_a_project_and_becomes_its_owner(authed_client):
+    # Item 3 of the logout/mjs/lead-create fix: lead_estimator joins bd/md as
+    # a project creator. This goes through the real RLS policy (migration
+    # 0029 widened projects' INSERT policy), not just the API role check.
+    lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
+    resp = await lead.post("/api/v1/projects", json={"code": "PMAPI-LEAD-1", "name": "Created by a lead"})
+    assert resp.status_code == 201, resp.text
+    project_id = resp.json()["id"]
+
+    members = (await lead.get(f"/api/v1/projects/{project_id}/members")).json()
+    assert [m["project_role"] for m in members] == ["owner"]
+    # ...and the creator can immediately read the project back (RLS SELECT).
+    assert (await lead.get(f"/api/v1/projects/{project_id}")).status_code == 200
+
+
+async def test_estimator_cannot_create_a_project(authed_client):
+    estimator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    resp = await estimator.post("/api/v1/projects", json={"code": "PMAPI-EST-1", "name": "should be refused"})
+    assert resp.status_code == 403
+
+
+async def test_procurement_head_still_cannot_create_a_project(authed_client):
+    proc = authed_client(frozenset({Role.PROCUREMENT_HEAD.value}))
+    resp = await proc.post("/api/v1/projects", json={"code": "PMAPI-PROC-1", "name": "should be refused"})
+    assert resp.status_code == 403
+
+
+async def test_lead_estimator_still_cannot_edit_a_projects_location(authed_client):
+    # Only *creation* was widened; editing location stays bd/md.
+    md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))
+    project_id = (await md.post("/api/v1/projects", json={"code": "PMAPI-LOC-1", "name": "loc"})).json()["id"]
+    lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
+    resp = await lead.patch(f"/api/v1/projects/{project_id}/location", json={"emirate": "Dubai"})
+    assert resp.status_code == 403
