@@ -579,3 +579,40 @@ async def test_large_settlement_routes_to_managing_director_end_to_end(rls_sessi
     await set_rls_context(rls_session, md_ctx)
     decided = await settlement_service.decide_settlement(rls_session, md_ctx, settlement.id, approve=True, note="ok")
     assert decided.status == BidSettlementStatus.APPROVED.value
+
+
+async def test_approvals_inbox_shows_context_and_hides_orphaned_settlement_requests(rls_session):
+    """fix/approvals-inbox: the approver's list carries project code/name,
+    settlement version and 3dp margin, and a request whose settlement is no
+    longer the current submitted one (a superseded version's orphan) is not
+    offered to anyone."""
+    from app.services import approvals as approvals_service
+
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+    submitter = _ctx(BD, tenant_id=tenant_id, user_id=uuid.uuid4(), acr="silver")
+    await set_rls_context(rls_session, submitter)
+    submitted = await settlement_service.submit_settlement(rls_session, submitter, settlement.id)
+
+    approver = _ctx(BD, tenant_id=tenant_id, user_id=uuid.uuid4())
+    await set_rls_context(rls_session, approver)
+    pending = await approvals_service.list_pending_for_caller(rls_session, approver)
+    assert [r.entity_id for r in pending] == [settlement.id]
+    row = (await approvals_service.enrich(rls_session, approver, pending))[0]
+    assert row.project_code is not None and row.project_name is not None
+    assert row.settlement_version_no == 1
+    assert row.margin_on_sell_pct == submitted.margin_on_sell_pct
+    assert row.waiting_role == "bd_director"
+    assert row.view_state == "actionable"
+
+    # The submitter is listed on the inbox, flagged so the UI shows no actions.
+    await set_rls_context(rls_session, submitter)
+    mine, _ = await approvals_service.inbox_for_caller(rls_session, submitter)
+    assert [r.view_state for r in mine] == ["awaiting_other"]
+
+    # Orphan it the way a rebuild would (demoted, request left pending).
+    await _system_ctx(rls_session, tenant_id)
+    await rls_session.execute(text("UPDATE bid_settlements SET is_current = false WHERE id = :i"), {"i": str(settlement.id)})
+    rls_session.expire_all()  # the raw UPDATE bypassed the identity map
+    await set_rls_context(rls_session, approver)
+    assert await approvals_service.list_pending_for_caller(rls_session, approver) == []
+    assert (await approvals_service.inbox_for_caller(rls_session, approver))[0] == []

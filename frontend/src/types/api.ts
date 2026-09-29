@@ -1169,6 +1169,19 @@ export interface ApprovalRequestOut {
   requested_at: string
   completed_at: string | null
   steps: ApprovalStepOut[]
+  project_code: string | null
+  project_name: string | null
+  requested_by_name: string | null
+  waiting_role: string | null
+  settlement_version_no: number | null
+  margin_on_sell_pct: number | null
+  view_state: 'actionable' | 'awaiting_other' | 'decided' | 'other' | null
+  payload_snapshot: Record<string, unknown> | null
+}
+
+export interface ApprovalInboxOut {
+  pending: ApprovalRequestOut[]
+  recent: ApprovalRequestOut[]
 }
 
 export interface ApprovalPolicySetActive {

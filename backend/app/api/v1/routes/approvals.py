@@ -10,6 +10,7 @@ from app.core.context import RequestContext
 from app.core.enums import Role
 from app.schemas.approvals import (
     ApprovalDecision,
+    ApprovalInboxOut,
     ApprovalPolicyCreate,
     ApprovalPolicyOut,
     ApprovalPolicySetActive,
@@ -28,6 +29,11 @@ router = APIRouter(prefix="/approvals", tags=["approvals"])
 # admin-config tables (taxonomy, tolerances, layer-trade mappings) in
 # this build.
 _POLICY_ADMIN_ROLES = (Role.MANAGING_DIRECTOR.value,)
+# Roles that can ever be a tier's required_role -- the inbox is empty for
+# anyone else, so it is closed to them rather than returning an empty page.
+_APPROVER_ROLES = (
+    Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.BD_DIRECTOR.value, Role.MANAGING_DIRECTOR.value,
+)
 
 
 def _policy_to_out(policy, tiers) -> ApprovalPolicyOut:
@@ -76,11 +82,16 @@ async def list_pending_for_me_endpoint(
     ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> list[ApprovalRequestOut]:
     requests = await approvals_service.list_pending_for_caller(session, ctx)
-    out = []
-    for request in requests:
-        _, steps = await approvals_service.get_request(session, request.id)
-        out.append(_to_out(request, steps))
-    return out
+    return await approvals_service.enrich(session, ctx, requests)
+
+
+@router.get("/inbox", response_model=ApprovalInboxOut)
+async def approvals_inbox_endpoint(
+    ctx: RequestContext = Depends(require_roles(*_APPROVER_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> ApprovalInboxOut:
+    pending, recent = await approvals_service.inbox_for_caller(session, ctx)
+    return ApprovalInboxOut(pending=pending, recent=recent)
 
 
 @router.post("", response_model=ApprovalRequestOut, status_code=201)
@@ -98,8 +109,8 @@ async def create_request_endpoint(
 async def get_request_endpoint(
     request_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> ApprovalRequestOut:
-    request, steps = await approvals_service.get_request(session, request_id)
-    return _to_out(request, steps)
+    request, _ = await approvals_service.get_request(session, request_id)
+    return (await approvals_service.enrich(session, ctx, [request]))[0]
 
 
 @router.post("/{request_id}/decide", response_model=ApprovalRequestOut)

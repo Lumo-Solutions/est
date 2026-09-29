@@ -4,6 +4,8 @@ import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 import { ApiError } from './lib/api'
+import { ApprovalDetailPage } from './pages/ApprovalDetailPage'
+import { ApprovalsPage } from './pages/ApprovalsPage'
 import { AdminPage } from './pages/AdminPage'
 import { AuditPage } from './pages/AuditPage'
 import { BidLevelingPage } from './pages/BidLevelingPage'
@@ -55,6 +57,8 @@ function AppRoutes() {
       <Route element={<AppShell />}>
         <Route path="/" element={<ProjectsListPage />} />
         <Route path="/dashboard" element={<HomeDashboardPage />} />
+        <Route path="/approvals" element={<ApprovalsPage />} />
+        <Route path="/approvals/:requestId" element={<ApprovalDetailPage />} />
         <Route path="/vendors" element={<VendorsPage />} />
         <Route path="/vendors/duplicates" element={<VendorDuplicatesPage />} />
         <Route path="/vendors/:vendorId" element={<VendorDetailPage />} />

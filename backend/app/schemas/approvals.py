@@ -48,6 +48,25 @@ class ApprovalRequestOut(ORMModel):
     requested_at: datetime
     completed_at: datetime | None
     steps: list[ApprovalStepOut] = []
+    # Display context, filled by app/services/approvals.py::enrich (None when
+    # not enriched, e.g. the create endpoint's response).
+    project_code: str | None = None
+    project_name: str | None = None
+    requested_by_name: str | None = None
+    # Role of the step currently waiting (None once the request is closed).
+    waiting_role: str | None = None
+    # Settlement version and margin-on-sell (3dp) for bid_submission only.
+    settlement_version_no: int | None = None
+    margin_on_sell_pct: JsonDecimal | None = None
+    # Caller-relative: "actionable" | "awaiting_other" (the caller submitted
+    # it) | "decided" | "other".
+    view_state: str | None = None
+    payload_snapshot: dict | None = None
+
+
+class ApprovalInboxOut(BaseModel):
+    pending: list[ApprovalRequestOut]
+    recent: list[ApprovalRequestOut]
 
 
 class ApprovalDecision(BaseModel):
