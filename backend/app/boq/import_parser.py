@@ -46,6 +46,9 @@ class BoqImportColumnMapping:
     # CSV exports don't carry that extra header cruft, and skipping rows
     # would need this same field anyway if one does.
     header_row: int = 1
+    # Workbook sheet to read (tender intake pre-fills this). None keeps the old
+    # behaviour: the workbook's active sheet.
+    sheet_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -78,9 +81,11 @@ def _read_csv_rows(data: bytes) -> list[dict[str, str]]:
     return [dict(row) for row in reader]
 
 
-def _read_xlsx_rows(data: bytes, header_row: int) -> list[dict[str, str]]:
+def _read_xlsx_rows(data: bytes, header_row: int, sheet_name: str | None = None) -> list[dict[str, str]]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    sheet = workbook.active
+    if sheet_name is not None and sheet_name not in workbook.sheetnames:
+        raise ValidationAppError(f"Sheet {sheet_name!r} not found in the workbook (sheets: {', '.join(workbook.sheetnames)})")
+    sheet = workbook[sheet_name] if sheet_name is not None else workbook.active
     rows_iter = sheet.iter_rows(values_only=True)
     for _ in range(header_row - 1):
         next(rows_iter, None)
@@ -174,7 +179,7 @@ def parse_boq_file(data: bytes, filename: str, mapping: BoqImportColumnMapping) 
     if lower.endswith(".csv"):
         raw_rows = _read_csv_rows(data)
     elif lower.endswith(".xlsx"):
-        raw_rows = _read_xlsx_rows(data, mapping.header_row)
+        raw_rows = _read_xlsx_rows(data, mapping.header_row, mapping.sheet_name)
     else:
         raise ValidationAppError(f"Unsupported BOQ import file type: {filename!r} (only .xlsx and .csv are supported)")
     return parse_boq_rows(raw_rows, mapping)

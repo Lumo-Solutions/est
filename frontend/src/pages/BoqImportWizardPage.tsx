@@ -1,5 +1,7 @@
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { SelectField } from '../components/Field'
+import { fetchTenderDocumentFile, useBoqPrefill } from '../features/tenderIntake/api'
 import { useBoqImportCommit, useBoqImportPreview } from '../features/boq/api'
 import type { BoqImportColumnMappingIn } from '../types/api'
 import { PageTitle } from '../components/PageTitle'
@@ -20,6 +22,7 @@ function cleanMapping(mapping: BoqImportColumnMappingIn): BoqImportColumnMapping
   for (const key of ['uom_column', 'quantity_column', 'parent_column', 'rate_column', 'amount_column'] as const) {
     if (!cleaned[key]) cleaned[key] = null
   }
+  if (cleaned.sheet_name === '') cleaned.sheet_name = null
   return cleaned
 }
 
@@ -31,6 +34,50 @@ export function BoqImportWizardPage() {
   const [previewedKey, setPreviewedKey] = useState<string | null>(null)
   const preview = useBoqImportPreview(projectId)
   const commit = useBoqImportCommit(projectId)
+
+  // Deep link from the tender documents tab: ?document=<id> pre-fills the file
+  // and mapping. The user still runs Preview and Commit themselves.
+  const [searchParams] = useSearchParams()
+  const documentId = searchParams.get('document')
+  const prefill = useBoqPrefill(documentId)
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null)
+  const [prefillError, setPrefillError] = useState<string | null>(null)
+  const prefillData = prefill.data
+  useEffect(() => {
+    if (!documentId || !prefillData) return
+    let cancelled = false
+    fetchTenderDocumentFile(documentId, prefillData.filename)
+      .then((f) => {
+        if (cancelled) return
+        const suggested = prefillData.suggested_mapping ?? {}
+        const text = (k: string) => (suggested[k] == null ? '' : String(suggested[k]))
+        const headerRow = Number(suggested.header_row ?? prefillData.header_row ?? 1)
+        setFile(f)
+        setMapping({
+          item_no_column: text('item_no_column'),
+          description_column: text('description_column'),
+          uom_column: text('uom_column'),
+          quantity_column: text('quantity_column'),
+          parent_column: text('parent_column'),
+          rate_column: text('rate_column'),
+          amount_column: text('amount_column'),
+          header_row: Number.isFinite(headerRow) && headerRow > 0 ? headerRow : 1,
+          sheet_name: text('sheet_name') || prefillData.sheet_name || prefillData.sheet_names[0] || '',
+        })
+        setPrefillError(null)
+        setPrefillNotice(
+          `Pre-filled from tender document ${prefillData.filename}. Check the sheet and column mapping, then run the dry run.`,
+        )
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setPrefillNotice(null)
+        setPrefillError(e instanceof Error ? e.message : 'Could not load the tender document file')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [documentId, prefillData])
 
   const currentKey = file ? `${file.name}:${JSON.stringify(mapping)}` : null
   const canCommit = preview.data != null && previewedKey === currentKey && preview.data.error_count === 0
@@ -51,6 +98,33 @@ export function BoqImportWizardPage() {
           className="text-sm"
         />
       </div>
+
+      {prefillNotice && (
+        <p role="status" className="mt-4 text-sm text-ink-2">
+          {prefillNotice}
+        </p>
+      )}
+      {(prefillError || (documentId && prefill.isError)) && (
+        <p role="alert" className="mt-4 text-sm text-danger">
+          {prefillError ?? (prefill.error instanceof Error ? prefill.error.message : 'Could not load the tender document')}
+          {' '}You can still choose a file and map the columns by hand.
+        </p>
+      )}
+      {prefillData && prefillData.sheet_names.length > 1 && (
+        <div className="mt-4 max-w-lg">
+          <SelectField
+            label="Sheet"
+            value={mapping.sheet_name ?? ''}
+            onChange={(e) => setMapping((prev) => ({ ...prev, sheet_name: e.target.value }))}
+          >
+            {prefillData.sheet_names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </SelectField>
+        </div>
+      )}
 
       <div className="mt-4 grid max-w-lg grid-cols-2 gap-2">
         {(

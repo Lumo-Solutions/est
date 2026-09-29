@@ -3,6 +3,7 @@ import { ApprovalPoliciesAdmin } from '../features/admin/ApprovalPoliciesAdmin'
 import { LayerTradeMappingAdmin } from '../features/admin/LayerTradeMappingAdmin'
 import { ReasonCodesAdmin } from '../features/admin/ReasonCodesAdmin'
 import { TaxonomyAdmin } from '../features/admin/TaxonomyAdmin'
+import { TenderClassesAdmin } from '../features/admin/TenderClassesAdmin'
 import { TolerancesAdmin } from '../features/admin/TolerancesAdmin'
 import { VendorRegionsAdmin } from '../features/admin/VendorRegionsAdmin'
 import { PageTitle } from '../components/PageTitle'
@@ -15,6 +16,7 @@ const TABS = [
   { key: 'layer-mapping', label: 'Layer/trade mapping', Component: LayerTradeMappingAdmin },
   { key: 'reason-codes', label: 'Reason codes', Component: ReasonCodesAdmin },
   { key: 'vendor-regions', label: 'Vendor regions', Component: VendorRegionsAdmin },
+  { key: 'tender-classes', label: 'Tender classes', Component: TenderClassesAdmin },
 ] as const
 
 export function AdminPage() {

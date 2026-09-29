@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { Button } from '../components/Button'
@@ -7,6 +7,7 @@ import { Card, SectionHeading } from '../components/Card'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { SelectField, TextField } from '../components/Field'
 import { SkeletonRows } from '../components/Skeleton'
+import { TabBar } from '../components/TabBar'
 import { DrawingUpload } from '../features/drawings/DrawingUpload'
 import { useDrawings } from '../features/drawings/api'
 import {
@@ -16,6 +17,7 @@ import {
   useRemoveProjectMember,
   useUpdateProjectLocation,
 } from '../features/projects/api'
+import { TenderDocumentsTab } from '../features/tenderIntake/TenderDocumentsTab'
 import { useUsers } from '../features/users/api'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
@@ -229,6 +231,8 @@ export function ProjectDetailPage() {
   const { projectId } = useParams()
   const { data: project, isLoading, isError, error, refetch } = useProject(projectId)
   const { data: drawings } = useDrawings(projectId)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('tab') === 'tender-documents' ? 'tender-documents' : 'overview'
 
   const backLink = (
     <Link
@@ -274,6 +278,22 @@ export function ProjectDetailPage() {
         {project.client_name ?? 'No client set'} · {project.status} · {project.base_currency}
         {project.emirate ? ` · ${project.emirate}` : ''}
       </p>
+      <div className="mt-4">
+        <TabBar
+          pattern="buttons"
+          label="Project sections"
+          idPrefix="project"
+          value={tab}
+          onChange={(id) => setSearchParams(id === 'overview' ? {} : { tab: id }, { replace: true })}
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'tender-documents', label: 'Tender documents' },
+          ]}
+        />
+      </div>
+      {tab === 'tender-documents' && <TenderDocumentsTab projectId={project.id} />}
+      {tab === 'overview' && (
+        <>
       <LocationSection project={project} />
       <MembersSection projectId={project.id} />
 
@@ -300,6 +320,8 @@ export function ProjectDetailPage() {
           </ul>
         )}
       </Card>
+        </>
+      )}
     </div>
   )
 }

@@ -17,6 +17,8 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 
+from classification import classify_document
+
 app = FastAPI(title="mock-vllm")
 
 
@@ -92,7 +94,17 @@ def list_models() -> dict[str, Any]:
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionRequest) -> dict[str, Any]:
     schema = _extract_schema(req)
-    content = json.dumps(_placeholder_for(schema)) if schema else "MOCK-VALUE"
+    if schema and schema.get("title") == "DocumentClassification":
+        # Tender intake stage 2: deterministic, keyword-driven (see classification.py).
+        user = next((m for m in reversed(req.messages) if m.role == "user"), None)
+        parts = user.content if user else ""
+        has_image = isinstance(parts, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in parts)
+        text = parts if isinstance(parts, str) else " ".join(
+            p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"
+        )
+        content = json.dumps(classify_document(text, has_image))
+    else:
+        content = json.dumps(_placeholder_for(schema)) if schema else "MOCK-VALUE"
 
     return {
         "id": f"chatcmpl-mock-{uuid.uuid4().hex[:12]}",

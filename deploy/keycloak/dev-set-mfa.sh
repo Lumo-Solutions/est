@@ -30,7 +30,11 @@ echo "deploy/.env: DEV_DISABLE_MFA=${VALUE}"
 set -a; . "$ENV_FILE"; set +a
 bash deploy/keycloak/bootstrap.sh
 
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file "$ENV_FILE" up -d
+# Git Bash on Windows rewrites env values that look like POSIX paths when it starts a native
+# exe. The `set -a` above exported deploy/.env, so ONNX_MODEL_DIR=/models reached the recreated
+# containers as "C:/Program Files/Git/models": the embedding model was never found and every
+# drawing ended "partial". Turn the rewriting off for the compose call (a no-op elsewhere).
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file "$ENV_FILE" up -d
 if [ "$VALUE" = "true" ]; then
     echo "DEV: MFA is now OFF (login OTP + step-up). Run 'make dev-mfa-on' to restore it."
 else

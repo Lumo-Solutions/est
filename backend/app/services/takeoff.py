@@ -262,6 +262,54 @@ async def upload_drawing(
     return drawing
 
 
+async def create_drawing_from_stored(
+    session: AsyncSession,
+    ctx: RequestContext,
+    *,
+    project_id: UUID,
+    filename: str,
+    content_type: str | None,
+    kind: str,
+    bucket: str,
+    object_key: str,
+    sha256: str,
+    size_bytes: int,
+    revision_label: str | None = None,
+    discipline_hint: str | None = None,
+    supersedes_id: UUID | None = None,
+) -> tuple[Drawing, bool]:
+    """Tender intake routing: a Drawing row for an object that is already in S3
+    (content-addressed, so no upload and no filename-keyed overwrite). Dedupes on
+    (project, sha256) like upload_drawing; returns (drawing, created)."""
+    await assert_can_see_project(session, ctx, project_id)
+    existing = await session.execute(select(Drawing).where(Drawing.project_id == project_id, Drawing.sha256 == sha256))
+    if (row := existing.scalar_one_or_none()) is not None:
+        return row, False
+    drawing = Drawing(
+        tenant_id=ctx.tenant_id,
+        project_id=project_id,
+        original_filename=filename,
+        content_type=content_type,
+        kind=kind,
+        bucket=bucket,
+        object_key=object_key,
+        size_bytes=size_bytes,
+        sha256=sha256,
+        status=DrawingStatus.UPLOADED.value,
+        uploaded_by=ctx.user_id,
+        revision_label=revision_label,
+        discipline_hint=discipline_hint,
+        supersedes_id=supersedes_id,
+    )
+    session.add(drawing)
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.CREATE, entity_type="drawing", entity_id=drawing.id,
+        project_id=project_id, payload={"filename": filename, "size_bytes": size_bytes, "source": "tender_intake"},
+    )
+    return drawing, True
+
+
 async def get_drawing(session: AsyncSession, drawing_id: UUID) -> Drawing:
     result = await session.execute(select(Drawing).where(Drawing.id == drawing_id))
     drawing = result.scalar_one_or_none()
@@ -277,7 +325,7 @@ async def list_drawings(session: AsyncSession, project_id: UUID) -> list[Drawing
     return list(result.scalars().all())
 
 
-async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id: UUID) -> list[str]:
+async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id: UUID, *, countdown: int = 0) -> list[str]:
     from app.workers.tasks.takeoff import index_sheets
 
     drawing = await get_drawing(session, drawing_id)
@@ -291,9 +339,13 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
         project_id=drawing.project_id, payload={"status": "queued"},
     )
 
-    task = index_sheets.delay(
-        str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles)
-    )
+    args = (str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles))
+    if countdown:
+        # A caller that creates the drawing in the same request (tender intake) gives the
+        # request transaction time to commit before the worker looks for the row.
+        task = index_sheets.apply_async(args=args, countdown=countdown)
+    else:
+        task = index_sheets.delay(*args)
     return [task.id]
 
 
