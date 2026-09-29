@@ -275,6 +275,9 @@ export function ReviewGrid({
         defaultColDef={{ resizable: true, sortable: true, suppressMovable: true }}
         getRowId={(p) => p.data.id}
         rowHeight={44}
+        // ~11 columns: virtualising them only hides Status/Flags/Actions from narrower windows
+        // (and from assistive tech and tests) for no performance gain. Rows stay virtualised.
+        suppressColumnVirtualisation
         singleClickEdit
         stopEditingWhenCellsLoseFocus
         rowSelection={

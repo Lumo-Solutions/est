@@ -236,14 +236,14 @@ def _boq_xlsx() -> bytes:
     boq.append([])
     boq.append(["Item No", "Description", "Unit", "Qty", "Rate", "Amount"])
     rows = [
-        ("1.0", "Earthworks", None, None, None, None),
+        ("1", "Earthworks", None, None, None, None),
         ("1.1", "Excavation", "m3", 500, 12.5, 6250),
         ("1.2", "Backfill", "m3", 300, 9.0, 2700),
-        ("2.0", "Concrete", None, None, None, None),
+        ("2", "Concrete", None, None, None, None),
         ("2.1", "Blinding concrete", "m3", 40, 140.0, 5600),
         ("2.2", "Reinforced concrete C32/40", "m3", 220, 210.0, 46200),
         ("2.3", "Reinforcement steel", "t", 25, 950.0, 23750),
-        ("3.0", "Roadworks", None, None, None, None),
+        ("3", "Roadworks", None, None, None, None),
     ]
     for r in rows:
         boq.append(list(r))

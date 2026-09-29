@@ -21,10 +21,12 @@ test('every page lays out at 1440 / 1280 / 1024 without horizontal page overflow
   const pages: [string, string][] = [
     ['projects-list', '/'],
     ['dashboard', '/dashboard'],
+    ['approvals', '/approvals'],
     ['vendors', '/vendors'],
     ['vendor-duplicates', '/vendors/duplicates'],
     ['cost-library', '/cost-library'],
     ['project-detail', p],
+    ['tender-documents', `${p}?tab=tender-documents`],
     ['typology', `${p}/typology`],
     ['boq-import', `${p}/boq/import`],
     ['boq-reconciliation', `${p}/boq`],
