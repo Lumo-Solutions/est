@@ -4,6 +4,23 @@ Every task is idempotent, keyed on an `extraction_jobs(drawing_id, sheet_id,
 job_type)` row: it upserts that row to `running` first and returns early if
 a prior attempt already reached `succeeded`, so a chain replay (e.g. after a
 worker crash) is safe. See docs/takeoff-pipeline.md.
+
+Resilience: a chord's callback (finalize_drawing) is only ever invoked by
+Celery once every member of its group has itself reported success -- if any
+member (extract_sheet, embed_drawing, extract_geometry_measurements)
+exhausts its retries and reports a genuine Celery-level failure, the
+callback is simply never scheduled and the drawing is stuck in
+`extracting`/`embedding` forever, with nothing surfacing an error. Each of
+those three tasks already records its own success/failure into
+extraction_jobs (see _upsert_job/_finish_job below) BEFORE it re-raises --
+that ledger, not Celery's own per-task outcome, is what finalize_drawing
+and the frontend actually read. So each of those tasks' outer wrapper
+swallows a truly terminal failure (after autoretry_for's own retries are
+exhausted) instead of letting it propagate as a Celery task failure, which
+keeps the chord -- and therefore finalize_drawing -- unconditional.
+aggregate_drawing_status() (used by both finalize_drawing and
+maintenance.py's stale-drawing sweeper) is what turns that ledger into
+ready/partial/failed.
 """
 
 from __future__ import annotations
@@ -13,6 +30,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from celery import chord, group
+from celery.exceptions import Retry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -346,7 +364,16 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
 )
 def extract_sheet(self, sheet_id: str, tenant_id: str) -> None:
     ctx = build_worker_context(tenant_id)
-    run_async(lambda: with_worker_session(ctx, _extract_sheet_body, sheet_id, self.request.id))()
+    try:
+        run_async(lambda: with_worker_session(ctx, _extract_sheet_body, sheet_id, self.request.id))()
+    except Retry:
+        raise
+    except Exception:  # noqa: BLE001 -- see module docstring: a terminal per-sheet
+        # failure must not become a Celery-level task failure, or index_sheets'
+        # chord callback (finalize_drawing) never runs and the drawing is stuck.
+        # _extract_sheet_body already recorded this in extraction_jobs/
+        # DrawingSheet.extraction_status above; finalize_drawing reads that.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +429,17 @@ async def _embed_drawing_body(session: AsyncSession, drawing_id: str, task_id: s
 )
 def embed_drawing(self, drawing_id: str, tenant_id: str) -> None:
     ctx = build_worker_context(tenant_id)
-    run_async(lambda: with_worker_session(ctx, _embed_drawing_body, drawing_id, self.request.id))()
+    try:
+        run_async(lambda: with_worker_session(ctx, _embed_drawing_body, drawing_id, self.request.id))()
+    except Retry:
+        raise
+    except Exception:  # noqa: BLE001 -- see module docstring. Embeddings are
+        # optional by design (semantic search degrades gracefully without
+        # them); a terminal failure here (e.g. no embedding model
+        # provisioned) must make the drawing `partial`, not leave it stuck
+        # in `extracting` forever -- so this must not become a Celery-level
+        # task failure either. _embed_drawing_body already recorded it.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -441,12 +478,60 @@ async def _extract_geometry_measurements_body(session: AsyncSession, drawing_id:
 )
 def extract_geometry_measurements(self, drawing_id: str, tenant_id: str) -> None:
     ctx = build_worker_context(tenant_id)
-    run_async(lambda: with_worker_session(ctx, _extract_geometry_measurements_body, drawing_id, self.request.id))()
+    try:
+        run_async(lambda: with_worker_session(ctx, _extract_geometry_measurements_body, drawing_id, self.request.id))()
+    except Retry:
+        raise
+    except Exception:  # noqa: BLE001 -- see module docstring: same reasoning
+        # as extract_sheet/embed_drawing above -- must not block finalize_drawing.
+        pass
 
 
 # ---------------------------------------------------------------------------
 # finalize_drawing
 # ---------------------------------------------------------------------------
+
+def _summarize_failed_jobs(failed_jobs: list[ExtractionJob]) -> str:
+    """Short, user-visible reason for a partial/failed drawing -- one clause
+    per failed extraction_jobs row (job type, sheet if per-sheet, and its
+    recorded error), capped so it stays readable in the UI."""
+    parts = []
+    for j in failed_jobs:
+        label = j.job_type if j.sheet_id is None else f"{j.job_type} (sheet {j.sheet_id})"
+        reason = (j.error or "unknown error").strip()[:200]
+        parts.append(f"{label}: {reason}")
+    return "; ".join(parts)[:2000]
+
+
+def aggregate_drawing_status(
+    jobs: list[ExtractionJob], *, exclude_job_id: UUID | None = None
+) -> tuple[str, str | None]:
+    """Shared by finalize_drawing (the chord callback) and
+    maintenance.py's reap_stuck_drawings (the stale-drawing sweeper): derive
+    a drawing's final status from its own extraction_jobs ledger, never from
+    Celery's own per-task success/failure -- see this module's docstring for
+    why a permanently-failing chord member deliberately never reports a
+    Celery-level failure. `ready` if nothing failed; `partial` if some
+    content job failed but at least one succeeded; `failed` if none did.
+    "Content" jobs exclude FINALIZE (the in-flight caller's own job row,
+    via exclude_job_id -- never itself 'failed' at this point but would
+    otherwise dilute the aggregation) and INDEX_SHEETS: indexing having
+    succeeded is only a prerequisite for the chord to exist at all, not
+    itself extracted content, so a drawing where every real extraction step
+    failed must read as `failed`, not `partial` just because indexing
+    nominally succeeded first."""
+    _non_content = {ExtractionJobType.FINALIZE.value, ExtractionJobType.INDEX_SHEETS.value}
+    content_jobs = [
+        j for j in jobs
+        if j.job_type not in _non_content and (exclude_job_id is None or j.id != exclude_job_id)
+    ]
+    failed = [j for j in content_jobs if j.status == ExtractionJobStatus.FAILED.value]
+    if not failed:
+        return DrawingStatus.READY.value, None
+    succeeded = [j for j in content_jobs if j.status == ExtractionJobStatus.SUCCEEDED.value]
+    status = DrawingStatus.PARTIAL.value if succeeded else DrawingStatus.FAILED.value
+    return status, _summarize_failed_jobs(failed)
+
 
 async def _finalize_drawing_body(session: AsyncSession, drawing_id: str, task_id: str) -> None:
     t0 = time.monotonic()
@@ -456,8 +541,7 @@ async def _finalize_drawing_body(session: AsyncSession, drawing_id: str, task_id
         return
 
     jobs = (await session.execute(select(ExtractionJob).where(ExtractionJob.drawing_id == drawing.id))).scalars().all()
-    any_failed = any(j.status == ExtractionJobStatus.FAILED.value for j in jobs)
-    drawing.status = DrawingStatus.PARTIAL.value if any_failed else DrawingStatus.READY.value
+    drawing.status, drawing.error_message = aggregate_drawing_status(jobs, exclude_job_id=job.id)
     await session.flush()
     await _finish_job(session, job, ok=True, error=None, started_at=t0)
 

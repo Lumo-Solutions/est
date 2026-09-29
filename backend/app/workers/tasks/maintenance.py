@@ -9,14 +9,16 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.enums import CertificateStatus, ExtractionJobStatus
+from app.core.enums import CertificateStatus, DrawingStatus, ExtractionJobStatus
 from app.db.session import session_scope
 from app.models.audit import AuditCheckpoint
 from app.models.prequal import CertificateAlert, VendorCertificate
+from app.models.takeoff import Drawing, ExtractionJob
 from app.models.tenancy import Tenant
 from app.services.audit import get_chain_head, verify_chain
 from app.workers.base import run_async, system_ctx, with_worker_session
 from app.workers.celery_app import celery_app
+from app.workers.tasks.takeoff import aggregate_drawing_status
 
 _STALE_JOB_TIMEOUT = timedelta(hours=1)
 _NIL_TENANT = "00000000-0000-0000-0000-000000000000"
@@ -143,5 +145,60 @@ def reap_stale_jobs() -> None:
     async def _run() -> None:
         for tenant_id in await _all_tenant_ids():
             await with_worker_session(system_ctx(tenant_id), _reap_stale_jobs_body, tenant_id)
+
+    run_async(_run)()
+
+
+_STUCK_DRAWING_STATUSES = (DrawingStatus.INDEXING.value, DrawingStatus.EXTRACTING.value, DrawingStatus.EMBEDDING.value)
+
+
+async def _reap_stuck_drawings_body(session: AsyncSession, tenant_id: str) -> int:
+    """Backstop for app.workers.tasks.takeoff's pipeline: a drawing can be
+    left in indexing/extracting/embedding forever if a worker crashes
+    mid-chord (no exception is ever raised to record a failure, unlike the
+    ordinary failure paths those tasks already handle -- see
+    aggregate_drawing_status's docstring). Reaps any drawing that hasn't
+    moved in DRAWING_STUCK_TIMEOUT_S: fails its still-running
+    extraction_jobs rows (same as _reap_stale_jobs_body above, but scoped to
+    this drawing so a fresh, genuinely-still-running drawing elsewhere for
+    the same tenant is untouched), then resolves the drawing itself via the
+    same ready/partial/failed aggregation finalize_drawing uses, so the
+    frontend's "Retry extraction" action (drawings whose status is failed/
+    partial) becomes available again instead of the drawing staying stuck."""
+    settings = get_settings()
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.drawing_stuck_timeout_s)
+    stuck = (
+        await session.execute(
+            select(Drawing).where(Drawing.status.in_(_STUCK_DRAWING_STATUSES), Drawing.updated_at < cutoff)
+        )
+    ).scalars().all()
+    for drawing in stuck:
+        await session.execute(
+            text(
+                "UPDATE extraction_jobs SET status = :failed, error = 'stale: exceeded timeout', "
+                "finished_at = now() WHERE drawing_id = :drawing_id AND status = :running"
+            ),
+            {
+                "failed": ExtractionJobStatus.FAILED.value,
+                "running": ExtractionJobStatus.RUNNING.value,
+                "drawing_id": str(drawing.id),
+            },
+        )
+        jobs = (
+            await session.execute(select(ExtractionJob).where(ExtractionJob.drawing_id == drawing.id))
+        ).scalars().all()
+        status, reason = aggregate_drawing_status(jobs)
+        drawing.status = status
+        stall_note = f"Extraction stalled: no progress for over {settings.drawing_stuck_timeout_s}s; rescued by the stale-drawing sweeper."
+        drawing.error_message = f"{stall_note} {reason}" if reason else stall_note
+    await session.flush()
+    return len(stuck)
+
+
+@celery_app.task(name="app.workers.tasks.maintenance.reap_stuck_drawings")
+def reap_stuck_drawings() -> None:
+    async def _run() -> None:
+        for tenant_id in await _all_tenant_ids():
+            await with_worker_session(system_ctx(tenant_id), _reap_stuck_drawings_body, tenant_id)
 
     run_async(_run)()

@@ -65,6 +65,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.maintenance.reap_stale_jobs",
             "schedule": crontab(minute=0),
         },
+        "reap-stuck-drawings": {
+            "task": "app.workers.tasks.maintenance.reap_stuck_drawings",
+            "schedule": crontab(minute=0),
+        },
         "poll-inbound-mailbox": {
             "task": "app.workers.tasks.quotation_ingestion.poll_inbound_mailbox",
             "schedule": 60.0,
