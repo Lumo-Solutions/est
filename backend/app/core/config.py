@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     # --- takeoff ---
     takeoff_persist_geometry: bool = Field(default=False, alias="TAKEOFF_PERSIST_GEOMETRY")
     max_upload_size_bytes: int = Field(default=50 * 1024 * 1024, alias="MAX_UPLOAD_SIZE_BYTES")
+    # How long a drawing may sit in indexing/extracting/embedding with no
+    # status change before app.workers.tasks.maintenance.reap_stuck_drawings
+    # (celery-beat, hourly) treats it as abandoned (e.g. a worker crash mid-
+    # chord) and resolves it to failed/partial itself -- see
+    # docs/takeoff-pipeline.md. Independent of any single task's own
+    # soft_time_limit/max_retries; this is the drawing-level backstop.
+    drawing_stuck_timeout_s: int = Field(default=7200, alias="DRAWING_STUCK_TIMEOUT_S")
 
     # --- procurement (Module C1: RFQ generation & dispatch) ---
     s3_bucket_procurement: str = Field(default="installtec-procurement", alias="S3_BUCKET_PROCUREMENT")

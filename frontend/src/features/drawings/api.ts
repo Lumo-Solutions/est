@@ -33,6 +33,22 @@ export function useUploadDrawing(projectId: string | undefined) {
   })
 }
 
+// "Retry extraction" is just re-triggering ingest -- every task in the
+// pipeline is already idempotent-replay-safe (see docs/takeoff-pipeline.md),
+// so this resumes from whatever already succeeded rather than starting over.
+// Only meaningful (and only shown by the page) once the drawing is no
+// longer actively processing, i.e. status is `failed`/`partial`.
+export function useRetryIngest(projectId: string | undefined, drawingId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post(`/drawings/${drawingId}/ingest`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['drawings', drawingId] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'drawings'] })
+    },
+  })
+}
+
 export function useDrawing(drawingId: string | undefined) {
   return useQuery({
     queryKey: ['drawings', drawingId],

@@ -125,8 +125,20 @@ embed_drawing: chunks each sheet (title block + windowed body text +
   per-layer entity-text groups), embeds via the ONNX backend (CPU, default —
   see A8), bulk-inserts sheet_chunks.
 
-finalize_drawing: status = 'ready' or 'partial' depending on whether any
-  extraction_jobs row failed.
+finalize_drawing: status = 'ready' (nothing failed), 'partial' (some
+  extraction_jobs rows failed but at least one succeeded) or 'failed' (none
+  succeeded) -- aggregate_drawing_status() in this module. drawing.
+  error_message gets a short per-job summary of what failed. Always runs:
+  extract_sheet/embed_drawing/extract_geometry_measurements each swallow
+  their own terminal (post-retry) failure at the Celery-task level -- after
+  recording it into extraction_jobs -- specifically so a permanently-failing
+  chord member never blocks this callback (see the module's own docstring).
+  A stale-drawing sweeper (celery-beat, hourly, DRAWING_STUCK_TIMEOUT_S,
+  reap_stuck_drawings in maintenance.py) resolves any drawing that still
+  gets stuck in indexing/extracting/embedding regardless (e.g. a worker
+  crash), using the same aggregation. "Retry extraction" (frontend, any
+  upload role) is just POST /drawings/{id}/ingest again -- safe because
+  every task here is already idempotent-replay-safe (see above).
 ```
 
 Every task upserts its own `extraction_jobs(drawing_id, sheet_id, job_type)`

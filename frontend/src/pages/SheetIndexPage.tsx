@@ -1,7 +1,9 @@
 import { Link, useParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
-import { useDrawing, useSheets } from '../features/drawings/api'
+import { useDrawing, useRetryIngest, useSheets } from '../features/drawings/api'
+import { Role } from '../lib/roles'
 
 // docs/ui-design-system.md section 4.8. Drawing/extraction status
 // vocabulary (backend/app/core/enums.py's DrawingStatus/extraction phases).
@@ -15,10 +17,22 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   embedding: 'info',
 }
 
+// Mirrors backend/app/api/v1/routes/drawings.py's _UPLOAD_ROLES -- same
+// roles allowed to POST /drawings/{id}/ingest in the first place.
+const _RETRY_ROLES = [
+  Role.ESTIMATOR,
+  Role.LEAD_ESTIMATOR,
+  Role.PROCUREMENT_HEAD,
+  Role.BD_DIRECTOR,
+  Role.MANAGING_DIRECTOR,
+]
+
 export function SheetIndexPage() {
   const { projectId, drawingId } = useParams()
   const { data: drawing } = useDrawing(drawingId)
   const { data: sheets, isLoading, isError, error } = useSheets(drawingId)
+  const { hasRole } = useAuth()
+  const retryIngest = useRetryIngest(projectId, drawingId)
 
   return (
     <div className="p-6">
@@ -32,6 +46,26 @@ export function SheetIndexPage() {
       {drawing && (
         <p className="mt-1 flex items-center gap-2 text-sm text-slate-500">
           Status: <Badge tone={STATUS_TONE[drawing.status] ?? 'neutral'}>{drawing.status}</Badge>
+          {(drawing.status === 'failed' || drawing.status === 'partial') && hasRole(..._RETRY_ROLES) && (
+            <button
+              type="button"
+              onClick={() => retryIngest.mutate()}
+              disabled={retryIngest.isPending}
+              className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+            >
+              {retryIngest.isPending ? 'Retrying…' : 'Retry extraction'}
+            </button>
+          )}
+        </p>
+      )}
+      {drawing?.error_message && (drawing.status === 'failed' || drawing.status === 'partial') && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {drawing.error_message}
+        </p>
+      )}
+      {retryIngest.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {retryIngest.error.message}
         </p>
       )}
       {isLoading && (
