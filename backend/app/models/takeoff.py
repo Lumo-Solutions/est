@@ -50,6 +50,10 @@ class Drawing(TenantEntity):
     discipline_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
     revision_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Revision lineage (tender intake): the drawing this one replaces.
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawings.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class DrawingSheet(TenantEntity):

@@ -18,6 +18,7 @@ from app.models import (  # noqa: F401
     takeoff,
     taxonomy,
     tenancy,
+    tender_intake,
     typology,
     vendors,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "takeoff",
     "taxonomy",
     "tenancy",
+    "tender_intake",
     "typology",
     "vendors",
 ]

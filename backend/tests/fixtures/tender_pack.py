@@ -205,7 +205,15 @@ def _save_wb(wb) -> bytes:
     wb.properties.lastModifiedBy = "tender-pack"
     out = io.BytesIO()
     wb.save(out)
-    return _rezip(out.getvalue())
+    # openpyxl stamps `modified` with the wall clock inside save(): pin it in the written core.xml.
+    pinned = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(out.getvalue())) as src, zipfile.ZipFile(pinned, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            body = src.read(info.filename)
+            if info.filename == "docProps/core.xml":
+                body = re.sub(rb"(<dcterms:(?:created|modified)[^>]*>)[^<]*", rb"\g<1>2026-01-01T00:00:00Z", body)
+            dst.writestr(_zipinfo(info.filename), body)
+    return pinned.getvalue()
 
 
 def _boq_xlsx() -> bytes:

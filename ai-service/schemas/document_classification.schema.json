@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/document_classification.schema.json",
+  "title": "DocumentClassification",
+  "description": "A proposed classification of one tender document, produced by the local model only for documents the deterministic rules could not settle. Pure data contract: it has no field that names an operation, changes any record, or identifies a BOQ line. Every value is a proposal that a person confirms before anything is routed (see app/services/tender_intake.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["doc_class", "confidence"],
+  "properties": {
+    "doc_class": {
+      "type": "string",
+      "description": "What kind of tender document this is.",
+      "enum": [
+        "drawing",
+        "boq",
+        "addendum",
+        "specification",
+        "contract",
+        "tender_instructions",
+        "tender_forms",
+        "clarification",
+        "programme",
+        "site_investigation",
+        "correspondence",
+        "other"
+      ]
+    },
+    "sub_type": {
+      "type": ["string", "null"],
+      "description": "For drawings only: the discipline. Null for every other class or when unclear.",
+      "enum": ["civil_infra", "architectural", "structural", "mep", "landscape", "other", null]
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Honest overall confidence from 0 to 1 in doc_class.",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_quote": {
+      "type": ["string", "null"],
+      "description": "A short verbatim quote (under 200 characters) from the document that justifies doc_class. Null if there is no text to quote."
+    },
+    "evidence_page": {
+      "type": ["integer", "null"],
+      "description": "1-based page the quote came from. Null if unknown."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Fields printed on the document. Null when absent or not legible; never guess.",
+      "properties": {
+        "document_number": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "revision": { "type": ["string", "null"] },
+        "date": { "type": ["string", "null"] },
+        "discipline": { "type": ["string", "null"] },
+        "sheet_number": { "type": ["string", "null"] },
+        "scale": { "type": ["string", "null"] },
+        "addendum_number": { "type": ["string", "null"] },
+        "addendum_issue_date": { "type": ["string", "null"] },
+        "supersedes": {
+          "type": "array",
+          "description": "For addenda: documents or drawings the addendum replaces or amends, as printed (e.g. 'C-101 Rev A').",
+          "items": { "type": "string" }
+        },
+        "sheet_names": {
+          "type": "array",
+          "description": "For spreadsheets: sheet names.",
+          "items": { "type": "string" }
+        },
+        "header_row": {
+          "type": ["integer", "null"],
+          "description": "For a BOQ spreadsheet: 1-based row holding the column headings."
+        }
+      }
+    }
+  }
+}

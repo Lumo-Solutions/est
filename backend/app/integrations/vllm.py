@@ -31,6 +31,7 @@ async def extract_json(
     user_prompt: str,
     json_schema: dict[str, Any],
     image_data_url: str | None = None,
+    max_tokens: int = 512,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Calls the OpenAI-compatible /v1/chat/completions endpoint (real vLLM
@@ -50,7 +51,7 @@ async def extract_json(
     response = await client.chat.completions.create(
         model=settings.vllm_model,
         temperature=0,
-        max_tokens=512,
+        max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},

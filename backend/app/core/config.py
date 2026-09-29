@@ -159,6 +159,22 @@ class Settings(BaseSettings):
     )
     quotation_max_pdf_pages: int = Field(default=60, alias="QUOTATION_MAX_PDF_PAGES")
 
+    # --- tender document intake (docs/tender-intake-plan.md) ---
+    intake_max_file_size_bytes: int = Field(default=60 * 1024 * 1024, alias="INTAKE_MAX_FILE_SIZE_BYTES")
+    intake_max_request_bytes: int = Field(default=300 * 1024 * 1024, alias="INTAKE_MAX_REQUEST_BYTES")
+    intake_max_files_per_request: int = Field(default=300, alias="INTAKE_MAX_FILES_PER_REQUEST")
+    intake_max_pdf_pages: int = Field(default=800, alias="INTAKE_MAX_PDF_PAGES")
+    intake_zip_max_entries: int = Field(default=1_000, alias="INTAKE_ZIP_MAX_ENTRIES")
+    intake_zip_max_total_bytes: int = Field(default=500 * 1024 * 1024, alias="INTAKE_ZIP_MAX_TOTAL_BYTES")
+    intake_zip_max_ratio: int = Field(default=100, alias="INTAKE_ZIP_MAX_RATIO")
+    intake_zip_max_depth: int = Field(default=2, alias="INTAKE_ZIP_MAX_DEPTH")
+    # Per-document processing budget inside the worker (checked between stages).
+    intake_doc_timeout_s: int = Field(default=60, alias="INTAKE_DOC_TIMEOUT_S")
+    # Stage 1 winner at or above this (and not conflicted) skips the model.
+    intake_rules_confident: float = Field(default=0.85, alias="INTAKE_RULES_CONFIDENT")
+    # Bulk-confirm only takes proposals at or above this.
+    intake_bulk_confirm_min: float = Field(default=0.85, alias="INTAKE_BULK_CONFIRM_MIN")
+
     # Set (alongside a literal APP_ENV=production) only by
     # deploy/docker-compose.prod.yml, for backend/every worker/beat.
     # Deliberately a separate flag from app_env itself, not a check that
