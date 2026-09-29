@@ -17,7 +17,7 @@ quarantine queue's tenant-resolution action).
 
 | Route | Component | UI nav gate | Key actions | Endpoint(s) |
 |---|---|---|---|---|
-| `/` | `ProjectsListPage.tsx` | all authenticated (global nav, always visible) | New project (create) | `GET /projects`, `POST /projects` (server: bd/md) |
+| `/` | `ProjectsListPage.tsx` | all authenticated (global nav, always visible) | New project (create) | `GET /projects`, `POST /projects` (server: bd/md/lead; migration 0029) |
 | `/projects/:id` | `ProjectDetailPage.tsx` | all | Upload drawing, ingest/extract | `GET /projects/{id}`, `GET/POST /projects/{id}/drawings`, `POST /drawings/{id}/ingest` — **no edit-location or add-member UI** (see gaps) |
 | `/projects/:id/drawings/:did` | `SheetIndexPage.tsx` | all | (read-only) sheet list | `GET /drawings/{id}`, `GET /drawings/{id}/sheets` |
 | `/projects/:id/drawings/:did/sheets/:idx` | `TakeoffViewerPage.tsx` | all | Calibrate scale, revert calibration, override/revert measurement, link region | `PATCH .../scale`, `POST .../scale-calibrations/{id}/revert`, `POST /drawing-measurements/{id}/override(/revert)`, `GET /drawing-sheets/{id}/entities` |
