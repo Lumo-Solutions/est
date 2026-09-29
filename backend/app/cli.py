@@ -2067,6 +2067,21 @@ async def clean_demo_data() -> None:
                 print(f"deleted vendor {name!r} ({qa_vendor.id})")
 
 
+def write_tender_pack(out_dir: str, salt: str) -> None:
+    """DEV/TEST: writes the synthetic tender pack (app/intake/sample_pack.py) to a directory so the
+    real-backend Playwright spec can upload it. The salt makes each run's files unique."""
+    from pathlib import Path
+
+    from app.intake.sample_pack import build_pack
+
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    files = build_pack(salt)
+    for f in files:
+        (target / f.name).write_bytes(f.data)
+    print(f"wrote {len(files)} files to {target} (salt={salt!r})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2104,6 +2119,12 @@ def main() -> None:
         "seed-qa-demo-data",
         help="DEV ONLY: adds manual-QA-only demo data (rejected + lost-outcome settlements, a vendor duplicate pair, expired/expiring/valid certificates) on a dedicated QA-DEMO project, cleaned by clean-demo-data",
     )
+    pack_parser = subparsers.add_parser(
+        "write-tender-pack",
+        help="DEV ONLY: write the synthetic tender document pack (DXF/PDF drawings, BOQ, addendum, spec, zip, duplicate, .xlsm, zip bomb...) to a directory",
+    )
+    pack_parser.add_argument("--out", required=True)
+    pack_parser.add_argument("--salt", default="")
     subparsers.add_parser(
         "clean-demo-data",
         help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
@@ -2130,6 +2151,8 @@ def main() -> None:
         asyncio.run(seed_qa_demo_data())
     elif args.command == "clean-demo-data":
         asyncio.run(clean_demo_data())
+    elif args.command == "write-tender-pack":
+        write_tender_pack(args.out, args.salt)
 
 
 if __name__ == "__main__":

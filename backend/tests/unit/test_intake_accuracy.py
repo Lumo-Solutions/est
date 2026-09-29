@@ -127,3 +127,31 @@ def test_drawing_sub_types(name):
     out = classify_rules(content, f.name)
     assert out.doc_class == "drawing"
     assert out.sub_type == f.expected_sub_type
+
+
+def test_salted_pack_is_unique_per_salt_deterministic_per_salt_and_classifies_the_same():
+    import hashlib
+
+    from app.intake.sample_pack import build_pack, build_zip_member_files
+
+    def digests(salt: str) -> dict[str, str]:
+        return {f.name: hashlib.sha256(f.data).hexdigest() for f in build_pack(salt)}
+
+    base, a1, a2, b = digests(""), digests("run-a"), digests("run-a"), digests("run-b")
+    assert a1 == a2
+    assert all(a1[n] != b[n] for n in a1 if n != "bomb.zip")  # every file differs between two runs
+    assert a1["C-101 Rev A (copy).dxf"] == a1["C-101 Rev A.dxf"]  # the duplicate is still an exact duplicate
+    assert [m.name for m in build_zip_member_files("run-a")] == [m.name for m in build_zip_member_files()]
+
+    settings = Settings(**_REQUIRED)  # type: ignore[arg-type]
+    wrong = []
+    for f in build_pack("run-a"):
+        if f.expected_status not in ("classifiable", "duplicate"):
+            continue
+        safety = check_file(filename=f.name, data=f.data, settings=settings)
+        assert safety.accepted, (f.name, safety.reason)
+        content = extract_content(filename=f.name, ext=extension_of(f.name), sniffed=safety.sniffed, data=f.data)
+        got = classify_rules(content, f.name).doc_class
+        if got != f.expected_class and f.name != "Scan_0042.pdf":
+            wrong.append((f.name, got, f.expected_class))
+    assert not wrong, wrong
