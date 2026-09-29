@@ -255,3 +255,166 @@ any demo user (`estimator1`/`lead1`/`procurement1`/`bd1`/`md1`, all
 `<Name>1Pass!`, plus `admin1`/`Admin1Pass!` for `platform_admin`) without an
 authenticator app. `git log` on `master` has every commit; nothing has been
 pushed.
+
+## Finish-brief follow-up run (after this report)
+
+A second finish-brief pass ("Final fixes after docs/ui-qa-report.md"),
+covering five items: drawing-pipeline resilience, production `APP_ENV`
+enforcement, five small UI/deploy gaps, a second live lifecycle
+walkthrough, and one more clean full regression. Same rules as before
+(main session merges; subagents in worktrees with file allow-lists; main
+session verifies every diff). Everything below is on `master`; nothing has
+been pushed.
+
+### 1. Drawing pipeline resilience
+
+The stuck-at-`extracting` bug flagged above as "needing your decision" is
+fixed, not just diagnosed. `backend/app/workers/tasks/takeoff.py`: each
+chord member (`extract_sheet`, `embed_drawing`,
+`extract_geometry_measurements`) now claims its job row in an independent,
+immediately-committed session *before* doing any work, so a later failure
+can always durably record its own reason via a second independent session
+without racing the first (a naive version of this deadlocked on
+`uq_extraction_jobs_dedup` — see `docs/takeoff-pipeline.md`). The outer
+Celery task wrappers swallow a terminal failure (log + let the chord
+proceed) instead of leaving the task in a state the chord callback waits on
+forever. `finalize_drawing` always runs and always recomputes status
+(`force=True` bypasses the normal idempotency skip — needed because a
+retry must be able to *change* a prior outcome, not just replay it) and
+correctly aggregates ready/partial/failed across whatever combination of
+jobs actually finished, excluding embedding/indexing from the "did
+everything fail" tally so an optional embedding failure alone yields
+`partial`, never `failed`. A new celery-beat task, `reap-stuck-drawings`,
+fails any drawing still `extracting` past `DRAWING_STUCK_TIMEOUT_S`
+(default 2h, configurable) with a clear stall reason, and clears that
+reason if a later retry succeeds. A "Retry extraction" button
+(`SheetIndexPage.tsx`, estimator+, audited) resets a `partial`/`failed`
+drawing back into the pipeline.
+
+Root-caused, not just papered over: `make download-embedding-model` was
+silently writing into an empty Docker volume on this Windows/Git-Bash
+machine (a `/tmp/...` path that never existed outside the container) — the
+actual reason GEO-TEST and WALK-1 got stuck, unrelated to the chord bug
+above, which was a second, independently real issue the same investigation
+surfaced. Fixed (`Makefile`, `$(CURDIR)`-relative path +
+`MSYS_NO_PATHCONV=1`), and a second real bug in `OnnxEmbedder.embed()`
+(missing `token_type_ids` input — every real embed call was failing) is
+fixed too. Both stuck drawings were rescued via the new Retry action, and
+`make download-embedding-model` followed by a fresh upload was confirmed
+live to reach `ready` with real embeddings, not just `partial`.
+
+Tests: `backend/tests/integration/test_takeoff_pipeline_resilience.py` —
+embed fails → partial; one sheet fails → partial; every content job fails →
+failed (not partial); finalize re-runs and changes status on retry; the
+sweeper rescues a stalled drawing and clears its stale reason once ready;
+a durable cross-session failure write survives the triggering session's
+own rollback; a bare-DXF sheet with no text skips the PDF-render fallback
+instead of crashing (found live during this same investigation — fixed in
+the same pass, see below).
+
+### 2. Production `APP_ENV`
+
+`deploy/docker-compose.prod.yml` now sets `APP_ENV=production` explicitly
+for backend, workers, and beat. `PRODUCTION_MODE` (new setting) makes the
+backend refuse to start if `APP_ENV` isn't exactly `production` when set,
+and `bootstrap.sh` refuses to seed demo users under it. `make
+check-prod-app-env` renders the prod compose config and asserts the
+setting; `backend/tests/unit/test_config.py` covers the validator
+directly. Noted in `docs/deploy-deltas.md` alongside the local validation
+actually performed.
+
+### 3. Small items
+
+- `QuarantineQueuePage` moved to a global `/inbox` route
+  (`procurement_head`+), old URL redirects, added to the global nav.
+- `ProjectsListPage` now uses real pagination (`GET /projects?limit&offset`,
+  a proper `Page` envelope) instead of loading every project unbounded;
+  `useProjects()` (no args) kept for the two admin pages still using it.
+- Settlement export filenames use the project's `code`, not its raw UUID
+  (the P2 nit from the previous report, above) — sanitized against header
+  injection (`_project_code_for_filename`, `backend/app/services/
+  settlement.py`).
+- `frontend/nginx.conf`: `Cache-Control: no-cache` on `index.html`
+  specifically (the other P2 nit above), so a rebuilt bundle is picked up
+  on next load instead of served stale from the browser's own HTTP cache.
+- `BidLevelingPage` empty state and a fix to a real, live-discovered bug in
+  BOQ reconciliation: accepting a suggested measurement link the backend
+  then 422s (e.g. a dimensionally-incompatible unit) failed 100% silently —
+  same recurring bug class as the P1s above. Fixed by rendering
+  `linkMeasurement.isError`, same pattern as every other mutation on that
+  page; the semantic-feedback "accepted" signal now only fires once the
+  link itself actually succeeds, not unconditionally.
+
+### 4. Second lifecycle walkthrough
+
+Same shape as the first (Playwright MCP, MFA off), on a second new project
+(`WALK-2`), deliberately covering the path the first one skipped: DXF +
+vector PDF upload → extraction reaches `ready` → takeoff viewer (two-point
+calibration, a measurement override) → BOQ import → reconciliation with
+links (this is where the 422-silent-failure bug above was actually found
+live) → procurement package → RFQ dispatch, confirmed in Mailpit → vendor
+reply → quote acceptance → bid leveling → settlement built entirely from
+real accepted-quote costs → approval by a different user → export → a
+recorded win.
+
+One deliberate deviation from the brief's literal wording, noted as
+instructed: `make dev-simulate-quotes` always operates on its own fixed
+C2-SIM project/RFQ (`app/cli.py::_get_or_create_demo_rfq`), not whichever
+RFQ WALK-2 actually dispatched, so it can't simulate a reply *to* WALK-2.
+Vendor replies were instead injected by hand — the real dispatched pricing
+sheet downloaded from Mailpit, priced, and mailed back into GreenMail via
+the same `_pricing_sheet_reply_bytes`/reply-token mechanism
+`simulate-quotes` itself uses — for both of WALK-2's RFQs (a second
+procurement package was created for the one BOQ item the first didn't
+cover, specifically so every line in the eventual settlement would resolve
+from a real quote rather than a manual entry). The settlement was built,
+rebuilt once after the second RFQ's quote came in (`POST
+/projects/{id}/bid-settlements` a second time — the UI's own "Build new
+draft" button is correctly gated off while a settlement is still `draft`,
+by design, so this step used the API directly), submitted by `bd1`,
+approved by `md1` (SoD correctly enforced — `bd1`'s own Approve/Reject
+stayed disabled), and every settlement line ended up with
+`cost_source: "quotation_line"` — no manual overrides anywhere, per the
+brief's explicit instruction. The generated `.xlsx` export was confirmed
+working; original-workbook export was correctly declined with a clear
+message ("this settlement's BOQ import didn't record a rate column"),
+which is the expected fallback behavior, not a bug.
+
+Also surfaced, not fixed (out of this run's scope — a missing feature, not
+a regression): there is no UI, and no API endpoint at all, for assigning a
+vendor to a trade (`VendorTrade` rows only exist via `app/cli.py`'s
+simulation seeders or direct test fixtures). Vendor matching for a real
+procurement package is consequently unusable through the app itself for
+any trade the seeded CLI fixtures didn't happen to cover — worth a
+decision on whether that's in scope for a future pass.
+
+A few things that looked like bugs mid-walkthrough and turned out not to
+be, confirmed rather than assumed: a transient 500 on RFQ dispatch was a
+one-off Keycloak token-refresh timeout, gone on retry; an empty
+matched-vendors list was correct (no vendor seeded for that trade, see
+above); a Playwright-MCP download-handling error on the Export page was a
+browser-automation artifact, not an app bug (confirmed by calling the same
+export endpoint directly — 200, valid `.xlsx`).
+
+### 5. Final regression, this run's own clean pass
+
+`make test-all`: **372 unit + 208 integration + 34 api = 614 passed, 0
+failed.** (One integration test — `test_projects_pagination.py`'s
+boundaries test — failed once on a full concurrent run with a bare
+`asyncpg` connection-checkout `TimeoutError` on its very first query,
+i.e. environment resource contention, not a logic failure; confirmed by
+re-running that file alone immediately after: 4/4 passed. The clean
+full-suite run reported here has all 614 green together.)
+
+`npm run e2e:real-backend -- --workers=1` (MFA off): **78/78 passed, 0
+failed**, after fixing one real regression this run's own earlier pass
+caught: `settlement-winloss-roles.spec.ts`'s export-filename assertion
+still expected the pre-item-3 UUID-based pattern
+(`settlement-{project.id}-v\d+.xlsx`); updated to the project-code-based
+pattern item 3 above actually produces (`settlement-D1-SIM-v\d+.xlsx`),
+confirmed live (`settlement-D1-SIM-v238.xlsx`) before updating the
+assertion — the spec's own comment had predicted exactly this ("a future
+rename here shows up as a spec change here too, not a surprise"). Verified
+in isolation (4/4) before the full clean re-run above.
+
+The stack is left running with **MFA off**, same as before.

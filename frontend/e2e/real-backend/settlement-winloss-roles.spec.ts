@@ -102,10 +102,14 @@ test('export: downloading the generated workbook produces a real file with a wor
   // Phase 2 UI QA (docs/ui-qa/issues.md UI-P2-020): confirms downloadFile()
   // (frontend/src/lib/api.ts) actually gets a real Content-Disposition
   // filename from the server rather than falling back to its hardcoded
-  // 'settlement.xlsx' -- and records the real (UUID-based, not
-  // project-code-based) naming pattern live rather than only reading the
-  // service code, so a future rename here shows up as a spec change here
-  // too, not a surprise.
+  // 'settlement.xlsx' -- and records the real naming pattern live rather
+  // than only reading the service code, so a future rename here shows up
+  // as a spec change here too, not a surprise. Project-code-based (not
+  // UUID-based) since the finish-brief follow-up's "export filenames use
+  // the project code" fix (_project_code_for_filename, backend/app/
+  // services/settlement.py) -- this assertion was updated to match live
+  // when that fix's own e2e run caught this spec still asserting the old
+  // UUID pattern.
   await loginViaKeycloak(page, 'bd1', 'Bd1Pass!')
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
 
@@ -123,5 +127,5 @@ test('export: downloading the generated workbook produces a real file with a wor
   await page.goto(`/projects/${project.id}/export`)
   const downloadButton = page.getByRole('button', { name: 'Download generated .xlsx' })
   const [download] = await Promise.all([page.waitForEvent('download'), downloadButton.click()])
-  expect(download.suggestedFilename()).toMatch(new RegExp(`^settlement-${project.id}-v\\d+\\.xlsx$`))
+  expect(download.suggestedFilename()).toMatch(new RegExp(`^settlement-${D1_SIM_PROJECT_CODE}-v\\d+\\.xlsx$`))
 })
