@@ -36,6 +36,8 @@ class SheetInfo:
     header_row: int | None = None  # 1-based
     header_score: int = 0
     columns: list[str] = field(default_factory=list)
+    # (column letter, header text) for the detected header row, in sheet order.
+    header_cells: list[tuple[str, str]] = field(default_factory=list)
     sample_text: str = ""
 
 
@@ -79,6 +81,12 @@ def detect_header(rows: list[list[object]]) -> tuple[int | None, int, list[str]]
     if best_score < 3:
         return None, best_score, []
     return best_row, best_score, best_cols
+
+
+def header_cells_of(row: list[object]) -> list[tuple[str, str]]:
+    from openpyxl.utils import get_column_letter
+
+    return [(get_column_letter(i), str(c).strip()) for i, c in enumerate(row, start=1) if c is not None and str(c).strip()]
 
 
 def _extract_pdf(data: bytes, content: DocContent) -> None:
@@ -138,7 +146,9 @@ def _extract_xlsx(data: bytes, content: DocContent) -> None:
                 rows.append(list(row))
             header_row, score, cols = detect_header(rows)
             sample = "\n".join(" | ".join(str(c) for c in r if c is not None) for r in rows[:12])
-            content.sheets.append(SheetInfo(ws.title, header_row, score, cols, sample))
+            content.sheets.append(
+                SheetInfo(ws.title, header_row, score, cols, header_cells_of(rows[header_row - 1]) if header_row else [], sample)
+            )
             chunks.append(f"[{ws.title}]\n{sample}")
         content.text = "\n".join(chunks)[:MAX_TEXT_CHARS]
         content.has_text_layer = bool(content.text.strip())
@@ -155,7 +165,13 @@ def _extract_csv(data: bytes, content: DocContent) -> None:
             break
         rows.append(row)
     header_row, score, cols = detect_header(rows)
-    content.sheets.append(SheetInfo("csv", header_row, score, cols, "\n".join(",".join(r) for r in rows[:12])))
+    content.sheets.append(
+        SheetInfo(
+            "csv", header_row, score, cols,
+            header_cells_of(rows[header_row - 1]) if header_row else [],
+            "\n".join(",".join(r) for r in rows[:12]),
+        )
+    )
     content.text = text[:MAX_TEXT_CHARS]
     content.has_text_layer = bool(text.strip())
 

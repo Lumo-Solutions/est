@@ -66,7 +66,8 @@ async def commit_import(
 
         from openpyxl import load_workbook
 
-        sheet_name = load_workbook(io.BytesIO(data), read_only=True).active.title
+        workbook = load_workbook(io.BytesIO(data), read_only=True)
+        sheet_name = mapping.sheet_name or workbook.active.title
 
     batch = BoqImportBatch(
         id=batch_id, tenant_id=ctx.tenant_id, project_id=project_id, source_filename=filename,

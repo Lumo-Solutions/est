@@ -153,6 +153,7 @@ def extract_metadata(content: DocContent) -> dict:
         md["sheet_names"] = [s.name for s in content.sheets]
         md["boq_sheet"] = best.name
         md["header_row"] = best.header_row
+        md["boq_columns"] = [list(cell) for cell in best.header_cells]
     return md
 
 

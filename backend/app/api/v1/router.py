@@ -17,6 +17,7 @@ from app.api.v1.routes import (
     semantic_matching,
     settlement,
     taxonomy,
+    tender_intake,
     typology,
     users,
     vendors,
@@ -26,6 +27,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(vendors.router)
 api_router.include_router(taxonomy.router)
+api_router.include_router(tender_intake.router)
 api_router.include_router(prequal.router)
 api_router.include_router(cost_library.router)
 api_router.include_router(approvals.router)

@@ -64,7 +64,7 @@ def test_xlsx_header_sniff_makes_a_boq_and_reports_sheet_and_row():
     rows = [[None], ["Bill"], cols, ["1.0", "Earthworks", None, None, None, None]]
     row, score, found = detect_header(rows)
     assert (row, score) == (3, 6) and found == cols
-    c = _content("[BOQ]", filename="pricing.xlsx", ext="xlsx", sheets=[SheetInfo("Summary"), SheetInfo("BOQ", 3, 6, cols, "")])
+    c = _content("[BOQ]", filename="pricing.xlsx", ext="xlsx", sheets=[SheetInfo("Summary"), SheetInfo("BOQ", 3, 6, cols)])
     out = classify_rules(c)
     assert out.doc_class == "boq" and out.confidence >= 0.95
     assert out.metadata["boq_sheet"] == "BOQ" and out.metadata["header_row"] == 3

@@ -82,6 +82,7 @@ class BoqImportColumnMappingIn(BaseModel):
     rate_column: str | None = None
     amount_column: str | None = None
     header_row: int = 1
+    sheet_name: str | None = None
 
 
 class BoqImportRowOut(BaseModel):

@@ -16,6 +16,7 @@ celery_app = Celery(
         "app.workers.tasks.maintenance",
         "app.workers.tasks.procurement",
         "app.workers.tasks.quotation_ingestion",
+        "app.workers.tasks.tender_intake",
     ],
 )
 
@@ -35,6 +36,8 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "ingest"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
+        # Tender intake: classification of an uploaded pack (docs/tender-intake-plan.md).
+        "app.workers.tasks.tender_intake.*": {"queue": "ingest"},
         "app.workers.tasks.procurement.*": {"queue": "email"},
         # --- Module C2: inbound quotation ingestion ---
         # poll_inbound_mailbox is pure IMAP I/O, same "talk to a mail
