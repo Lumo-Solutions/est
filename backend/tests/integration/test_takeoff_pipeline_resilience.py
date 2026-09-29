@@ -530,3 +530,85 @@ async def test_extract_sheet_failure_is_durably_recorded_across_the_rollback(app
             await cleanup_session.execute(text("DELETE FROM drawings WHERE id = :d"), {"d": str(drawing_id)})
             await cleanup_session.execute(text("DELETE FROM projects WHERE tenant_id = :t"), {"t": str(tenant_id)})
             await cleanup_session.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": str(tenant_id)})
+
+
+# --------------------------------------------------------------------------
+# a DXF sheet with no extractable text must not attempt to render it as a
+# PDF page (there is no DXF-to-PNG path in this codebase)
+# --------------------------------------------------------------------------
+
+
+async def test_extract_sheet_on_a_bare_dxf_layout_skips_the_pdf_render_fallback(app_engine, monkeypatch):
+    """Found live on a real DXF test fixture: a layout with no extractable
+    TEXT/MTEXT entities (sheet.raw_text empty; sheet.is_raster is always
+    False for DXF) fell into the same "render this page as an image"
+    fallback PDF sheets use, which called pdf_mod.render_page_png against
+    raw DXF bytes and failed with "Failed to load document (PDFium: Data
+    format error)". Fixed: that fallback is now gated on drawing.kind !=
+    DXF. This test proves the fix by making get_object_bytes raise if
+    called at all -- it must never be reached for a DXF sheet.
+
+    Uses real committed sessions (worker_session_scope), not rls_session,
+    for the same reason as test_extract_sheet_failure_is_durably_recorded_
+    across_the_rollback above: _extract_sheet_body's own _claim_job call
+    opens an independent session whose extraction_jobs INSERT has a real
+    FK to drawings/drawing_sheets, which a row only visible inside
+    rls_session's own uncommitted transaction can't satisfy."""
+    from app.core.context import system_context
+    from app.db.session import worker_session_scope
+    from app.takeoff.titleblock import TitleBlockResult
+    from app.workers.tasks import takeoff as takeoff_tasks
+
+    async def _boom_if_called(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("get_object_bytes must not be called for a DXF sheet -- no DXF-to-PNG path exists")
+
+    async def _fake_extract_title_block(*, candidate_text: str, image_png, **_kwargs: object) -> TitleBlockResult:
+        assert image_png is None  # text-only path, exactly what the fix routes a bare DXF layout through
+        return TitleBlockResult(confidence=0.0)
+
+    monkeypatch.setattr(takeoff_tasks, "get_object_bytes", _boom_if_called)
+    monkeypatch.setattr(takeoff_tasks, "extract_title_block", _fake_extract_title_block)
+
+    tenant_id = uuid.uuid4()
+    ctx = system_context(tenant_id)
+    async with worker_session_scope(ctx) as session:
+        await session.execute(
+            text("INSERT INTO tenants (id, slug, name) VALUES (:id, :slug, :name)"),
+            {"id": str(tenant_id), "slug": f"dxfbare-{uuid.uuid4().hex[:8]}", "name": "DXF Bare Layout Test"},
+        )
+        project_id = (
+            await session.execute(
+                text("INSERT INTO projects (tenant_id, code, name) VALUES (:t, :c, 'P') RETURNING id"),
+                {"t": str(tenant_id), "c": f"DXFBARE-{uuid.uuid4().hex[:8]}"},
+            )
+        ).scalar_one()
+        drawing = Drawing(
+            tenant_id=tenant_id, project_id=project_id, original_filename="bare.dxf", kind="dxf",
+            bucket="installtec-drawings", object_key="x", size_bytes=1, sha256=uuid.uuid4().hex.ljust(64, "0"),
+            status=DrawingStatus.EXTRACTING.value,
+        )
+        session.add(drawing)
+        await session.flush()
+        sheet = DrawingSheet(
+            tenant_id=tenant_id, drawing_id=drawing.id, project_id=project_id, sheet_index=0,
+            source_name="Layout1", units="", is_raster=False, raw_text="",  # bare: no extractable text at all
+        )
+        session.add(sheet)
+        await session.flush()
+        drawing_id, sheet_id = drawing.id, sheet.id
+
+    try:
+        await takeoff_tasks.with_worker_session(ctx, takeoff_tasks._extract_sheet_body, str(sheet_id), "task-dxf-bare")
+
+        async with worker_session_scope(ctx) as verify_session:
+            refreshed_sheet = (
+                await verify_session.execute(select(DrawingSheet).where(DrawingSheet.id == sheet_id))
+            ).scalar_one()
+            assert refreshed_sheet.extraction_status == "succeeded"
+    finally:
+        async with worker_session_scope(ctx) as cleanup_session:
+            await cleanup_session.execute(text("DELETE FROM extraction_jobs WHERE drawing_id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM drawing_sheets WHERE drawing_id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM drawings WHERE id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM projects WHERE tenant_id = :t"), {"t": str(tenant_id)})
+            await cleanup_session.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": str(tenant_id)})

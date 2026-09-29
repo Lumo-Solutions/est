@@ -394,8 +394,17 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
     try:
         image_png = None
         candidate_text = sheet.raw_text or ""
-        if sheet.is_raster or not candidate_text.strip():
-            drawing = (await session.execute(select(Drawing).where(Drawing.id == sheet.drawing_id))).scalar_one()
+        drawing = (await session.execute(select(Drawing).where(Drawing.id == sheet.drawing_id))).scalar_one()
+        # Only a PDF-kind drawing has a page this codebase can rasterize
+        # (pdf_mod.render_page_png) -- there is no DXF-to-PNG path at all.
+        # A DXF sheet with no extractable text (sheet.is_raster is always
+        # False for DXF; this means a genuinely bare layout, e.g. a
+        # title-block-only paperspace tab with no real annotation text)
+        # must fall through to a text-only, no-image extract_title_block
+        # call instead of attempting to render non-PDF bytes as one. Found
+        # live: "Failed to load document (PDFium: Data format error)" on a
+        # real DXF test fixture's sparse layout.
+        if drawing.kind != DrawingKind.DXF.value and (sheet.is_raster or not candidate_text.strip()):
             data = await get_object_bytes(drawing.object_key)
             page_png = pdf_mod.render_page_png(data, sheet.sheet_index)
             image_png = pdf_mod.crop_title_block_png(page_png)
