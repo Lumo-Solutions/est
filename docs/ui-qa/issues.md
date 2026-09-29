@@ -105,13 +105,21 @@ per `docs/ui-qa-brief.md`; P2 is deferred to Phase 4.
   deliberate review rather than folding into a page-scoped QA pass.
   Recommending as a Phase 3 item.
 
-### UI-P2-006 (P2, not fixed, deferred to Phase 4) — ProjectsListPage has no empty-state message or pagination
+### UI-P2-006 (P2, empty state fixed in Phase 4; pagination confirmed still genuinely missing, in progress) — ProjectsListPage has no pagination
 - **Page(s):** `ProjectsListPage.tsx`
 - **Role:** any
-- Not exercised live (the seeded dev environment always has 6+ projects),
-  found by code review: an empty `projects` array renders a table with just
-  headers, no "no projects yet" message; there's also no pagination for a
-  long list. Per the brief, P2 polish is Phase 4's job.
+- Originally: not exercised live (the seeded dev environment always has 6+
+  projects), found by code review: an empty `projects` array renders a table
+  with just headers, no "no projects yet" message; there's also no
+  pagination for a long list.
+- **Empty state:** fixed as part of the Phase 4 redesign (a bordered "No
+  projects yet." box with a create-project CTA, `ProjectsListPage.tsx`) —
+  re-confirmed still present and correct during the finish-brief
+  small-items pass (this entry's own original description of "no
+  empty-state message" is stale).
+- **Pagination:** re-confirmed genuinely still missing (no `page`/`limit`
+  params anywhere in `useProjects()` or `GET /projects`) during the
+  finish-brief small-items pass, which adds it.
 
 ## Pre-existing issues reconfirmed (already logged, not new)
 - `make dev-simulate-settlement` (and `global-setup.ts`'s call to it) still
@@ -461,15 +469,20 @@ per `docs/ui-qa-brief.md`; P2 is deferred to Phase 4.
   is nothing here for any role to be incorrectly allowed to do. No fix
   needed.
 
-### UI-P2-017 (P2, not fixed, deferred to Phase 4) — BidLevelingPage shows nothing (not even an empty-state message) when a selected package has zero bid-leveling rows
+### UI-P2-017 (P2, fixed in Phase 4) — BidLevelingPage had no empty-state message when a selected package has zero bid-leveling rows
 - **Page(s):** `BidLevelingPage.tsx`
-- The table only renders when `rows.length > 0`; a package with no
-  accepted line items yet renders a blank area below the package dropdown
-  with no "no bids yet" message and no loading indicator for any of its
-  three queries. Not exercised live this run (every demo project has at
-  least one accepted line item), found by code review. Same class of gap
-  as UI-P2-006 (ProjectsListPage's missing empty state) — Phase 4 polish,
-  not a functional break.
+- Originally: the table only rendered when `rows.length > 0`; a package
+  with no accepted line items yet rendered a blank area below the package
+  dropdown with no "no bids yet" message. Not exercised live when first
+  logged (every demo project had at least one accepted line item), found
+  by code review.
+- **Status (finish-brief small-items pass):** already fixed on `master` —
+  `BidLevelingPage.tsx` renders `No bid-leveling rows for this package
+  yet.` when `rows` is loaded and empty (added in the Phase 4 redesign,
+  commit `7986d3c`, this entry's original wording had simply gone stale).
+  No new change needed; re-confirmed by reading the current code. Still no
+  loading indicator for the page's three queries while they're in flight --
+  a real but separate, lower-priority gap, left open.
 
 ### Confirmed live — `JsonDecimal` fix (UI-P2-011) verified correct on the pages it actually affects
 Both `QuoteReviewPage` and `BidLevelingPage` now render `unit_price`/

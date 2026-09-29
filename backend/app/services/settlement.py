@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
@@ -39,6 +40,7 @@ from app.models.settlement import (
     BidSettlementTradeOverride,
     SettlementReasonCode,
 )
+from app.models.tenancy import Project
 from app.models.vendors import Vendor
 from app.schemas.approvals import ApprovalRequestCreate
 from app.schemas.settlement import (
@@ -96,6 +98,26 @@ async def _get_settlement(session: AsyncSession, settlement_id: UUID) -> BidSett
     if settlement is None:
         raise NotFoundError(f"Bid settlement {settlement_id} not found")
     return settlement
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+async def _project_code_for_filename(session: AsyncSession, project_id: UUID) -> str:
+    """Used to build a readable export filename (settlement-{code}-vN.xlsx)
+    instead of the project's raw UUID -- UI-P2-020 in docs/ui-qa/issues.md:
+    technically unique either way, but an estimator with several downloaded
+    files in one folder can't tell projects apart by UUID alone.
+
+    Project.code is free-form user input at project-creation time (no
+    format validation in app/schemas/projects.py) and the route builds
+    Content-Disposition as a bare f-string with no escaping
+    (app/api/v1/routes/settlement.py) -- so unlike the UUID this replaces,
+    it can't be trusted directly into a quoted header value (a `"` would
+    break out of it) or a filename. Stripped down to a safe slug here."""
+    code = (await session.execute(select(Project.code).where(Project.id == project_id))).scalar_one()
+    safe = _UNSAFE_FILENAME_CHARS.sub("-", code).strip("-")
+    return safe or "project"
 
 
 def _require_draft(settlement: BidSettlement) -> None:
@@ -787,7 +809,8 @@ async def export_settlement(
 
     file_bytes = _build_export_workbook(settlement, all_items, lines_by_item_id, data)
     sha256 = hashlib.sha256(file_bytes).hexdigest()
-    filename = f"settlement-{settlement.project_id}-v{settlement.version_no}.xlsx"
+    project_code = await _project_code_for_filename(session, settlement.project_id)
+    filename = f"settlement-{project_code}-v{settlement.version_no}.xlsx"
 
     await audit.record(
         session, ctx, action=AuditAction.EXPORT, entity_type="bid_settlement", entity_id=settlement.id,
@@ -1014,7 +1037,8 @@ async def export_original_settlement(
         )
 
     sha256 = hashlib.sha256(output_bytes).hexdigest()
-    filename = f"settlement-{settlement.project_id}-v{settlement.version_no}-original.xlsx"
+    project_code = await _project_code_for_filename(session, settlement.project_id)
+    filename = f"settlement-{project_code}-v{settlement.version_no}-original.xlsx"
 
     await audit.record(
         session, ctx, action=AuditAction.EXPORT, entity_type="bid_settlement", entity_id=settlement.id,
