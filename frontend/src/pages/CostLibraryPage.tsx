@@ -6,6 +6,7 @@ import { SkeletonRows } from '../components/Skeleton'
 import { useCostItems, useCreateCostItem } from '../features/costlib/api'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
+import { Table, TableCard, Td, Th } from '../components/Table'
 
 // Mirrors backend/app/api/v1/routes/cost_library.py's _WRITE_ROLES exactly.
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.MANAGING_DIRECTOR]
@@ -19,7 +20,7 @@ function NewCostItemForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form
-      className="mb-6 rounded border border-slate-200 p-4"
+      className="mb-6 rounded-card p-5 bg-white"
       onSubmit={(e) => {
         e.preventDefault()
         createItem.mutate({ code, description, uom }, { onSuccess: onDone })
@@ -27,7 +28,7 @@ function NewCostItemForm({ onDone }: { onDone: () => void }) {
     >
       <div className="flex flex-wrap items-end gap-2">
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="cost-code">
+          <label className="mb-1 block text-sm text-ink" htmlFor="cost-code">
             Code
           </label>
           <input
@@ -35,11 +36,11 @@ function NewCostItemForm({ onDone }: { onDone: () => void }) {
             required
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="cost-description">
+          <label className="mb-1 block text-sm text-ink" htmlFor="cost-description">
             Description
           </label>
           <input
@@ -47,11 +48,11 @@ function NewCostItemForm({ onDone }: { onDone: () => void }) {
             required
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-500" htmlFor="cost-uom">
+          <label className="mb-1 block text-sm text-ink" htmlFor="cost-uom">
             UoM
           </label>
           <input
@@ -59,13 +60,13 @@ function NewCostItemForm({ onDone }: { onDone: () => void }) {
             required
             value={uom}
             onChange={(e) => setUom(e.target.value)}
-            className="w-16 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-16 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
         <button
           type="submit"
           disabled={createItem.isPending}
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+          className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
         >
           Create item
         </button>
@@ -88,14 +89,14 @@ export function CostLibraryPage() {
   const searchId = useId()
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <div className="mb-4 flex items-center justify-between">
         <PageTitle>Cost library</PageTitle>
         {hasRole(...WRITE_ROLES) && (
           <button
             type="button"
             onClick={() => setShowForm((v) => !v)}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {showForm ? 'Cancel' : 'New cost item'}
           </button>
@@ -118,7 +119,7 @@ export function CostLibraryPage() {
           setOffset(0)
         }}
         placeholder="Search by code or description..."
-        className="mb-3 w-72 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mb-3 w-72 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       />
       {isLoading && <SkeletonRows count={6} />}
       {isError && (
@@ -126,43 +127,45 @@ export function CostLibraryPage() {
           {error.message}
         </p>
       )}
-      {data && data.items.length === 0 && <p className="text-slate-500">No cost items match.</p>}
+      {data && data.items.length === 0 && <p className="text-muted">No cost items match.</p>}
       {data && data.items.length > 0 && (
         <>
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-slate-500">
-              <tr>
-                <th className="py-2 font-medium">Code</th>
-                <th className="font-medium">Description</th>
-                <th className="font-medium">UoM</th>
-                <th className="font-medium">Type</th>
-                <th className="font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2">
-                    <Link
-                      to={`/cost-library/${item.id}`}
-                      className="rounded text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                    >
-                      {item.code}
-                    </Link>
-                  </td>
-                  <td>{item.description}</td>
-                  <td>{item.uom}</td>
-                  <td>{item.item_type}</td>
-                  <td>
-                    <Badge tone={item.is_active ? 'success' : 'neutral'}>
-                      {item.is_active ? 'Active' : 'Inactive'}
-                    </Badge>
-                  </td>
+          <TableCard>
+            <Table density="comfortable">
+              <thead className="border-b border-hairline text-muted">
+                <tr>
+                  <Th>Code</Th>
+                  <Th>Description</Th>
+                  <Th>UoM</Th>
+                  <Th>Type</Th>
+                  <Th>Status</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+              </thead>
+              <tbody>
+                {data.items.map((item) => (
+                  <tr key={item.id} className="border-b border-row-rule hover:bg-canvas">
+                    <Td>
+                      <Link
+                        to={`/cost-library/${item.id}`}
+                        className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      >
+                        {item.code}
+                      </Link>
+                    </Td>
+                    <Td>{item.description}</Td>
+                    <Td>{item.uom}</Td>
+                    <Td>{item.item_type}</Td>
+                    <Td>
+                      <Badge tone={item.is_active ? 'success' : 'neutral'}>
+                        {item.is_active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableCard>
+          <div className="mt-2 flex items-center justify-between text-xs text-muted">
             <span className="tabular-nums">
               Showing {offset + 1}-{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
             </span>
@@ -171,7 +174,7 @@ export function CostLibraryPage() {
                 type="button"
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-                className="rounded border border-slate-300 px-2 py-1 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="rounded-pill border border-brand px-2 py-1 transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Previous
               </button>
@@ -179,7 +182,7 @@ export function CostLibraryPage() {
                 type="button"
                 disabled={offset + PAGE_SIZE >= data.total}
                 onClick={() => setOffset(offset + PAGE_SIZE)}
-                className="rounded border border-slate-300 px-2 py-1 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="rounded-pill border border-brand px-2 py-1 transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Next
               </button>

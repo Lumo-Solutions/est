@@ -19,7 +19,7 @@ export function VendorRegionsAdmin() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-slate-800">Vendor service regions</h2>
+      <h2 className="text-lg font-semibold text-ink-title">Vendor service regions</h2>
       <label htmlFor="vendor-regions-vendor" className="sr-only">
         Vendor
       </label>
@@ -30,7 +30,7 @@ export function VendorRegionsAdmin() {
           setVendorId(e.target.value)
           setSelected([])
         }}
-        className="mt-2 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mt-2 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       >
         <option value="">-- Vendor --</option>
         {(vendorPage?.items ?? []).map((v) => (
@@ -65,12 +65,12 @@ export function VendorRegionsAdmin() {
               type="button"
               onClick={() => replace.mutate(selected.length > 0 ? selected : regions)}
               disabled={replace.isPending}
-              className="mt-2 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="mt-2 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Save regions
             </button>
           ) : (
-            <p className="mt-2 text-xs text-slate-500">Your role can view service regions but not change them.</p>
+            <p className="mt-2 text-xs text-muted">Your role can view service regions but not change them.</p>
           )}
           {replace.isError && (
             <p role="alert" className="mt-1 text-sm text-danger">

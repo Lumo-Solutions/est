@@ -54,7 +54,7 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
 
   return (
     <div className="mt-6">
-      <h2 className="text-sm font-semibold text-slate-800">Certificates</h2>
+      <h2 className="text-lg font-semibold text-ink-title">Certificates</h2>
       {isLoading && (
         <div className="mt-2">
           <SkeletonRows count={2} />
@@ -65,26 +65,26 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
           {error.message}
         </p>
       )}
-      {certs && certs.length === 0 && <p className="mt-2 text-sm text-slate-500">No certificates on file.</p>}
+      {certs && certs.length === 0 && <p className="mt-2 text-sm text-muted">No certificates on file.</p>}
       {certs && certs.length > 0 && (
         <ul className="mt-2 space-y-1">
           {certs.map((c) => {
             const badge = expiryBadge(c.expiry_date)
             return (
-              <li key={c.id} className="flex items-center justify-between rounded border border-slate-200 px-2 py-1 text-sm">
+              <li key={c.id} className="flex items-center justify-between rounded border border-hairline px-2 py-1 text-sm">
                 <span>
                   {certTypes?.find((t) => t.id === c.certificate_type_id)?.name ?? c.certificate_type_id}
                   {c.certificate_no ? ` — ${c.certificate_no}` : ''}
                 </span>
                 <span className="flex items-center gap-2">
                   {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
-                  <span className="text-xs text-slate-500">{c.status}</span>
+                  <span className="text-xs text-muted">{c.status}</span>
                   {canWrite && c.status !== 'valid' && (
                     <button
                       type="button"
                       disabled={verifyCertificate.isPending}
                       onClick={() => verifyCertificate.mutate(c.id)}
-                      className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      className="rounded-pill border border-brand px-2 py-0.5 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Verify
                     </button>
@@ -103,7 +103,7 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
 
       {canWrite && (
         <form
-          className="mt-3 flex flex-wrap items-end gap-2 rounded border border-slate-200 p-2"
+          className="mt-3 flex flex-wrap items-end gap-2 rounded border border-hairline p-2"
           onSubmit={(e) => {
             e.preventDefault()
             if (!certTypeId) return
@@ -114,7 +114,7 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
           }}
         >
           <div>
-            <label htmlFor={certTypeSelectId} className="block text-xs text-slate-500">
+            <label htmlFor={certTypeSelectId} className="mb-1 block text-sm text-ink">
               Certificate type
             </label>
             <select
@@ -122,7 +122,7 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
               required
               value={certTypeId}
               onChange={(e) => setCertTypeId(e.target.value)}
-              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="mt-0.5 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             >
               <option value="">-- Certificate type --</option>
               {(certTypes ?? []).map((t) => (
@@ -133,7 +133,7 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
             </select>
           </div>
           <div>
-            <label htmlFor={expiryDateId} className="block text-xs text-slate-500">
+            <label htmlFor={expiryDateId} className="mb-1 block text-sm text-ink">
               Expiry date
             </label>
             <input
@@ -141,13 +141,13 @@ function CertificatesSection({ vendorId, canWrite }: { vendorId: string; canWrit
               type="date"
               value={expiryDate}
               onChange={(e) => setExpiryDate(e.target.value)}
-              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="mt-0.5 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
           </div>
           <button
             type="submit"
             disabled={addCertificate.isPending}
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Add certificate
           </button>
@@ -171,15 +171,15 @@ function PrequalificationSection({ vendorId, canWrite }: { vendorId: string; can
 
   return (
     <div className="mt-6">
-      <h2 className="text-sm font-semibold text-slate-800">Prequalification (as of {today})</h2>
+      <h2 className="text-lg font-semibold text-ink-title">Prequalification (as of {today})</h2>
       {prequal && (
-        <p className="mt-1 text-sm text-slate-700">
+        <p className="mt-1 text-sm text-ink">
           Status: <span className="font-medium">{prequal.status}</span>
           {prequal.grade && ` · Grade ${prequal.grade}`}
         </p>
       )}
       {isError && (
-        <p className="mt-1 text-sm text-slate-500">
+        <p className="mt-1 text-sm text-muted">
           No decision on file as of today{error instanceof Error ? ` (${error.message})` : ''}.
         </p>
       )}
@@ -192,14 +192,14 @@ function PrequalificationSection({ vendorId, canWrite }: { vendorId: string; can
           }}
         >
           <div>
-            <label htmlFor={statusSelectId} className="block text-xs text-slate-500">
+            <label htmlFor={statusSelectId} className="mb-1 block text-sm text-ink">
               Decision
             </label>
             <select
               id={statusSelectId}
               value={status}
               onChange={(e) => setStatus(e.target.value)}
-              className="mt-0.5 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="mt-0.5 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             >
               <option value="approved">Approved</option>
               <option value="suspended">Suspended</option>
@@ -209,7 +209,7 @@ function PrequalificationSection({ vendorId, canWrite }: { vendorId: string; can
           <button
             type="submit"
             disabled={decide.isPending}
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
             Record decision (effective today)
           </button>
@@ -236,7 +236,7 @@ export function VendorDetailPage() {
   const backLink = (
     <Link
       to="/vendors"
-      className="rounded text-sm text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+      className="rounded text-sm text-muted hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
     >
       ← Vendors
     </Link>
@@ -244,7 +244,7 @@ export function VendorDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6">
+      <div className="px-6 py-6 xl:px-10">
         {backLink}
         <div className="mt-4">
           <SkeletonRows count={5} />
@@ -254,7 +254,7 @@ export function VendorDetailPage() {
   }
   if (isError) {
     return (
-      <div className="p-6">
+      <div className="px-6 py-6 xl:px-10">
         {backLink}
         <p role="alert" className="mt-4 text-danger">
           {error.message}
@@ -265,7 +265,7 @@ export function VendorDetailPage() {
   if (!vendor) return null
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       {backLink}
       <div className="mt-2 flex items-center justify-between">
         <PageTitle>{vendor.legal_name}</PageTitle>
@@ -274,14 +274,14 @@ export function VendorDetailPage() {
             type="button"
             disabled={scanDuplicates.isPending}
             onClick={() => scanDuplicates.mutate()}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-pill border border-brand px-4 py-1.5 text-sm text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Scan for duplicates
           </button>
         )}
       </div>
       {scanDuplicates.isSuccess && (
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 text-sm text-ink-2">
           {scanDuplicates.data.length === 0
             ? 'No new duplicate candidates found.'
             : `${scanDuplicates.data.length} candidate(s) found — see Vendor duplicate review.`}
@@ -294,26 +294,26 @@ export function VendorDetailPage() {
       )}
 
       <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-        <dt className="text-slate-500">Trade license</dt>
+        <dt className="text-muted">Trade license</dt>
         <dd>{vendor.trade_license_no ?? '--'}</dd>
-        <dt className="text-slate-500">License authority</dt>
+        <dt className="text-muted">License authority</dt>
         <dd>{vendor.license_authority ?? '--'}</dd>
-        <dt className="text-slate-500">TRN/VAT</dt>
+        <dt className="text-muted">TRN/VAT</dt>
         <dd>{vendor.trn_vat_no ?? '--'}</dd>
-        <dt className="text-slate-500">Emirate</dt>
+        <dt className="text-muted">Emirate</dt>
         <dd>{vendor.emirate ?? '--'}</dd>
-        <dt className="text-slate-500">Email</dt>
+        <dt className="text-muted">Email</dt>
         <dd>{vendor.primary_email ?? '--'}</dd>
-        <dt className="text-slate-500">Phone</dt>
+        <dt className="text-muted">Phone</dt>
         <dd>{vendor.primary_phone ?? '--'}</dd>
-        <dt className="text-slate-500">Status</dt>
+        <dt className="text-muted">Status</dt>
         <dd>
           <Badge tone={VENDOR_STATUS_TONE[vendor.status] ?? 'neutral'}>{vendor.status}</Badge>
         </dd>
-        <dt className="text-slate-500">Service regions</dt>
+        <dt className="text-muted">Service regions</dt>
         <dd>{regions && regions.length > 0 ? regions.join(', ') : '--'}</dd>
       </dl>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-xs text-muted">
         Service regions are edited from Admin → Vendor service regions.
       </p>
 

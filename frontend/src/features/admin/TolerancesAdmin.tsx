@@ -19,7 +19,7 @@ export function TolerancesAdmin() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-slate-800">BOQ reconciliation tolerances</h2>
+      <h2 className="text-lg font-semibold text-ink-title">BOQ reconciliation tolerances</h2>
       <label htmlFor="tolerances-project" className="sr-only">
         Project
       </label>
@@ -27,7 +27,7 @@ export function TolerancesAdmin() {
         id="tolerances-project"
         value={projectId}
         onChange={(e) => setProjectId(e.target.value)}
-        className="mt-2 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mt-2 rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       >
         <option value="">-- Project --</option>
         {(projects ?? []).map((p) => (
@@ -37,7 +37,7 @@ export function TolerancesAdmin() {
 
       {projectId && (
         <>
-          <ul className="mt-2 text-sm text-slate-600">
+          <ul className="mt-2 text-sm text-ink-2">
             {(tolerances ?? []).map((t) => (
               <li key={t.id}>
                 {t.trade_node_id ? `Trade ${t.trade_node_id.slice(0, 8)}` : 'Project default'}:{' '}
@@ -63,17 +63,17 @@ export function TolerancesAdmin() {
                 placeholder="Project default tolerance %"
                 value={pct}
                 onChange={(e) => setPct(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                className="rounded-control border border-outline px-3 py-2 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
               />
               <button
                 type="submit"
-                className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
               >
                 Set default
               </button>
             </form>
           ) : (
-            <p className="mt-2 text-xs text-slate-500">Your role can view tolerances but not change them.</p>
+            <p className="mt-2 text-xs text-muted">Your role can view tolerances but not change them.</p>
           )}
           {setTolerance.isError && (
             <p role="alert" className="mt-1 text-sm text-danger">

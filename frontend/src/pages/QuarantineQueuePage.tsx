@@ -7,6 +7,7 @@ import { useAttachInboundEmail, useDismissInboundEmail, useInboundReviewQueue, u
 import { Role } from '../lib/roles'
 import type { InboundEmailOut } from '../types/api'
 import { PageTitle } from '../components/PageTitle'
+import { Table, TableCard, Td, Th } from '../components/Table'
 
 type OpenPrompt = { kind: 'resolve-tenant' | 'attach' | 'dismiss'; email: InboundEmailOut; extra: string } | null
 
@@ -23,7 +24,7 @@ const AUTH_RESULT_TONE: Record<string, BadgeTone> = {
 function AuthResultBadge({ label, value }: { label: string; value: string }) {
   return (
     <span className="inline-flex items-center gap-1">
-      <span className="text-xs text-slate-600">{label}</span>
+      <span className="text-xs text-ink-2">{label}</span>
       <Badge tone={AUTH_RESULT_TONE[value] ?? 'neutral'}>{value}</Badge>
     </span>
   )
@@ -43,18 +44,18 @@ function ReviewRow({
   const rfqIdInputId = useId()
 
   return (
-    <tr className="border-b border-slate-100 hover:bg-slate-50">
-      <td className="py-2">{email.from_address}</td>
-      <td>{email.subject ?? '--'}</td>
-      <td>{email.review_reasons.join(', ')}</td>
-      <td>
+    <tr className="border-b border-row-rule hover:bg-canvas">
+      <Td>{email.from_address}</Td>
+      <Td>{email.subject ?? '--'}</Td>
+      <Td>{email.review_reasons.join(', ')}</Td>
+      <Td>
         <span className="flex flex-wrap items-center gap-2">
           <AuthResultBadge label="SPF" value={email.spf_result} />
           <AuthResultBadge label="DKIM" value={email.dkim_result} />
           <AuthResultBadge label="DMARC" value={email.dmarc_result} />
         </span>
-      </td>
-      <td className="space-y-1 py-2">
+      </Td>
+      <Td className="space-y-1">
         {hasRole(Role.PLATFORM_ADMIN) && !email.tenant_id && (
           <div className="flex gap-1">
             <label htmlFor={tenantIdInputId} className="sr-only">
@@ -65,12 +66,12 @@ function ReviewRow({
               placeholder="Tenant ID"
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              className="w-40 rounded border border-slate-300 px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-40 rounded-lg border border-outline px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
             <button
               type="button"
               onClick={() => onOpenPrompt('resolve-tenant', email, tenantId)}
-              className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
             >
               Resolve tenant
             </button>
@@ -85,12 +86,12 @@ function ReviewRow({
             placeholder="RFQ ID"
             value={rfqId}
             onChange={(e) => setRfqId(e.target.value)}
-            className="w-40 rounded border border-slate-300 px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="w-40 rounded-lg border border-outline px-1 py-0.5 text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <button
             type="button"
             onClick={() => onOpenPrompt('attach', email, rfqId)}
-            className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Attach to RFQ
           </button>
@@ -102,7 +103,7 @@ function ReviewRow({
         >
           Dismiss
         </button>
-      </td>
+      </Td>
     </tr>
   )
 }
@@ -123,15 +124,15 @@ export function QuarantineQueuePage() {
 
   if (!hasRole(...PAGE_ROLES)) {
     return (
-      <div className="p-6">
+      <div className="px-6 py-6 xl:px-10">
         <PageTitle>Quarantine and review queue</PageTitle>
-        <p className="mt-2 text-sm text-slate-500">You don't have access to this page.</p>
+        <p className="mt-2 text-sm text-muted">You don't have access to this page.</p>
       </div>
     )
   }
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <PageTitle>Quarantine and review queue</PageTitle>
       {isLoading && (
         <div className="mt-4">
@@ -143,28 +144,30 @@ export function QuarantineQueuePage() {
           {error.message}
         </p>
       )}
-      {queue && queue.length === 0 && <p className="mt-4 text-sm text-slate-500">Nothing needs review.</p>}
+      {queue && queue.length === 0 && <p className="mt-4 text-sm text-muted">Nothing needs review.</p>}
       {queue && queue.length > 0 && (
-        <table className="mt-4 w-full text-left text-sm">
-          <thead className="border-b border-slate-200 text-slate-500">
-            <tr>
-              <th className="py-2 font-medium">From</th>
-              <th className="font-medium">Subject</th>
-              <th className="font-medium">Reasons</th>
-              <th className="font-medium">SPF/DKIM/DMARC</th>
-              <th className="font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {queue.map((email) => (
-              <ReviewRow
-                key={email.id}
-                email={email}
-                onOpenPrompt={(kind, email, extra) => setOpenPrompt({ kind, email, extra })}
-              />
-            ))}
-          </tbody>
-        </table>
+        <TableCard>
+          <Table density="comfortable" className="mt-4">
+            <thead className="border-b border-hairline text-muted">
+              <tr>
+                <Th>From</Th>
+                <Th>Subject</Th>
+                <Th>Reasons</Th>
+                <Th>SPF/DKIM/DMARC</Th>
+                <Th>Actions</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {queue.map((email) => (
+                <ReviewRow
+                  key={email.id}
+                  email={email}
+                  onOpenPrompt={(kind, email, extra) => setOpenPrompt({ kind, email, extra })}
+                />
+              ))}
+            </tbody>
+          </Table>
+        </TableCard>
       )}
       {/* These three mutations previously had no isError display at all --
           the same gap already fixed on every other mutation in Phases 2-3

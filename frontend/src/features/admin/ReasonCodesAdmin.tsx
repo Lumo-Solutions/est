@@ -17,7 +17,7 @@ export function ReasonCodesAdmin() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-slate-800">Win/loss reason codes</h2>
+      <h2 className="text-lg font-semibold text-ink-title">Win/loss reason codes</h2>
       {canWrite ? (
         <form
           className="mt-2 flex items-end gap-2"
@@ -32,7 +32,7 @@ export function ReasonCodesAdmin() {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             required
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <input
             aria-label="Label"
@@ -40,17 +40,17 @@ export function ReasonCodesAdmin() {
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             required
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <button
             type="submit"
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Add
           </button>
         </form>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">Your role can view reason codes but not add or change them.</p>
+        <p className="mt-2 text-xs text-muted">Your role can view reason codes but not add or change them.</p>
       )}
       {createCode.isError && (
         <p role="alert" className="mt-1 text-sm text-danger">
@@ -63,29 +63,31 @@ export function ReasonCodesAdmin() {
         </p>
       )}
 
-      <table className="mt-4 w-full text-left text-sm">
-        <thead className="border-b border-slate-200 font-medium text-slate-500">
-          <tr><th className="py-2">Code</th><th>Label</th><th>Active</th></tr>
-        </thead>
-        <tbody>
-          {(codes ?? []).map((c) => (
-            <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50">
-              <td className="py-2">{c.code}</td>
-              <td>{c.label}</td>
-              <td>
-                <input
-                  type="checkbox"
-                  aria-label={`${c.label} active`}
-                  checked={c.is_active}
-                  disabled={!canWrite}
-                  onChange={(e) => updateCode.mutate({ id: c.id, data: { is_active: e.target.checked } })}
-                  className="accent-brand"
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto rounded-card bg-white p-2">
+        <table className="mt-4 w-full text-left text-sm">
+          <thead className="border-b border-hairline font-medium text-muted">
+            <tr><th className="py-2">Code</th><th>Label</th><th>Active</th></tr>
+          </thead>
+          <tbody>
+            {(codes ?? []).map((c) => (
+              <tr key={c.id} className="border-b border-row-rule hover:bg-canvas">
+                <td className="py-2">{c.code}</td>
+                <td>{c.label}</td>
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`${c.label} active`}
+                    checked={c.is_active}
+                    disabled={!canWrite}
+                    onChange={(e) => updateCode.mutate({ id: c.id, data: { is_active: e.target.checked } })}
+                    className="accent-brand"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

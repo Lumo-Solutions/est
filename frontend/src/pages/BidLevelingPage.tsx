@@ -26,14 +26,14 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
   const { data: flags } = useQuotationExclusionFlags(quotationId)
   const acknowledge = useAcknowledgeExclusionFlag(quotationId)
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">Exclusion flags and citations</h3>
-      {flags && flags.length === 0 && <p className="mt-1 text-sm text-slate-500">None flagged.</p>}
+    <div className="mt-4 border-t border-hairline pt-4">
+      <h3 className="text-lg font-semibold text-ink-title">Exclusion flags and citations</h3>
+      {flags && flags.length === 0 && <p className="mt-1 text-sm text-muted">None flagged.</p>}
       <ul className="mt-1 space-y-2">
         {(flags ?? []).map((f) => (
-          <li key={f.id} className="rounded border border-warning-subtle bg-warning-subtle p-2 text-sm">
+          <li key={f.id} className="rounded-control border border-warning-subtle bg-warning-subtle p-2 text-sm">
             <p className="font-medium text-amber-900">{f.flag_text}</p>
-            <p className="mt-1 text-xs text-slate-600">
+            <p className="mt-1 text-xs text-ink-2">
               "{f.source_quote_text}" {f.source_location && `(${f.source_location})`}
             </p>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -48,7 +48,7 @@ function ExclusionFlagsPanel({ quotationId }: { quotationId: string }) {
                   type="button"
                   disabled={acknowledge.isPending}
                   onClick={() => acknowledge.mutate(f.id)}
-                  className="rounded text-slate-500 underline hover:text-slate-800 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                  className="rounded text-muted underline hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                 >
                   Acknowledge
                 </button>
@@ -77,13 +77,13 @@ export function BidLevelingPage() {
   const totalsByQuotation = new Map((totals ?? []).map((t) => [t.quotation_id, t]))
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <PageTitle>Bid-leveling matrix</PageTitle>
       <select
         aria-label="Package"
         value={packageId ?? ''}
         onChange={(e) => setPackageId(e.target.value || null)}
-        className="mt-4 rounded border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        className="mt-4 rounded-lg border border-outline px-2 py-1 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
       >
         <option value="">-- Package --</option>
         {(packages ?? []).map((p) => (
@@ -94,53 +94,55 @@ export function BidLevelingPage() {
       </select>
 
       {packageId && rows && rows.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No bid-leveling rows for this package yet.</p>
+        <p className="mt-4 text-sm text-muted">No bid-leveling rows for this package yet.</p>
       )}
 
       {rows && rows.length > 0 && (
-        <table className="mt-4 w-full text-left text-sm">
-          <thead className="border-b border-slate-200 text-slate-500">
-            <tr>
-              <th className="py-2 font-medium">BOQ item</th>
-              <th className="font-medium">Vendor cells</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.boq_line_item_id} className="border-b border-slate-100 align-top hover:bg-slate-50">
-                <td className="py-2">{row.boq_line_item_id.slice(0, 8)}</td>
-                <td className="flex flex-wrap gap-2 py-2">
-                  {row.cells.map((cell) => {
-                    const total = totalsByQuotation.get(cell.quotation_id)
-                    return (
-                      <button
-                        key={cell.quotation_id}
-                        type="button"
-                        onClick={() => setSelectedQuotationId(cell.quotation_id)}
-                        className={`rounded border px-2 py-1 text-left text-xs tabular-nums transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
-                          cell.quotation_id === selectedQuotationId
-                            ? 'border-brand bg-brand-subtle'
-                            : 'border-slate-200 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div>
-                          {formatMoney(cell.unit_price, cell.currency)}
-                          {cell.normalized_unit_price != null && (
-                            <div className="text-slate-500">norm: {formatMoney(cell.normalized_unit_price, cell.currency)}</div>
-                          )}
-                        </div>
-                        {(cell.arithmetic_mismatch || cell.quantity_mismatch || cell.uom_mismatch) && (
-                          <div className="text-danger">mismatch</div>
-                        )}
-                        {total?.total_mismatch && <div className="text-danger">total mismatch</div>}
-                      </button>
-                    )
-                  })}
-                </td>
+        <div className="overflow-x-auto rounded-card bg-white p-2">
+          <table className="mt-4 w-full text-left text-sm">
+            <thead className="border-b border-hairline text-muted">
+              <tr>
+                <th className="py-2 font-medium">BOQ item</th>
+                <th className="font-medium">Vendor cells</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.boq_line_item_id} className="border-b border-row-rule align-top hover:bg-canvas">
+                  <td className="py-2">{row.boq_line_item_id.slice(0, 8)}</td>
+                  <td className="flex flex-wrap gap-2 py-2">
+                    {row.cells.map((cell) => {
+                      const total = totalsByQuotation.get(cell.quotation_id)
+                      return (
+                        <button
+                          key={cell.quotation_id}
+                          type="button"
+                          onClick={() => setSelectedQuotationId(cell.quotation_id)}
+                          className={`rounded border px-2 py-1 text-left text-xs tabular-nums transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${
+                            cell.quotation_id === selectedQuotationId
+                              ? 'border-brand bg-brand-subtle'
+                              : 'border-hairline hover:bg-canvas'
+                          }`}
+                        >
+                          <div>
+                            {formatMoney(cell.unit_price, cell.currency)}
+                            {cell.normalized_unit_price != null && (
+                              <div className="text-muted">norm: {formatMoney(cell.normalized_unit_price, cell.currency)}</div>
+                            )}
+                          </div>
+                          {(cell.arithmetic_mismatch || cell.quantity_mismatch || cell.uom_mismatch) && (
+                            <div className="text-danger">mismatch</div>
+                          )}
+                          {total?.total_mismatch && <div className="text-danger">total mismatch</div>}
+                        </button>
+                      )
+                    })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {selectedQuotationId && <ExclusionFlagsPanel quotationId={selectedQuotationId} />}

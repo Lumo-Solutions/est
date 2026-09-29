@@ -49,12 +49,12 @@ function Tile({
   children: React.ReactNode
 }) {
   return (
-    <div className="rounded border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-800">
+    <div className="rounded-card bg-white p-5">
+      <h2 className="text-lg font-semibold text-ink-title">
         {/* text-slate-400 measured 2.63:1 via axe on the sidebar's own
             section label in an earlier Phase 4 chunk (AppShell) -- same
             failure mode here, same fix. */}
-        {title} {!isLoading && !isError && <span className="text-slate-600">({count})</span>}
+        {title} {!isLoading && !isError && <span className="text-ink-2">({count})</span>}
       </h2>
       {isLoading && (
         <div className="mt-2">
@@ -66,7 +66,7 @@ function Tile({
           {errorMessage ?? 'Failed to load.'}
         </p>
       )}
-      {!isLoading && !isError && count === 0 && <p className="mt-2 text-sm text-slate-500">{emptyLabel}</p>}
+      {!isLoading && !isError && count === 0 && <p className="mt-2 text-sm text-muted">{emptyLabel}</p>}
       {!isLoading && !isError && count > 0 && <ul className="mt-2 space-y-1 text-sm">{children}</ul>}
     </div>
   )
@@ -88,7 +88,7 @@ function ApprovalsTile() {
           <span>
             {r.entity_type} -- {formatMoney(r.amount, r.currency)}
           </span>
-          <span className="text-xs text-slate-500">step {r.current_seq}</span>
+          <span className="text-xs text-muted">step {r.current_seq}</span>
         </li>
       ))}
     </Tile>
@@ -110,7 +110,7 @@ function QuarantineTile() {
         <li key={e.id}>
           <Link
             to="/projects"
-            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {e.subject ?? e.from_address}
           </Link>
@@ -135,7 +135,7 @@ function VendorDuplicatesTile() {
         <li key={d.id}>
           <Link
             to="/vendors/duplicates"
-            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Candidate pair (score {d.score.toFixed(2)})
           </Link>
@@ -160,11 +160,11 @@ function ExpiringCertificatesTile() {
         <li key={c.id}>
           <Link
             to={`/vendors/${c.vendor_id}`}
-            className="rounded text-slate-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             {c.vendor_name}
           </Link>{' '}
-          <span className="text-xs text-slate-500">expires {c.expiry_date}</span>
+          <span className="text-xs text-muted">expires {c.expiry_date}</span>
         </li>
       ))}
     </Tile>
@@ -179,12 +179,12 @@ export function HomeDashboardPage() {
   const showAnyTile = showApprovals || showVendorManagement || showQuarantine
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <PageTitle>Dashboard</PageTitle>
-      <p className="mt-1 text-sm text-slate-500">What needs your attention.</p>
+      <p className="mt-1 text-sm text-muted">What needs your attention.</p>
 
       {!showAnyTile && (
-        <p className="mt-4 text-sm text-slate-500">
+        <p className="mt-4 text-sm text-muted">
           Nothing project-independent needs your attention right now -- check{' '}
           <Link
             to="/"

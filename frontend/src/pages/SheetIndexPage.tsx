@@ -36,23 +36,23 @@ export function SheetIndexPage() {
   const retryIngest = useRetryIngest(projectId, drawingId)
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <Link
         to={`/projects/${projectId}`}
-        className="rounded text-sm text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="rounded text-sm text-muted hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         ← Back to project
       </Link>
       <PageTitle>{drawing?.original_filename ?? 'Sheets'}</PageTitle>
       {drawing && (
-        <p className="mt-1 flex items-center gap-2 text-sm text-slate-500">
+        <p className="mt-1 flex items-center gap-2 text-sm text-muted">
           Status: <Badge tone={STATUS_TONE[drawing.status] ?? 'neutral'}>{drawing.status}</Badge>
           {(drawing.status === 'failed' || drawing.status === 'partial') && hasRole(..._RETRY_ROLES) && (
             <button
               type="button"
               onClick={() => retryIngest.mutate()}
               disabled={retryIngest.isPending}
-              className="rounded text-xs text-slate-500 underline hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+              className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
             >
               {retryIngest.isPending ? 'Retrying…' : 'Retry extraction'}
             </button>
@@ -80,57 +80,59 @@ export function SheetIndexPage() {
         </p>
       )}
       {sheets && sheets.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">
+        <p className="mt-4 text-sm text-muted">
           No sheets indexed yet -- extraction may still be running.
         </p>
       )}
       {sheets && sheets.length > 0 && (
-        <table className="mt-4 w-full text-left text-sm">
-          <thead className="border-b border-slate-200 text-slate-500">
-            <tr>
-              <th className="py-2 font-medium">#</th>
-              <th className="font-medium">Drawing no.</th>
-              <th className="font-medium">Title</th>
-              <th className="font-medium">Revision</th>
-              <th className="font-medium">Discipline</th>
-              <th className="font-medium">Scale</th>
-              <th className="font-medium">Extraction</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sheets.map((s) => (
-              <tr key={s.id} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="py-2">
-                  <Link
-                    to={`/projects/${projectId}/drawings/${drawingId}/sheets/${s.sheet_index}`}
-                    className="rounded text-slate-800 tabular-nums hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
-                  >
-                    {s.sheet_index + 1}
-                  </Link>
-                </td>
-                <td>{s.drawing_number ?? '--'}</td>
-                <td>{s.sheet_title ?? s.source_name ?? '--'}</td>
-                <td>{s.revision ?? '--'}</td>
-                <td>{s.discipline ?? '--'}</td>
-                <td className="tabular-nums">
-                  {s.scale_text ?? (s.scale_ratio ? `1:${Math.round(1 / s.scale_ratio)}` : '--')}
-                  {s.scale_disagreement && (
-                    <span className="ml-1 text-warning" title="Scale sources disagree">
-                      ⚠
-                    </span>
-                  )}
-                </td>
-                <td>
-                  {s.extraction_status ? (
-                    <Badge tone={STATUS_TONE[s.extraction_status] ?? 'neutral'}>{s.extraction_status}</Badge>
-                  ) : (
-                    '--'
-                  )}
-                </td>
+        <div className="overflow-x-auto rounded-card bg-white p-2">
+          <table className="mt-4 w-full text-left text-sm">
+            <thead className="border-b border-hairline text-muted">
+              <tr>
+                <th className="py-2 font-medium">#</th>
+                <th className="font-medium">Drawing no.</th>
+                <th className="font-medium">Title</th>
+                <th className="font-medium">Revision</th>
+                <th className="font-medium">Discipline</th>
+                <th className="font-medium">Scale</th>
+                <th className="font-medium">Extraction</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sheets.map((s) => (
+                <tr key={s.id} className="border-b border-row-rule hover:bg-canvas">
+                  <td className="py-2">
+                    <Link
+                      to={`/projects/${projectId}/drawings/${drawingId}/sheets/${s.sheet_index}`}
+                      className="rounded text-ink tabular-nums hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                    >
+                      {s.sheet_index + 1}
+                    </Link>
+                  </td>
+                  <td>{s.drawing_number ?? '--'}</td>
+                  <td>{s.sheet_title ?? s.source_name ?? '--'}</td>
+                  <td>{s.revision ?? '--'}</td>
+                  <td>{s.discipline ?? '--'}</td>
+                  <td className="tabular-nums">
+                    {s.scale_text ?? (s.scale_ratio ? `1:${Math.round(1 / s.scale_ratio)}` : '--')}
+                    {s.scale_disagreement && (
+                      <span className="ml-1 text-warning" title="Scale sources disagree">
+                        ⚠
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    {s.extraction_status ? (
+                      <Badge tone={STATUS_TONE[s.extraction_status] ?? 'neutral'}>{s.extraction_status}</Badge>
+                    ) : (
+                      '--'
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

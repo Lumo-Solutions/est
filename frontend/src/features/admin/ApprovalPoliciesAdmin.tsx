@@ -27,18 +27,18 @@ export function ApprovalPoliciesAdmin() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-slate-800">Approval policies</h2>
-      <p className="mt-1 text-xs text-slate-500">
+      <h2 className="text-lg font-semibold text-ink-title">Approval policies</h2>
+      <p className="mt-1 text-xs text-muted">
         Who has authority to approve what -- managing_director only. A new version never auto-deactivates the
         prior one; deactivate it explicitly below once the new one is ready.
       </p>
 
       {!canWrite && (
-        <p className="mt-2 text-xs text-slate-500">Your role can view policies but not create or (de)activate them.</p>
+        <p className="mt-2 text-xs text-muted">Your role can view policies but not create or (de)activate them.</p>
       )}
       {canWrite && (
       <form
-        className="mt-3 rounded border border-slate-200 p-3"
+        className="mt-3 rounded-card p-5 bg-white"
         onSubmit={(e) => {
           e.preventDefault()
           createPolicy.mutate(
@@ -60,7 +60,7 @@ export function ApprovalPoliciesAdmin() {
             value={entityType}
             onChange={(e) => setEntityType(e.target.value)}
             required
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
           <input
             aria-label="Policy name"
@@ -68,10 +68,10 @@ export function ApprovalPoliciesAdmin() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
           />
         </div>
-        <h3 className="mt-2 text-xs font-semibold uppercase text-slate-500">Tiers</h3>
+        <h3 className="mt-2 text-xs font-semibold uppercase text-muted">Tiers</h3>
         {tiers.map((tier, i) => (
           <div key={i} className="mt-1 flex items-end gap-2">
             <input
@@ -80,7 +80,7 @@ export function ApprovalPoliciesAdmin() {
               placeholder="Min amount"
               value={tier.min_amount ?? 0}
               onChange={(e) => setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, min_amount: Number(e.target.value) } : t)))}
-              className="w-32 rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-32 rounded-control border border-outline px-3 py-2 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
             <input
               type="number"
@@ -88,13 +88,13 @@ export function ApprovalPoliciesAdmin() {
               placeholder="Max amount (blank = open)"
               value={tier.max_amount ?? ''}
               onChange={(e) => setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, max_amount: e.target.value ? Number(e.target.value) : null } : t)))}
-              className="w-40 rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="w-40 rounded-control border border-outline px-3 py-2 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             />
             <select
               aria-label={`Tier ${i + 1} required role`}
               value={tier.required_role}
               onChange={(e) => setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, required_role: e.target.value } : t)))}
-              className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              className="rounded-control border border-outline px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand text-ink"
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>{r}</option>
@@ -113,7 +113,7 @@ export function ApprovalPoliciesAdmin() {
           <button
             type="submit"
             disabled={createPolicy.isPending}
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             Create new version
           </button>
@@ -126,43 +126,45 @@ export function ApprovalPoliciesAdmin() {
       </form>
       )}
 
-      <table className="mt-4 w-full text-left text-sm">
-        <thead className="border-b border-slate-200 font-medium text-slate-500">
-          <tr>
-            <th className="py-2">Entity type</th>
-            <th>Name</th>
-            <th>Version</th>
-            <th>Mode</th>
-            <th>Tiers</th>
-            <th>Active</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(policies ?? []).map((p) => (
-            <tr key={p.id} className="border-b border-slate-100 align-top hover:bg-slate-50">
-              <td className="py-2">{p.entity_type}</td>
-              <td>{p.name}</td>
-              <td className="tabular-nums">v{p.version}</td>
-              <td>{p.mode}</td>
-              <td className="text-xs">
-                {p.tiers
-                  .map((t) => `${formatMoney(t.min_amount)}-${t.max_amount === null ? '∞' : formatMoney(t.max_amount)}: ${t.required_role}`)
-                  .join('; ')}
-              </td>
-              <td>
-                <input
-                  type="checkbox"
-                  aria-label={`${p.entity_type} v${p.version} active`}
-                  checked={p.is_active}
-                  disabled={!canWrite}
-                  onChange={(e) => setActive.mutate({ policyId: p.id, data: { is_active: e.target.checked } })}
-                  className="accent-brand"
-                />
-              </td>
+      <div className="overflow-x-auto rounded-card bg-white p-2">
+        <table className="mt-4 w-full text-left text-sm">
+          <thead className="border-b border-hairline font-medium text-muted">
+            <tr>
+              <th className="py-2">Entity type</th>
+              <th>Name</th>
+              <th>Version</th>
+              <th>Mode</th>
+              <th>Tiers</th>
+              <th>Active</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(policies ?? []).map((p) => (
+              <tr key={p.id} className="border-b border-row-rule align-top hover:bg-canvas">
+                <td className="py-2">{p.entity_type}</td>
+                <td>{p.name}</td>
+                <td className="tabular-nums">v{p.version}</td>
+                <td>{p.mode}</td>
+                <td className="text-xs">
+                  {p.tiers
+                    .map((t) => `${formatMoney(t.min_amount)}-${t.max_amount === null ? '∞' : formatMoney(t.max_amount)}: ${t.required_role}`)
+                    .join('; ')}
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`${p.entity_type} v${p.version} active`}
+                    checked={p.is_active}
+                    disabled={!canWrite}
+                    onChange={(e) => setActive.mutate({ policyId: p.id, data: { is_active: e.target.checked } })}
+                    className="accent-brand"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {setActive.isError && (
         <p role="alert" className="mt-1 text-sm text-danger">
           {setActive.error.message}

@@ -14,16 +14,16 @@ export function VendorDuplicatesPage() {
   const resolve = useResolveDuplicate()
 
   return (
-    <div className="p-6">
+    <div className="px-6 py-6 xl:px-10">
       <Link
         to="/vendors"
-        className="rounded text-sm text-slate-500 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        className="rounded text-sm text-muted hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
       >
         ← Vendors
       </Link>
       <PageTitle>Vendor duplicate review</PageTitle>
       {!canWrite && (
-        <p className="mt-1 text-xs text-slate-500">Your role can view candidates but not resolve them.</p>
+        <p className="mt-1 text-xs text-muted">Your role can view candidates but not resolve them.</p>
       )}
       {isLoading && (
         <div className="mt-4">
@@ -36,24 +36,24 @@ export function VendorDuplicatesPage() {
         </p>
       )}
       {candidates && candidates.length === 0 && (
-        <p className="mt-4 text-slate-500">No open duplicate candidates.</p>
+        <p className="mt-4 text-muted">No open duplicate candidates.</p>
       )}
       {candidates && candidates.length > 0 && (
         <ul className="mt-4 space-y-3">
           {candidates.map((c) => (
-            <li key={c.id} className="rounded border border-slate-200 p-3">
+            <li key={c.id} className="rounded-card p-5 bg-white">
               <div className="flex items-center justify-between">
                 <div className="text-sm">
                   <Link
                     to={`/vendors/${c.vendor_a_id}`}
-                    className="rounded text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                    className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                   >
                     Vendor A
                   </Link>{' '}
                   vs{' '}
                   <Link
                     to={`/vendors/${c.vendor_b_id}`}
-                    className="rounded text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                    className="rounded text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                   >
                     Vendor B
                   </Link>{' '}
@@ -67,7 +67,7 @@ export function VendorDuplicatesPage() {
                       onClick={() =>
                         resolve.mutate({ candidateId: c.id, data: { resolution: 'confirmed_duplicate' } })
                       }
-                      className="rounded border border-red-300 px-2 py-1 text-xs text-danger transition-colors duration-150 hover:bg-red-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      className="rounded-pill border border-red-700 px-2 py-1 text-xs text-danger transition-colors duration-150 hover:bg-danger-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Confirm duplicate
                     </button>
@@ -75,7 +75,7 @@ export function VendorDuplicatesPage() {
                       type="button"
                       disabled={resolve.isPending}
                       onClick={() => resolve.mutate({ candidateId: c.id, data: { resolution: 'not_duplicate' } })}
-                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      className="rounded-pill border border-brand px-2 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Not a duplicate
                     </button>
@@ -83,7 +83,7 @@ export function VendorDuplicatesPage() {
                       type="button"
                       disabled={resolve.isPending}
                       onClick={() => resolve.mutate({ candidateId: c.id, data: { resolution: 'merged' } })}
-                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition-colors duration-150 hover:bg-slate-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                      className="rounded-pill border border-brand px-2 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-subtle disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
                     >
                       Merged
                     </button>
@@ -91,7 +91,7 @@ export function VendorDuplicatesPage() {
                 )}
               </div>
               {c.signals && (
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-xs text-muted">
                   {Object.entries(c.signals)
                     .map(([k, v]) => `${k}: ${Math.round(v * 100)}%`)
                     .join(', ')}

@@ -16,14 +16,21 @@ export function TabBar({
   onChange,
   label,
   idPrefix,
+  pattern = 'tabs',
 }: {
   tabs: TabItem[]
   value: string
   onChange: (id: string) => void
   label: string
   // Panels carry id={`${idPrefix}-panel-${tab.id}`} and
-  // aria-labelledby={`${idPrefix}-tab-${tab.id}`}.
+  // aria-labelledby={`${idPrefix}-tab-${tab.id}`} (pattern 'tabs' only).
   idPrefix: string
+  // 'tabs' = full WAI-ARIA tabs (role=tab, roving tabindex, arrow keys).
+  // 'buttons' = same Figma look but plain buttons in a <nav> with
+  // aria-current -- for the pages whose existing e2e specs locate the tabs
+  // with getByRole('button', { name }); upgrading those to role=tab means
+  // updating the specs in the same change.
+  pattern?: 'tabs' | 'buttons'
 }) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
 
@@ -35,8 +42,14 @@ export function TabBar({
     refs.current[t.id]?.focus()
   }
 
+  const Wrapper = pattern === 'tabs' ? 'div' : 'nav'
+  const asTabs = pattern === 'tabs'
   return (
-    <div role="tablist" aria-label={label} className="flex gap-8 border-b border-hairline">
+    <Wrapper
+      {...(asTabs ? { role: 'tablist' } : {})}
+      aria-label={label}
+      className="flex flex-wrap gap-x-8 border-b border-hairline"
+    >
       {tabs.map((t, i) => {
         const active = t.id === value
         return (
@@ -46,13 +59,18 @@ export function TabBar({
               refs.current[t.id] = el
             }}
             type="button"
-            role="tab"
+            {...(asTabs
+              ? {
+                  role: 'tab',
+                  'aria-selected': active,
+                  'aria-controls': `${idPrefix}-panel-${t.id}`,
+                  tabIndex: active ? 0 : -1,
+                }
+              : { 'aria-current': active ? ('true' as const) : undefined })}
             id={`${idPrefix}-tab-${t.id}`}
-            aria-selected={active}
-            aria-controls={`${idPrefix}-panel-${t.id}`}
-            tabIndex={active ? 0 : -1}
             onClick={() => onChange(t.id)}
             onKeyDown={(e) => {
+              if (!asTabs) return
               const delta =
                 e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : e.key === 'Home' ? 'first' : e.key === 'End' ? 'last' : null
               if (delta === null) return
@@ -67,6 +85,6 @@ export function TabBar({
           </button>
         )
       })}
-    </div>
+    </Wrapper>
   )
 }

@@ -17,21 +17,21 @@ export function CalibrationPanel({ drawingId, sheetIndex, calibrating, onCalibra
   const revert = useRevertScaleCalibration(drawingId, sheetIndex)
 
   return (
-    <div className="border-t border-slate-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">Two-point calibration</h3>
+    <div className="border-t border-hairline p-4">
+      <h3 className="text-lg font-semibold text-ink-title">Two-point calibration</h3>
       <button
         type="button"
         onClick={() => {
           onResetPoints()
           onCalibratingChange(!calibrating)
         }}
-        className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+        className="mt-2 rounded-pill border border-brand px-2 py-1 text-xs text-brand hover:bg-brand-subtle"
       >
         {calibrating ? 'Cancel' : 'Pick two points on the drawing'}
       </button>
 
       {calibrating && points.length < 2 && (
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-muted">
           Click point {points.length + 1} of 2 on the drawing.
         </p>
       )}
@@ -54,7 +54,7 @@ export function CalibrationPanel({ drawingId, sheetIndex, calibrating, onCalibra
           }}
         >
           <div>
-            <label className="block text-xs text-slate-500" htmlFor="known-length">
+            <label className="mb-1 block text-sm text-ink" htmlFor="known-length">
               Known length (m)
             </label>
             <input
@@ -64,13 +64,13 @@ export function CalibrationPanel({ drawingId, sheetIndex, calibrating, onCalibra
               required
               value={knownLength}
               onChange={(e) => setKnownLength(e.target.value)}
-              className="w-28 rounded border border-slate-300 px-2 py-1 text-sm"
+              className="w-28 rounded border border-outline px-2 py-1 text-sm"
             />
           </div>
           <button
             type="submit"
             disabled={setScale.isPending}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 hover:bg-brand-hover"
           >
             Set scale
           </button>
@@ -79,34 +79,36 @@ export function CalibrationPanel({ drawingId, sheetIndex, calibrating, onCalibra
       {setScale.isError && <p className="mt-1 text-sm text-red-600">{setScale.error.message}</p>}
 
       {history && history.length > 0 && (
-        <table className="mt-3 w-full text-left text-xs">
-          <thead className="text-slate-500">
-            <tr>
-              <th>Ratio</th>
-              <th>Source</th>
-              <th>Confidence</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {history.map((c) => (
-              <tr key={c.id} className="border-t border-slate-100">
-                <td>{c.ratio?.toFixed(6) ?? '--'}</td>
-                <td>{c.source}</td>
-                <td>{(c.confidence * 100).toFixed(0)}%</td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => revert.mutate(c.id)}
-                    className="text-slate-500 underline hover:text-slate-800"
-                  >
-                    Revert to this
-                  </button>
-                </td>
+        <div className="overflow-x-auto rounded-card bg-white p-2">
+          <table className="mt-3 w-full text-left text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th>Ratio</th>
+                <th>Source</th>
+                <th>Confidence</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {history.map((c) => (
+                <tr key={c.id} className="border-t border-row-rule">
+                  <td>{c.ratio?.toFixed(6) ?? '--'}</td>
+                  <td>{c.source}</td>
+                  <td>{(c.confidence * 100).toFixed(0)}%</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => revert.mutate(c.id)}
+                      className="text-muted underline hover:text-ink"
+                    >
+                      Revert to this
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
