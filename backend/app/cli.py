@@ -2067,19 +2067,19 @@ async def clean_demo_data() -> None:
                 print(f"deleted vendor {name!r} ({qa_vendor.id})")
 
 
-def write_tender_pack(out_dir: str, salt: str) -> None:
+def write_tender_pack(out_dir: str, salt: str, extra: int = 0) -> None:
     """DEV/TEST: writes the synthetic tender pack (app/intake/sample_pack.py) to a directory so the
     real-backend Playwright spec can upload it. The salt makes each run's files unique."""
     from pathlib import Path
 
-    from app.intake.sample_pack import build_pack
+    from app.intake.sample_pack import build_bulk_files, build_pack
 
     target = Path(out_dir)
     target.mkdir(parents=True, exist_ok=True)
-    files = build_pack(salt)
+    files = build_pack(salt) + build_bulk_files(extra, salt)
     for f in files:
         (target / f.name).write_bytes(f.data)
-    print(f"wrote {len(files)} files to {target} (salt={salt!r})")
+    print(f"wrote {len(files)} files to {target} (salt={salt!r}, extra={extra})")
 
 
 def main() -> None:
@@ -2125,6 +2125,7 @@ def main() -> None:
     )
     pack_parser.add_argument("--out", required=True)
     pack_parser.add_argument("--salt", default="")
+    pack_parser.add_argument("--extra", type=int, default=0, help="also write N small distinct text PDFs (for 300+ file packs)")
     subparsers.add_parser(
         "clean-demo-data",
         help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
@@ -2152,7 +2153,7 @@ def main() -> None:
     elif args.command == "clean-demo-data":
         asyncio.run(clean_demo_data())
     elif args.command == "write-tender-pack":
-        write_tender_pack(args.out, args.salt)
+        write_tender_pack(args.out, args.salt, args.extra)
 
 
 if __name__ == "__main__":

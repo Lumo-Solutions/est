@@ -17,6 +17,9 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Set after the first batch created the package, so a retry continues in the same package.
+  const [resumePackageId, setResumePackageId] = useState<string | null>(null)
+  const [uploadedSoFar, setUploadedSoFar] = useState(0)
   const create = useCreateTenderPackage(projectId)
   const addFiles = useAddTenderFiles(undefined, projectId)
 
@@ -33,28 +36,40 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
     setBusy(true)
     setError(null)
     const batches = splitIntoBatches(files)
-    const total = files.length
-    let done = 0
-    setProgress(`Uploaded 0 of ${total} files`)
+    const total = files.length + uploadedSoFar
+    let done = uploadedSoFar
+    let packageId = resumePackageId
+    let remaining = files
+    setProgress(`Uploaded ${done} of ${total} files`)
     try {
-      const first = await create.mutateAsync({
-        files: batches[0],
-        label: label.trim() || undefined,
-        transmittal_ref: ref.trim() || undefined,
-        received_date: received || undefined,
-      })
-      done += batches[0].length
-      setProgress(`Uploaded ${done} of ${total} files`)
-      for (const batch of batches.slice(1)) {
-        await addFiles.mutateAsync({ files: batch, packageId: first.package_id })
+      for (const batch of batches) {
+        if (packageId === null) {
+          const first = await create.mutateAsync({
+            files: batch,
+            label: label.trim() || undefined,
+            transmittal_ref: ref.trim() || undefined,
+            received_date: received || undefined,
+          })
+          packageId = first.package_id
+          setResumePackageId(packageId)
+        } else {
+          await addFiles.mutateAsync({ files: batch, packageId })
+        }
         done += batch.length
+        remaining = remaining.slice(batch.length)
+        // Sent files leave the list at once, so a retry after an error only re-sends what is left.
+        setFiles(remaining)
+        setUploadedSoFar(done)
         setProgress(`Uploaded ${done} of ${total} files`)
       }
-      setFiles([])
       setRejected([])
-      onUploaded(first.package_id)
+      setResumePackageId(null)
+      setUploadedSoFar(0)
+      onUploaded(packageId as string)
     } catch (e) {
-      setError(`${e instanceof Error ? e.message : 'Upload failed'} (${done} of ${total} files were uploaded before the error)`)
+      setError(
+        `${e instanceof Error ? e.message : 'Upload failed'}. ${done} of ${total} files were uploaded; ${remaining.length} still to send. Press Upload to continue with the rest.`,
+      )
     } finally {
       setBusy(false)
     }

@@ -63,6 +63,15 @@ export function useTenderClasses() {
   })
 }
 
+export function useUpdateTenderClass() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ code, ...data }: { code: string; label?: string; enabled?: boolean; sort_order?: number }) =>
+      api.patch<TenderClass>(`/tender-classes/${code}`, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tender-classes'] }),
+  })
+}
+
 export function useProjectAddenda(projectId: string | undefined, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['tender-addenda', projectId],

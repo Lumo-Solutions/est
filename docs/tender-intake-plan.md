@@ -198,6 +198,28 @@ Values found by regex are proposals; editing is manual. Everything is stored in 
 - Confirm is blocked for a `failed`/`rejected` document; `rerun` is allowed for `proposed|failed`.
 - Timezone for `received_date`: server date.
 
-## 15. Accuracy record
+## 15. As built: deviations from this plan
 
-(filled in after the first full run: rules only, rules + mock model)
+Everything above shipped; these are the places where the code differs from what the plan said, and why.
+
+- **Routes are sub-paths, not `:verbs`.** `POST /tender-documents/{id}/confirm|reclassify|edit|exclude|rerun` and `POST /projects/{id}/tender-documents/bulk-confirm` (a `:confirm` suffix after a path parameter is fragile in Starlette). Added `POST /tender-packages/{id}/files` (the UI uploads big drops in batches of 20 files / 200 MB into one package) and `GET /tender-documents/{id}/content` (same-origin bytes, used by the BOQ wizard pre-fill because a browser `fetch` of the presigned S3 redirect is cross-origin).
+- **The sample pack lives in `backend/app/intake/sample_pack.py`** (not `tests/fixtures`) so the dev stack can write it for the Playwright spec (`python -m app.cli write-tender-pack --out DIR --salt S [--extra N]`); `tests/fixtures/tender_pack.py` re-exports it. The salt makes each run's bytes unique (a repeat upload is otherwise all duplicates).
+- **Prompts and schemas are baked into the backend image** (`backend/Dockerfile` copies `ai-service/prompts` and `schemas`); the bind mount only covers `backend/app`. After pulling this branch: rebuild `backend` and `celery-worker` (`docker compose ... up -d --build backend celery-worker`) and `vllm` (the mock image now contains `classification.py`), then `make migrate`.
+- **Worker queue:** `ingest` (as planned), tasks module added to `celery_app` include and routes.
+- **Class configuration** shipped with an Admin tab ("Tender classes", managing_director) as well as the API.
+- **Drawing lineage** is order independent: `_relink_lineage` re-links every routed revision of a document number after each route, rather than only looking backwards.
+- **Column virtualisation is off in the review grid** (about 11 columns; virtualising them only hid Status/Flags/Actions in narrower windows). Rows stay virtualised, paging is server side at 100.
+- **Upload is resumable:** after a failed batch the list keeps only the unsent files and the retry continues in the same package.
+- **Bulk confirm** with explicit ids confirms exactly those; without ids it applies the confidence minimum and blocks documents flagged conflict / low confidence / duplicate / model unavailable.
+- The inbox hiding of orphaned settlement approvals (Part 1) is unrelated to intake but shares this branch's tests.
+
+## 16. Accuracy record (synthetic pack, 19 classifiable files: 15 top level + duplicate copy + 4 zip members - counting the scan and the notes file)
+
+Measured by `backend/tests/unit/test_intake_accuracy.py` (run with `-s` to print the table). **Read this as a regression baseline, not as an accuracy claim:** the pack was written by us, and the rules were tuned while looking at it (one filename pattern, the title-zone rule and the "keyword deep in the body counts half" rule each came from a failure on this very pack). The real-model and real-tender-pack accuracy runs stay on the GPU checklist.
+
+| Mode | Correct | Accuracy | Notes |
+|---|---|---|---|
+| Stage 1 rules only | 18 / 19 | 94.7% | The one miss is `Scan_0042.pdf` (image only): rules alone can only say "other, 0.25". Every answer at or above the 0.85 confidence threshold was right (precision 100% on the 17 that clear it). |
+| Rules + mock model | 19 / 19 | 100% | The model is called for 2 of 19 files (the scan with its image, `Notes.csv`), so the model stage moved one result. The mock is keyword driven and independent of the rules, so this shows the flow, not model quality. |
+
+Metadata (document number, revision, addendum number, what it supersedes, BOQ sheet names and header row, scale, discipline) matched the pack's ground truth for every field the pack defines (`test_extracted_metadata_matches_ground_truth_where_the_pack_defines_it`).

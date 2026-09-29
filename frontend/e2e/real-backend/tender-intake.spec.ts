@@ -27,9 +27,9 @@ interface Doc {
 
 const PACK_FILES = 18 // top-level files in the pack; the zip adds 4 more documents
 
-function writePack(salt: string): { dir: string; files: string[] } {
+function writePack(salt: string, extra = 0): { dir: string; files: string[] } {
   const remote = `/tmp/pack-${salt}`
-  execFileSync('docker', ['exec', '-w', '/app', 'installtec_backend', 'python', '-m', 'app.cli', 'write-tender-pack', '--out', remote, '--salt', salt], { stdio: 'pipe' })
+  execFileSync('docker', ['exec', '-w', '/app', 'installtec_backend', 'python', '-m', 'app.cli', 'write-tender-pack', '--out', remote, '--salt', salt, '--extra', String(extra)], { stdio: 'pipe' })
   const dir = mkdtempSync(join(tmpdir(), 'tender-pack-'))
   execFileSync('docker', ['cp', `installtec_backend:${remote}/.`, dir], { stdio: 'pipe' })
   return { dir, files: readdirSync(dir).sort() }
@@ -59,6 +59,11 @@ async function waitForClassification(page: Page, projectId: string, expected: nu
     .toBe(true)
   return docs
 }
+
+// Distinct data rows AG Grid currently has in the DOM (a row can appear in both the pinned and the
+// centre container, so count by row-id rather than by element).
+const renderedRows = (page: Page) =>
+  page.evaluate(() => new Set([...document.querySelectorAll('[role="row"][row-id]')].map((e) => e.getAttribute('row-id'))).size)
 
 async function login(browser: Browser, user: string, pass: string): Promise<Page> {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -274,5 +279,100 @@ test('tender pack: drop -> proposals -> bulk-confirm -> drawings ready -> BOQ wi
   const wizardSerious = wizardAxe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(wizardSerious, JSON.stringify(wizardSerious.map((v) => v.id))).toEqual([])
 
+  await lead.context().close()
+})
+
+test('admin can rename, disable and restore a tender class', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const md = await login(browser, 'md1', 'Md1Pass!')
+  // Start from the defaults whatever an earlier (possibly failed) run left behind.
+  const reset = await md.request.patch('/api/v1/tender-classes/other', { headers: await csrfHeaders(md), data: { label: 'Other', enabled: true } })
+  expect(reset.ok()).toBeTruthy()
+  await md.goto('/admin')
+  await md.getByRole('button', { name: 'Tender classes' }).click()
+  const table = md.getByRole('table', { name: 'Tender document classes' })
+  await expect(table).toBeVisible()
+  await expect(table.getByRole('row')).toHaveCount(13) // header + 12 default classes
+
+  const label = md.getByRole('textbox', { name: 'Label for other' })
+  await label.fill('Miscellaneous')
+  await md.getByRole('button', { name: 'Save label for other' }).click()
+  await expect(md.getByRole('textbox', { name: 'Label for other' })).toHaveValue('Miscellaneous')
+  await expect
+    .poll(async () => ((await (await md.request.get('/api/v1/tender-classes')).json()) as { code: string; label: string }[]).find((c) => c.code === 'other')?.label)
+    .toBe('Miscellaneous')
+
+  // Disable it (a document proposed as this class can then not be confirmed until reclassified: covered by the integration tests).
+  await md.getByLabel('Enable other').click()
+  await expect.poll(async () => ((await (await md.request.get('/api/v1/tender-classes')).json()) as { code: string; enabled: boolean }[]).find((c) => c.code === 'other')?.enabled).toBe(false)
+
+  // Restore the defaults so the shared tenant is left as found.
+  await md.getByLabel('Enable other').click()
+  await md.getByRole('button', { name: 'Reset label for other' }).click()
+  await expect.poll(async () => ((await (await md.request.get('/api/v1/tender-classes')).json()) as { code: string; label: string; enabled: boolean }[]).find((c) => c.code === 'other')).toMatchObject({ label: 'Other', enabled: true })
+  await md.context().close()
+})
+
+test('a 300+ file tender pack stays usable: paged, virtualised, bulk-confirmable', async ({ browser }) => {
+  test.setTimeout(600_000)
+  const salt = `bulk${Date.now()}`
+  const pack = writePack(salt, 320)
+  const total = pack.files.length
+  expect(total).toBe(PACK_FILES + 320)
+
+  const lead = await login(browser, 'lead1', 'Lead1Pass!')
+  const created = await lead.request.post('/api/v1/projects', {
+    headers: await csrfHeaders(lead),
+    data: { code: `TNB-${Date.now().toString(36).toUpperCase()}`, name: `Tender intake bulk ${salt}` },
+  })
+  expect(created.ok(), await created.text()).toBeTruthy()
+  const projectId = ((await created.json()) as { id: string }).id
+
+  await lead.goto(`/projects/${projectId}?tab=tender-documents`)
+  await lead.getByTestId('tender-file-input').setInputFiles(pack.files.map((f) => join(pack.dir, f)))
+  await lead.getByRole('button', { name: `Upload ${total} files` }).click()
+  await expect(lead.getByRole('status').filter({ hasText: `Uploaded ${total} of ${total} files` })).toBeVisible({ timeout: 300_000 })
+
+  const docs = await waitForClassification(lead, projectId, total + 4)
+  expect(docs.filter((d) => d.status === 'proposed').length).toBeGreaterThanOrEqual(320)
+  expect(docs.filter((d) => d.status === 'failed')).toEqual([])
+
+  // Paged server-side (100 a page) and virtualised: never 100+ DOM rows at once.
+  await lead.reload()
+  const shown = lead.getByText(/^Showing 1 to 100 of \d+$/)
+  await expect(shown).toBeVisible({ timeout: 60_000 })
+  expect(Number(/of (\d+)/.exec((await shown.textContent()) ?? '')?.[1])).toBe(docs.length)
+  await expect.poll(() => renderedRows(lead), { timeout: 30_000 }).toBeGreaterThan(5)
+  const rendered = await renderedRows(lead)
+  expect(rendered).toBeLessThan(60)
+  const scrolled = Date.now()
+  await lead.getByRole('grid').first().hover()
+  await lead.mouse.wheel(0, 100_000)
+  await expect(lead.getByRole('row', { name: /Bulk_/ }).last()).toBeVisible()
+  expect(Date.now() - scrolled).toBeLessThan(5_000)
+  expect(await renderedRows(lead)).toBeLessThan(60)
+
+  await lead.getByRole('navigation', { name: 'Pagination' }).first().getByRole('button', { name: 'Page 4' }).click()
+  await expect(lead.getByText(new RegExp(`^Showing 301 to ${docs.length} of ${docs.length}$`))).toBeVisible()
+  await lead.getByRole('navigation', { name: 'Pagination' }).first().getByRole('button', { name: 'Page 1' }).click()
+
+  // Search narrows a 340-row pack to a handful.
+  await lead.getByLabel('Search documents').fill('Bulk_RFI_0002')
+  await expect(lead.getByRole('row', { name: /Bulk_RFI_0002\.pdf/ }).first()).toBeVisible()
+  await expect(lead.getByText(/^Showing 1 to 1 of 1$/)).toBeVisible()
+  await lead.getByLabel('Search documents').fill('')
+
+  // One click confirms every confident proposal in the pack.
+  await lead.getByRole('button', { name: 'Confirm high-confidence' }).click()
+  await lead.getByRole('button', { name: 'Confirm all' }).click()
+  const summary = lead.getByRole('status').filter({ hasText: /Confirmed \d+, skipped \d+, failed 0/ })
+  await expect(summary).toBeVisible({ timeout: 300_000 })
+  expect(Number(/Confirmed (\d+)/.exec((await summary.textContent()) ?? '')?.[1])).toBeGreaterThanOrEqual(330)
+  const routed = (await listDocs(lead, projectId)).filter((d) => d.status === 'routed')
+  expect(routed.length).toBeGreaterThanOrEqual(330)
+
+  // The register pages too (50 a page).
+  await expect(lead.getByRole('table', { name: 'Project document register' })).toBeVisible()
+  await expect(lead.getByText(/^Showing 1 to 50 of \d+$/)).toBeVisible()
   await lead.context().close()
 })

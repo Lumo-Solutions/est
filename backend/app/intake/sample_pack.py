@@ -471,6 +471,25 @@ def _build_pack(salt: str) -> list[PackFile]:
     ]
 
 
+_BULK_KINDS = (
+    ("Letter", "correspondence", ["Dear Sirs,", "Further to our meeting we confirm point {n} of the minutes.", "Yours faithfully,", "Client Representative {n}"]),
+    ("RFI", "clarification", ["REQUEST FOR INFORMATION", "RFI No. {n}", "Response to Query {n}", "The Engineer confirms the detail on sheet {n}."]),
+    ("Instructions_Note", "tender_instructions", ["INSTRUCTIONS TO TENDERERS", "Clause {n}: submission requirements", "Tenderers must acknowledge receipt of clarification {n}."]),
+    ("Spec", "specification", ["SECTION 05 12 00 STRUCTURAL STEEL FRAMING", "PART 1 GENERAL", "1.{n} Submittals: shop drawings for item {n}."]),
+)
+
+
+def build_bulk_files(count: int, salt: str = "") -> list[PackFile]:
+    """`count` small, distinct, correctly-classifiable text PDFs, for exercising large tender packs (300+ files)."""
+    files: list[PackFile] = []
+    for i in range(count):
+        prefix, cls, lines = _BULK_KINDS[i % len(_BULK_KINDS)]
+        text_lines = [line.format(n=i + 1) for line in lines] + [f"Bulk item {i + 1:04d}"]
+        pf = _pf(f"Bulk_{prefix}_{i + 1:04d}.pdf", _text_pdf(text_lines), cls)
+        files.append(_salted(pf, salt))
+    return files
+
+
 def ground_truth() -> dict[str, str]:
     truth: dict[str, str] = {}
     for f in build_pack() + build_zip_member_files():
