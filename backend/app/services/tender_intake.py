@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction, BidSettlementStatus, DrawingKind
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
-from app.integrations.s3 import presign_get_url, put_object_streaming
+from app.integrations.s3 import get_object_bytes, presign_get_url, put_object_streaming
 from app.intake.boq import suggest_mapping
 from app.intake.constants import (
     ALL_CLASSES,
@@ -355,6 +355,19 @@ async def download_url(session: AsyncSession, ctx: RequestContext, document_id: 
         payload={"filename": doc.original_filename, "sha256": doc.sha256},
     )
     return await presign_get_url(doc.object_key, bucket=doc.bucket)
+
+
+async def document_content(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> tuple[ProjectDocument, bytes]:
+    """The bytes themselves, same-origin (the BOQ wizard pre-fill reads the workbook through this,
+    because a browser fetch of the presigned S3 redirect is cross-origin). Accepted documents only."""
+    doc = await get_document(session, document_id)
+    if doc.safety_status != "accepted":
+        raise ConflictError("This document did not pass the safety check and cannot be downloaded")
+    await audit.record(
+        session, ctx, action=AuditAction.DOWNLOAD, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+        payload={"filename": doc.original_filename, "sha256": doc.sha256, "via": "content"},
+    )
+    return doc, await get_object_bytes(doc.object_key, bucket=doc.bucket)
 
 
 # ---------------------------------------------------------------------- routing

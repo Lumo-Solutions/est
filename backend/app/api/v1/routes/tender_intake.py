@@ -4,6 +4,7 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,19 @@ from app.schemas.tender_intake import (
 from app.services import tender_intake as intake_service
 
 router = APIRouter(tags=["tender-intake"])
+
+_MEDIA_TYPES = {
+    "pdf": "application/pdf",
+    "dxf": "application/dxf",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "csv": "text/csv",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "zip": "application/zip",
+}
 
 
 async def _read_uploads(files: list[UploadFile], settings: Settings) -> list[tuple[str, bytes]]:
@@ -166,6 +180,15 @@ async def download_document_endpoint(
     document_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> RedirectResponse:
     return RedirectResponse(await intake_service.download_url(session, ctx, document_id), status_code=302)
+
+
+@router.get("/tender-documents/{document_id}/content")
+async def document_content_endpoint(
+    document_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> Response:
+    doc, data = await intake_service.document_content(session, ctx, document_id)
+    media = _MEDIA_TYPES.get(doc.ext, "application/octet-stream")
+    return Response(content=data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{doc.original_filename}"'})
 
 
 @router.get("/tender-documents/{document_id}/boq-prefill", response_model=BoqPrefillOut)

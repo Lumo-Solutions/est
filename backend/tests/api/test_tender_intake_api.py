@@ -275,3 +275,23 @@ async def test_register_lists_only_routed_register_documents_and_filters_by_clas
     found = (await md.get(f"/api/v1/projects/{project_id}/document-register", params={"q": "concrete"})).json()
     assert [i["original_filename"] for i in found["items"]] == ["Concrete_Spec.pdf"]
     assert (await md.get(f"/api/v1/projects/{project_id}/tender-documents", params={"limit": 1000})).status_code == 422
+
+
+async def test_content_endpoint_streams_accepted_documents_same_origin(authed_client, app_engine, monkeypatch):
+    from app.services import tender_intake as svc
+
+    async def fake_get(object_key, *args, bucket=None, **kwargs):
+        return b"workbook-bytes"
+
+    monkeypatch.setattr(svc, "get_object_bytes", fake_get)
+    md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))
+    project_id, package_id = await _seed_project(app_engine, member_sub=None)
+    good = await _seed_doc(app_engine, project_id, package_id, name="b.xlsx")
+    bad = await _seed_doc(app_engine, project_id, package_id, name="m.xlsm", safety="rejected_macro", status="rejected")
+
+    resp = await md.get(f"/api/v1/tender-documents/{good}/content")
+    assert resp.status_code == 200 and resp.content == b"workbook-bytes"
+    assert 'filename="b.xlsx"' in resp.headers["content-disposition"]
+    assert (await md.get(f"/api/v1/tender-documents/{bad}/content")).status_code == 409
+    outsider = authed_client(frozenset({Role.ESTIMATOR.value}))
+    assert (await outsider.get(f"/api/v1/tender-documents/{good}/content")).status_code == 404
