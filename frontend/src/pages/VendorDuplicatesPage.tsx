@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthContext'
 import { SkeletonRows } from '../components/Skeleton'
 import { useResolveDuplicate, useDuplicateCandidates } from '../features/vendors/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
@@ -20,7 +21,7 @@ export function VendorDuplicatesPage() {
       >
         ← Vendors
       </Link>
-      <h1 className="mt-2 text-xl font-semibold text-slate-800">Vendor duplicate review</h1>
+      <PageTitle>Vendor duplicate review</PageTitle>
       {!canWrite && (
         <p className="mt-1 text-xs text-slate-500">Your role can view candidates but not resolve them.</p>
       )}

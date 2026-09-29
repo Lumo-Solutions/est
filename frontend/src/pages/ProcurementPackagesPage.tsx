@@ -17,6 +17,7 @@ import {
   useRfqs,
 } from '../features/procurement/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/procurement.py's _STRUCTURE_ROLES --
 // creating a package, adding items, and drafting RFQs are all lead/proc/bd/md
@@ -234,7 +235,7 @@ export function ProcurementPackagesPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Procurement packages and RFQs</h1>
+      <PageTitle>Procurement packages and RFQs</PageTitle>
 
       {hasRole(...STRUCTURE_ROLES) && (
         <form

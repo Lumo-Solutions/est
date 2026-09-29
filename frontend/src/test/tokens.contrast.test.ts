@@ -1,11 +1,9 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import css from '../index.css?raw'
 
 // docs/figma-implementation-plan.md 1.6 -- the AA contract for the Figma
 // token set. Reads the real @theme from index.css so a future edit to a
 // token can't silently drop below the threshold the axe suite depends on.
-const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
 
 function token(name: string): string {
   const m = css.match(new RegExp(`--color-${name}:\\s*(#[0-9A-Fa-f]{6})`))

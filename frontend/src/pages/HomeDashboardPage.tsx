@@ -9,6 +9,7 @@ import {
 } from '../features/dashboard/api'
 import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Phase 3 gap-fill (docs/ui-qa-brief.md): "Add a home dashboard per role
 // that answers 'what needs my attention?'." Deliberately scoped to tiles
@@ -179,7 +180,7 @@ export function HomeDashboardPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Dashboard</h1>
+      <PageTitle>Dashboard</PageTitle>
       <p className="mt-1 text-sm text-slate-500">What needs your attention.</p>
 
       {!showAnyTile && (

@@ -5,6 +5,7 @@ import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
 import { useCreateProject, useProjectsPage } from '../features/projects/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 const CREATE_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 const PAGE_SIZE = 20
@@ -102,7 +103,7 @@ export function ProjectsListPage() {
   return (
     <div className="p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Projects</h1>
+        <PageTitle>Projects</PageTitle>
         {canCreate && (
           <button
             type="button"

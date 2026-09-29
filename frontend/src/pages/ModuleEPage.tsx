@@ -11,6 +11,7 @@ import {
   useOutturnCostObservations,
 } from '../features/moduleE/api'
 import { formatMoney } from '../lib/format'
+import { PageTitle } from '../components/PageTitle'
 
 // All read-only, any authenticated role server-side (module_e.py uses
 // CurrentUser throughout) -- no write forms, no role gating needed.
@@ -244,7 +245,7 @@ export function ModuleEPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Post-award (Module E)</h1>
+      <PageTitle>Post-award (Module E)</PageTitle>
       {/* docs/ui-design-system.md section 4.5. */}
       <nav className="mt-3 flex gap-1 border-b border-slate-200">
         {TABS.map((tab) => (

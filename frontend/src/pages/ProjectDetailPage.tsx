@@ -15,6 +15,7 @@ import {
 } from '../features/projects/api'
 import { useUsers } from '../features/users/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8 -- drawing DrawingStatus's own
 // vocabulary mapped to the shared Badge's tones.
@@ -281,9 +282,9 @@ export function ProjectDetailPage() {
   return (
     <div className="p-6">
       {backLink}
-      <h1 className="mt-2 text-xl font-semibold text-slate-800">
+      <PageTitle>
         {project.code} -- {project.name}
-      </h1>
+      </PageTitle>
       <p className="mt-1 text-sm text-slate-500">
         {project.client_name ?? 'No client set'} · {project.status} · {project.base_currency}
         {project.emirate ? ` · ${project.emirate}` : ''}

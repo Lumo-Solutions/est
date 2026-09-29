@@ -6,6 +6,7 @@ import { SkeletonRows } from '../components/Skeleton'
 import { useCheckDuplicates, useCreateVendor, useVendors } from '../features/vendors/api'
 import { Role } from '../lib/roles'
 import type { VendorCreate } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 
@@ -133,7 +134,7 @@ export function VendorsPage() {
   return (
     <div className="p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Vendors</h1>
+        <PageTitle>Vendors</PageTitle>
         <div className="flex items-center gap-2">
           {hasRole(...WRITE_ROLES) && (
             <Link

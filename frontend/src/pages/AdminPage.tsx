@@ -5,6 +5,7 @@ import { ReasonCodesAdmin } from '../features/admin/ReasonCodesAdmin'
 import { TaxonomyAdmin } from '../features/admin/TaxonomyAdmin'
 import { TolerancesAdmin } from '../features/admin/TolerancesAdmin'
 import { VendorRegionsAdmin } from '../features/admin/VendorRegionsAdmin'
+import { PageTitle } from '../components/PageTitle'
 
 const TABS = [
   { key: 'taxonomy', label: 'Taxonomy', Component: TaxonomyAdmin },
@@ -21,7 +22,7 @@ export function AdminPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Admin</h1>
+      <PageTitle>Admin</PageTitle>
       {/* docs/ui-design-system.md section 4.5. */}
       <nav className="mt-3 flex gap-1 border-b border-slate-200">
         {TABS.map((tab) => (

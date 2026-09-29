@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useBoqImportCommit, useBoqImportPreview } from '../features/boq/api'
 import type { BoqImportColumnMappingIn } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 const EMPTY_MAPPING: BoqImportColumnMappingIn = {
   item_no_column: '',
@@ -36,7 +37,7 @@ export function BoqImportWizardPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">BOQ import wizard</h1>
+      <PageTitle>BOQ import wizard</PageTitle>
 
       <div className="mt-4">
         <label className="block text-xs text-slate-500" htmlFor="boq-file">

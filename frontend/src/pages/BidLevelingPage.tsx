@@ -6,6 +6,7 @@ import { useProcurementPackages } from '../features/procurement/api'
 import { useAcknowledgeExclusionFlag, useBidLevelingMatrix, useQuotationExclusionFlags, useQuotationTotals } from '../features/quotations/api'
 import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
 // same roles as every other quotation-review action (accept/reject line,
@@ -77,7 +78,7 @@ export function BidLevelingPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Bid-leveling matrix</h1>
+      <PageTitle>Bid-leveling matrix</PageTitle>
       <select
         aria-label="Package"
         value={packageId ?? ''}

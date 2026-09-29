@@ -13,6 +13,7 @@ import {
 } from '../features/boq/api'
 import { BoqReconciliationGrid } from '../features/boq/BoqReconciliationGrid'
 import type { BoqLineItemOut } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLineItemOut }) {
   const { data: links } = useMeasurementLinks(item.id)
@@ -161,7 +162,7 @@ export function BoqReconciliationPage() {
   return (
     <div className="flex h-[calc(100vh-49px)] flex-col">
       <div className="flex items-center justify-between p-4">
-        <h1 className="text-xl font-semibold text-slate-800">BOQ reconciliation</h1>
+        <PageTitle>BOQ reconciliation</PageTitle>
         {projectId && (
           <Link
             to={`/projects/${projectId}/boq/import`}

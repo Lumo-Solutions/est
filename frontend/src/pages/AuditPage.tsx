@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthContext'
 import { SkeletonRows } from '../components/Skeleton'
 import { useAuditEvents, useVerifyAuditChain } from '../features/audit/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 export function AuditPage() {
   const { hasRole } = useAuth()
@@ -16,7 +17,7 @@ export function AuditPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Audit viewer</h1>
+      <PageTitle>Audit viewer</PageTitle>
 
       <div className="mt-3 flex gap-2">
         <div>

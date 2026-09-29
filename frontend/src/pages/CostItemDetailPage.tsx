@@ -7,6 +7,7 @@ import { useCostItem, useCostItemRateAsOf, useRecordRate } from '../features/cos
 import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import type { CostRateComponentIn } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.MANAGING_DIRECTOR]
 
@@ -150,9 +151,9 @@ export function CostItemDetailPage() {
   return (
     <div className="p-6">
       {backLink}
-      <h1 className="mt-2 text-xl font-semibold text-slate-800">
+      <PageTitle>
         {item.code} — {item.description}
-      </h1>
+      </PageTitle>
       <p className="mt-1 flex items-center gap-2 text-sm text-slate-500">
         UoM: {item.uom} · {item.item_type} · <Badge tone={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge>
       </p>

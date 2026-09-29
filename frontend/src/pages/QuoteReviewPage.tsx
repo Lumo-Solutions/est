@@ -19,6 +19,7 @@ import {
 } from '../features/quotations/api'
 import { Role } from '../lib/roles'
 import type { QuotationOut } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/quotation_ingestion.py's _REVIEW_ROLES --
 // accept/reject/promote/resolve-currency-vat/reject-quotation are
@@ -318,7 +319,7 @@ export function QuoteReviewPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Quote review and acceptance</h1>
+      <PageTitle>Quote review and acceptance</PageTitle>
 
       <div className="mt-4 flex gap-4">
         <select

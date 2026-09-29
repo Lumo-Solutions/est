@@ -25,6 +25,7 @@ import { useCurrentSettlement } from '../features/settlement/useCurrentSettlemen
 import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import type { BidSettlementLineItemOut, BidSettlementOut, BidSettlementTradeOverrideOut, SimulateRequest, SimulateResult } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8. backend/app/core/enums.py's
 // BidSettlementStatus (draft/submitted/approved/rejected/won/lost).
@@ -635,7 +636,7 @@ export function SettlementPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Settlement cockpit</h1>
+      <PageTitle>Settlement cockpit</PageTitle>
       {isLoading && <SkeletonRows count={4} />}
       {isError && (
         <p role="alert" className="mt-4 text-sm text-danger">

@@ -13,6 +13,7 @@ import {
 } from '../features/prequal/api'
 import { useScanDuplicates, useVendor, useVendorServiceRegions } from '../features/vendors/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
 // Mirrors backend/app/api/v1/routes/prequal.py's _WRITE_ROLES exactly --
@@ -267,7 +268,7 @@ export function VendorDetailPage() {
     <div className="p-6">
       {backLink}
       <div className="mt-2 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">{vendor.legal_name}</h1>
+        <PageTitle>{vendor.legal_name}</PageTitle>
         {canWriteVendor && (
           <button
             type="button"

@@ -5,6 +5,7 @@ import { Badge } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
 import { useCostItems, useCreateCostItem } from '../features/costlib/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/cost_library.py's _WRITE_ROLES exactly.
 const WRITE_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.MANAGING_DIRECTOR]
@@ -89,7 +90,7 @@ export function CostLibraryPage() {
   return (
     <div className="p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Cost library</h1>
+        <PageTitle>Cost library</PageTitle>
         {hasRole(...WRITE_ROLES) && (
           <button
             type="button"

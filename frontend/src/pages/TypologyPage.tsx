@@ -15,6 +15,7 @@ import {
 } from '../features/typology/api'
 import { Role } from '../lib/roles'
 import type { ConfirmClusterDeltaIn, ConfirmClusterGroupIn, TypologyClusterStatus } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8.
 const STATUS_TONE: Record<TypologyClusterStatus, BadgeTone> = {
@@ -287,7 +288,7 @@ export function TypologyPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-800">Typology cluster review</h1>
+        <PageTitle>Typology cluster review</PageTitle>
         {hasRole(...STRUCTURE_ROLES) && (
           <button
             type="button"

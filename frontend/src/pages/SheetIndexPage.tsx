@@ -4,6 +4,7 @@ import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
 import { useDrawing, useRetryIngest, useSheets } from '../features/drawings/api'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // docs/ui-design-system.md section 4.8. Drawing/extraction status
 // vocabulary (backend/app/core/enums.py's DrawingStatus/extraction phases).
@@ -42,7 +43,7 @@ export function SheetIndexPage() {
       >
         ← Back to project
       </Link>
-      <h1 className="mt-2 text-xl font-semibold text-slate-800">{drawing?.original_filename ?? 'Sheets'}</h1>
+      <PageTitle>{drawing?.original_filename ?? 'Sheets'}</PageTitle>
       {drawing && (
         <p className="mt-1 flex items-center gap-2 text-sm text-slate-500">
           Status: <Badge tone={STATUS_TONE[drawing.status] ?? 'neutral'}>{drawing.status}</Badge>

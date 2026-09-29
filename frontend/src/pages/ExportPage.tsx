@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useExportOriginalSettlement, useExportSettlement, usePreviewOriginalExport } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
+import { PageTitle } from '../components/PageTitle'
 
 export function ExportPage() {
   const { projectId } = useParams()
@@ -14,7 +15,7 @@ export function ExportPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Export</h1>
+      <PageTitle>Export</PageTitle>
       {isLoading && <p className="mt-4 text-slate-500">Loading...</p>}
       {!isLoading && !current && <p className="mt-4 text-sm text-slate-500">No settlement yet for this project.</p>}
 

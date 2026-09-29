@@ -6,6 +6,7 @@ import { TextPromptModal } from '../components/TextPromptModal'
 import { useAttachInboundEmail, useDismissInboundEmail, useInboundReviewQueue, useResolveInboundTenant } from '../features/quotations/api'
 import { Role } from '../lib/roles'
 import type { InboundEmailOut } from '../types/api'
+import { PageTitle } from '../components/PageTitle'
 
 type OpenPrompt = { kind: 'resolve-tenant' | 'attach' | 'dismiss'; email: InboundEmailOut; extra: string } | null
 
@@ -123,7 +124,7 @@ export function QuarantineQueuePage() {
   if (!hasRole(...PAGE_ROLES)) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold text-slate-800">Quarantine and review queue</h1>
+        <PageTitle>Quarantine and review queue</PageTitle>
         <p className="mt-2 text-sm text-slate-500">You don't have access to this page.</p>
       </div>
     )
@@ -131,7 +132,7 @@ export function QuarantineQueuePage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Quarantine and review queue</h1>
+      <PageTitle>Quarantine and review queue</PageTitle>
       {isLoading && (
         <div className="mt-4">
           <SkeletonRows count={5} />

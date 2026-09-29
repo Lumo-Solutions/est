@@ -6,6 +6,7 @@ import { useReasonCodes, useRecordOutcome } from '../features/settlement/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
 import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
+import { PageTitle } from '../components/PageTitle'
 
 // Mirrors backend/app/api/v1/routes/settlement.py's _OUTCOME_ROLES.
 const RECORD_OUTCOME_ROLES = [Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR]
@@ -39,7 +40,7 @@ export function WinLossPage() {
   if (current.outcome) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
+        <PageTitle>Win / loss</PageTitle>
         <div className="mt-4 rounded border border-slate-200 p-4 text-sm">
           <p className="flex items-center gap-2 font-semibold">
             <Badge tone={OUTCOME_TONE[current.outcome] ?? 'neutral'}>{current.outcome}</Badge>
@@ -62,7 +63,7 @@ export function WinLossPage() {
   if (!canRecordOutcome) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
+        <PageTitle>Win / loss</PageTitle>
         <p className="mt-4 text-sm text-slate-500">
           No outcome recorded yet. Only bd_director/managing_director can record it.
         </p>
@@ -72,7 +73,7 @@ export function WinLossPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-slate-800">Win / loss</h1>
+      <PageTitle>Win / loss</PageTitle>
       <form
         className="mt-4 max-w-md space-y-3"
         onSubmit={(e) => {
