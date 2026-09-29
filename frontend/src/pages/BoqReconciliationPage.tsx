@@ -62,9 +62,27 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
           </li>
         ))}
       </ul>
+      {unlinkMeasurement.isError && (
+        <p role="alert" className="mt-1 text-xs text-danger">
+          {unlinkMeasurement.error.message}
+        </p>
+      )}
 
       <h4 className="mt-3 text-xs font-semibold uppercase text-slate-500">Suggested links</h4>
       {(suggestions ?? []).length === 0 && <p className="text-xs text-slate-500">No suggestions.</p>}
+      {/* linkMeasurement can genuinely fail (e.g. a suggestion whose
+          measurement unit isn't dimensionally compatible with this BOQ
+          item's UoM -- the backend validates that and 422s) -- found live
+          during the finish-brief follow-up's second walkthrough: clicking
+          Accept on exactly such a suggestion silently did nothing at all,
+          the same "an action a role/state can't perform stays enabled and
+          fails 100% silently" bug class flagged repeatedly in
+          docs/ui-qa/issues.md. */}
+      {linkMeasurement.isError && (
+        <p role="alert" className="mt-1 text-xs text-danger">
+          {linkMeasurement.error.message}
+        </p>
+      )}
       <ul className="mt-1 space-y-1">
         {(suggestions ?? []).map((s) => (
           <li key={s.target_id} className="flex items-center justify-between text-xs">
@@ -75,15 +93,24 @@ function ItemDetailPanel({ projectId, item }: { projectId: string; item: BoqLine
               <button
                 type="button"
                 onClick={() => {
-                  linkMeasurement.mutate(s.target_id)
-                  feedback.mutate({
-                    match_type: 'boq_measurement',
-                    query_embedding_source_id: item.id,
-                    target_id: s.target_id,
-                    outcome: 'accepted',
+                  // Record the "accepted" feedback signal only once the
+                  // link itself actually succeeds -- previously both fired
+                  // unconditionally, so a suggestion the backend rejects
+                  // (e.g. dimensionally-incompatible units) still recorded
+                  // a false "accepted" outcome for semantic-match tuning,
+                  // on top of the Accept button silently doing nothing.
+                  linkMeasurement.mutate(s.target_id, {
+                    onSuccess: () =>
+                      feedback.mutate({
+                        match_type: 'boq_measurement',
+                        query_embedding_source_id: item.id,
+                        target_id: s.target_id,
+                        outcome: 'accepted',
+                      }),
                   })
                 }}
-                className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+                disabled={linkMeasurement.isPending}
+                className="rounded text-emerald-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
               >
                 Accept
               </button>

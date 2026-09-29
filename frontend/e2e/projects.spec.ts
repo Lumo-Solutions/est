@@ -16,26 +16,39 @@ test('an authenticated user opens a project and sees its drawings', async ({ pag
       body: JSON.stringify({ sub: 'estimator-1', tenant_id: 'demo', roles: ['estimator'], acr: null }),
     }),
   )
-  await page.route('**/api/v1/projects', (route) =>
+  // ProjectsListPage uses the paginated GET /projects?limit=&offset=
+  // path (useProjectsPage -> the Page envelope), not the bare unpaginated
+  // array useProjects() (no args) still returns -- see
+  // frontend/src/features/projects/api.ts. The route pattern needs the
+  // trailing `*` to match the query string at all; without it this mock
+  // was silently never intercepting the request the page actually makes
+  // (found live: this test started failing -- "PRJ-1" never appeared --
+  // the moment ProjectsListPage switched to the paginated hook).
+  await page.route('**/api/v1/projects?*', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([
-        {
-          id: 'p1',
-          code: 'PRJ-1',
-          name: 'Demo Tower',
-          client_name: 'Acme',
-          status: 'active',
-          tender_ref: null,
-          base_currency: 'AED',
-          emirate: 'Dubai',
-          area: null,
-          latitude: null,
-          longitude: null,
-          created_at: '2026-01-01T00:00:00Z',
-        },
-      ]),
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'p1',
+            code: 'PRJ-1',
+            name: 'Demo Tower',
+            client_name: 'Acme',
+            status: 'active',
+            tender_ref: null,
+            base_currency: 'AED',
+            emirate: 'Dubai',
+            area: null,
+            latitude: null,
+            longitude: null,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      }),
     }),
   )
   await page.route('**/api/v1/projects/p1', (route) =>
