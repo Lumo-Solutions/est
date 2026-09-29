@@ -152,6 +152,38 @@ class Settings(BaseSettings):
     )
     quotation_max_pdf_pages: int = Field(default=60, alias="QUOTATION_MAX_PDF_PAGES")
 
+    # Set (alongside a literal APP_ENV=production) only by
+    # deploy/docker-compose.prod.yml, for backend/every worker/beat.
+    # Deliberately a separate flag from app_env itself, not a check that
+    # app_env == "production" unconditionally: everywhere else (a bare
+    # `docker compose up`, a dev/test run, this Settings() class's own
+    # default) app_env is allowed to be "dev"/unset/anything, so the check
+    # below has to be conditioned on *intending* to run in production, or
+    # it would either wrongly refuse every non-prod boot or be able to
+    # verify nothing at all. Real defense-in-depth: catches e.g. someone
+    # invoking `docker compose -f docker-compose.prod.yml run -e
+    # APP_ENV=dev backend` for a one-off debug session against the prod
+    # compose file and leaving it running -- production_mode still says
+    # "this deployment must be real production", app_env says otherwise,
+    # and the mismatch fails the whole Settings() construction closed
+    # rather than silently booting a production deployment in dev mode
+    # (weaker CORS/cookie/audit defaults elsewhere keyed off app_env).
+    production_mode: bool = Field(default=False, alias="PRODUCTION_MODE")
+
+    @model_validator(mode="after")
+    def _refuse_production_mode_without_app_env_production(self) -> Settings:
+        """Same fail-closed pattern as _refuse_mfa_bypass_outside_dev_test
+        below: raising here makes Settings() itself refuse to construct, so
+        the backend, every Celery worker and beat (all call get_settings()
+        at import/startup) refuse to start rather than silently running a
+        production deployment with a non-production APP_ENV."""
+        if self.production_mode and self.app_env != "production":
+            raise ValueError(
+                f"PRODUCTION_MODE=true requires APP_ENV=production (APP_ENV={self.app_env!r}); "
+                "refusing to start."
+            )
+        return self
+
     @model_validator(mode="after")
     def _refuse_mfa_bypass_outside_dev_test(self) -> Settings:
         """Fail closed: DEV_DISABLE_MFA=true is only legal when APP_ENV was
