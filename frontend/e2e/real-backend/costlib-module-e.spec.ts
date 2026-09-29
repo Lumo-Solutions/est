@@ -31,6 +31,10 @@ test.describe('CostLibraryPage', () => {
     await page.getByLabel('UoM').fill('m3')
     await page.getByRole('button', { name: 'Create item' }).click()
 
+    // The list is sorted by code and paged (20/page), and every run of this spec
+    // adds an E2E-<timestamp> item that sorts last -- so once ~20 accumulate the
+    // new item is no longer on page 1. Search for it instead of assuming it is.
+    await page.getByLabel('Search cost items').fill(uniqueCode)
     await expect(page.getByRole('link', { name: uniqueCode })).toBeVisible()
     await page.getByRole('link', { name: uniqueCode }).click()
     await expect(page.getByRole('heading', { name: `${uniqueCode} — E2E cost item` })).toBeVisible()
