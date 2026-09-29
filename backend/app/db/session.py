@@ -123,7 +123,30 @@ async def worker_session_scope(ctx: RequestContext) -> AsyncIterator[AsyncSessio
     """Same shape as session_scope(), bound to get_worker_engine() (NullPool)
     instead of get_app_engine() -- see that function's docstring. Used only
     by app/workers/base.py::with_worker_session, i.e. every Celery task
-    body."""
+    body.
+
+    Deliberately a plain, unconditional "any exception rolls back the
+    WHOLE transaction" scope, same as session_scope()/get_session() -- a
+    task body that wants one specific write (e.g. recording its own
+    failure into extraction_jobs before re-raising) to survive regardless
+    of what happens to the rest of its own transaction must commit that
+    write through its OWN, independent call to with_worker_session()/
+    worker_session_scope(), not by trying to carve out an exception inside
+    this shared scope. An earlier version of this function tried exactly
+    that (catching the body's exception here, letting session.begin() see
+    a clean exit and commit, then re-raising afterward) -- it worked for
+    the one write it was tested against, but Session.commit() always
+    flushes and commits EVERYTHING still pending on the session, not just
+    that one write: confirmed by audit that this would have durably
+    committed, on random unrelated failures elsewhere in a body, things
+    like duplicate DrawingSheet rows from a retried index_sheets loop, or
+    an inbound email marked permanently "known" (so never retried) with
+    some of its attachments missing, or a quotation flipped to
+    is_current=True with an incomplete set of line items -- silent data
+    corruption on exactly the failure paths this fix was supposed to make
+    safer. See app/workers/tasks/takeoff.py's own module docstring for how
+    its 3 tasks that need this now get it, safely, via a second, fully
+    independent worker_session_scope call for just the failure record."""
     async with _worker_session_factory_fn()() as session, session.begin():
         await set_rls_context(session, ctx)
         yield session

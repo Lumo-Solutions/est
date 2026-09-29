@@ -48,3 +48,8 @@ build/
 
 # Playwright MCP session scratch (snapshots, console logs)
 .playwright-mcp/
+
+# make download-embedding-model's transient export dir (see Makefile) --
+# normally removed automatically; ignored defensively in case a run fails
+# partway through and leaves it behind.
+.onnx-model-export/

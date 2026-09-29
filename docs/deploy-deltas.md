@@ -88,6 +88,32 @@ Docker daemon, `make download-embedding-model` does the whole thing (export
 + copy into the `onnxmodels` volume) in one step -- not run by `make up`,
 same explicit-opt-in posture as `bootstrap-keycloak`.
 
+**Windows/Git Bash footgun found and fixed (finish-brief follow-up):** the
+target originally used a bare `--target-dir /tmp/onnx-model-export` and
+`docker run -v /tmp/onnx-model-export:/src`. On Windows, Python's own
+pathlib silently reinterprets a leading `/` as "root of the current drive"
+(so the export actually landed in `C:\tmp\onnx-model-export`), while Docker
+Desktop resolves a bare POSIX path like `/tmp/onnx-model-export` against its
+own WSL VM filesystem, not the Windows host -- two DIFFERENT locations from
+one literal path string. The bind mount was therefore always empty and
+`cp -r` silently copied nothing into the volume, with **no error at any
+step** -- `make download-embedding-model` reported success while leaving
+the volume empty. The backend/workers then found no model file at
+`$ONNX_MODEL_DIR`, and every `embed_drawing` task failed -- this is the
+confirmed root cause of the "GEO-TEST stuck in `extracting`" observation
+from Phase 2 (`docs/ui-qa/log.md`) and its later WALK-1 recurrence
+(`docs/ui-qa-report.md`): not a missing manual step, a broken one that
+looked like it succeeded. Fixed: the target now uses `$(CURDIR)/.onnx-
+model-export` (an unambiguous real path both Python and Docker Desktop
+resolve identically) plus `MSYS_NO_PATHCONV=1` (same fix `deploy/keycloak/
+bootstrap.sh` already uses for the same class of Git-Bash path-mangling).
+Verified end-to-end on this Windows/Git Bash environment: cleared the
+volume, ran `make download-embedding-model`, confirmed
+`BAAI_bge-small-en-v1.5/model.onnx` (133MB) actually present in the volume
+afterward, then confirmed a real drawing upload reaches `ready` with
+embeddings (see the finish-brief follow-up's own report for the live
+confirmation).
+
 For an air-gapped target (no network access on the machine running the
 stack), do the export step on a **separate** machine with network access
 instead, using `ai-service/embeddings/download_model.py` directly (it needs

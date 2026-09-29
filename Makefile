@@ -165,11 +165,27 @@ dev-clean-demo-data:
 # ai-service/embeddings/download_model.py on a separate machine with
 # network access instead and copy its output into that machine's own
 # equivalent of this volume.
+# --target-dir/-v both use $(CURDIR)-relative paths, not /tmp/... -- found
+# live on Windows/Git Bash: a bare `/tmp/onnx-model-export` gets silently
+# reinterpreted two DIFFERENT ways by the two native (non-MSYS) processes on
+# this one line -- Python's pathlib treats a leading "/" as "root of the
+# current drive" (so the exporter actually wrote to C:\tmp\onnx-model-export),
+# while `docker run -v /tmp/onnx-model-export:/src` (Docker Desktop) resolves
+# a bare POSIX path against its own WSL VM filesystem, not the Windows host
+# -- so the bind mount was empty and `cp -r` silently copied nothing into the
+# named volume, with no error at any step. The backend/workers then found an
+# empty ONNX_MODEL_DIR and every embed_drawing task failed forever (the
+# "GEO-TEST stuck in extracting" root cause -- see docs/takeoff-pipeline.md).
+# $(CURDIR)/.onnx-model-export is an unambiguous, real Windows path both
+# processes resolve identically; MSYS_NO_PATHCONV=1 (same as bootstrap.sh)
+# additionally stops Git Bash itself from rewriting it a third way.
 download-embedding-model:
 	pip install --quiet "optimum[onnxruntime]" huggingface_hub
-	python ai-service/embeddings/download_model.py --target-dir /tmp/onnx-model-export
-	docker run --rm -v deploy_onnxmodels:/models -v /tmp/onnx-model-export:/src alpine cp -r /src/. /models/BAAI_bge-small-en-v1.5/
-	rm -rf /tmp/onnx-model-export
+	export MSYS_NO_PATHCONV=1; \
+	python ai-service/embeddings/download_model.py --target-dir "$(CURDIR)/.onnx-model-export" && \
+	docker run --rm -v deploy_onnxmodels:/models -v "$(CURDIR)/.onnx-model-export:/src" alpine \
+	  sh -c "mkdir -p /models/BAAI_bge-small-en-v1.5 && cp -r /src/. /models/BAAI_bge-small-en-v1.5/" && \
+	rm -rf "$(CURDIR)/.onnx-model-export"
 
 # Runs inside a container on the compose network -- see the `init-buckets`
 # service comment in deploy/docker-compose.yml for why (host can't resolve

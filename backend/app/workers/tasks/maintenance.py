@@ -189,8 +189,21 @@ async def _reap_stuck_drawings_body(session: AsyncSession, tenant_id: str) -> in
         ).scalars().all()
         status, reason = aggregate_drawing_status(jobs)
         drawing.status = status
-        stall_note = f"Extraction stalled: no progress for over {settings.drawing_stuck_timeout_s}s; rescued by the stale-drawing sweeper."
-        drawing.error_message = f"{stall_note} {reason}" if reason else stall_note
+        # aggregate_drawing_status only ever returns reason=None alongside
+        # `ready` -- a rescued drawing that turns out to have nothing
+        # actually failed (e.g. every job that did run succeeded; a job
+        # that never got as far as its own extraction_jobs row at all,
+        # such as a broker message truly lost before any worker picked it
+        # up, is invisible to this aggregation -- a known, narrow blind
+        # spot of this recovery path, not the normal one) must not carry a
+        # stale-looking "stalled" message alongside a ready status.
+        if reason is None:
+            drawing.error_message = None
+        else:
+            drawing.error_message = (
+                f"Extraction stalled: no progress for over {settings.drawing_stuck_timeout_s}s; "
+                f"rescued by the stale-drawing sweeper. {reason}"
+            )
     await session.flush()
     return len(stuck)
 

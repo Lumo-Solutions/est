@@ -35,7 +35,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -225,6 +225,60 @@ async def test_every_content_job_failing_makes_drawing_failed_not_partial(rls_se
     assert "no embedding model" in drawing.error_message
 
 
+async def test_finalize_reruns_and_updates_status_on_a_retry_not_frozen_at_first_result(rls_session):
+    """Found live: 'Retry extraction' (POST /drawings/{id}/ingest again)
+    always re-dispatches a fresh finalize_drawing as part of its new
+    chord, same as every other task -- but _upsert_job's own idempotent-
+    replay guard ("a prior attempt already succeeded -> skip") meant that
+    once finalize_drawing succeeded ONCE, every later invocation silently
+    no-opped forever, freezing drawing.status/error_message at whatever
+    they were after the FIRST finalize -- even though the jobs it's
+    supposed to summarize had genuinely changed on the retry (e.g. a
+    previously-failed embed_sheet now succeeding). Unlike extract_sheet/
+    embed_drawing/etc., finalize_drawing doesn't DO idempotent work of its
+    own -- it only reads and reflects the CURRENT state of every other
+    job -- so it must always re-run, never skip. Fixed via _upsert_job's
+    new `force` param, used only by finalize_drawing."""
+    from app.workers.tasks import takeoff as takeoff_tasks
+
+    tenant_id, project_id = await _seed_project(rls_session)
+    drawing, sheets = await _seed_drawing(rls_session, tenant_id, project_id, sheet_count=1)
+    embed_job = _job(
+        tenant_id=tenant_id, project_id=project_id, drawing_id=drawing.id, sheet_id=None,
+        job_type=ExtractionJobType.EMBED_SHEET.value, status=ExtractionJobStatus.FAILED.value, error="no embedding model",
+    )
+    rls_session.add_all(
+        [
+            _job(
+                tenant_id=tenant_id, project_id=project_id, drawing_id=drawing.id, sheet_id=None,
+                job_type=ExtractionJobType.INDEX_SHEETS.value, status=ExtractionJobStatus.SUCCEEDED.value,
+            ),
+            _job(
+                tenant_id=tenant_id, project_id=project_id, drawing_id=drawing.id, sheet_id=sheets[0].id,
+                job_type=ExtractionJobType.EXTRACT_TITLE_BLOCK.value, status=ExtractionJobStatus.SUCCEEDED.value,
+            ),
+            embed_job,
+        ]
+    )
+    await rls_session.flush()
+
+    await takeoff_tasks._finalize_drawing_body(rls_session, str(drawing.id), "task-1")
+    assert drawing.status == DrawingStatus.PARTIAL.value
+    assert drawing.error_message is not None and "no embedding model" in drawing.error_message
+
+    # The retry: embed_sheet now genuinely succeeds (its own job row
+    # updated in place, exactly as _record_extraction_failure/_finish_job
+    # would for a real retry).
+    embed_job.status = ExtractionJobStatus.SUCCEEDED.value
+    embed_job.error = None
+    await rls_session.flush()
+
+    await takeoff_tasks._finalize_drawing_body(rls_session, str(drawing.id), "task-2")
+
+    assert drawing.status == DrawingStatus.READY.value  # not still frozen at `partial`
+    assert drawing.error_message is None
+
+
 # --------------------------------------------------------------------------
 # the stale-drawing sweeper: rescues a drawing the chord never resolved
 # --------------------------------------------------------------------------
@@ -296,6 +350,51 @@ async def test_reap_stuck_drawings_rescues_a_stalled_drawing(rls_session, monkey
     assert fresh_drawing.status == DrawingStatus.EXTRACTING.value  # untouched
 
 
+async def test_reap_stuck_drawings_rescued_to_ready_gets_no_stale_error_message(rls_session, monkeypatch):
+    """Found live against real, long-stuck drawings (GEO-TEST/WALK-1, see
+    docs/ui-qa-report.md): their embed_sheet task had never even reached its
+    own _upsert_job call (no extraction_jobs row for it at all -- a lost
+    broker message, not a recorded failure), so every job that DOES have a
+    row succeeded and aggregate_drawing_status correctly resolves them to
+    `ready`. The sweeper must not then stamp a "stalled" error_message onto
+    an otherwise-ready drawing -- a real bug, fixed here: it unconditionally
+    built a stall note before this fix, regardless of the aggregated
+    status."""
+    from types import SimpleNamespace
+
+    from app.workers.tasks import maintenance as maintenance_tasks
+
+    monkeypatch.setattr(
+        maintenance_tasks, "get_settings", lambda: SimpleNamespace(drawing_stuck_timeout_s=3600)
+    )
+    tenant_id, project_id = await _seed_project(rls_session)
+    drawing, sheets = await _seed_drawing(rls_session, tenant_id, project_id, sheet_count=1)
+    rls_session.add_all(
+        [
+            _job(
+                tenant_id=tenant_id, project_id=project_id, drawing_id=drawing.id, sheet_id=None,
+                job_type=ExtractionJobType.INDEX_SHEETS.value, status=ExtractionJobStatus.SUCCEEDED.value,
+            ),
+            _job(
+                tenant_id=tenant_id, project_id=project_id, drawing_id=drawing.id, sheet_id=sheets[0].id,
+                job_type=ExtractionJobType.EXTRACT_TITLE_BLOCK.value, status=ExtractionJobStatus.SUCCEEDED.value,
+            ),
+            # No embed_sheet row at all -- that task's message was lost
+            # before it ever ran, not before it recorded a failure.
+        ]
+    )
+    await rls_session.flush()
+    drawing.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    await rls_session.flush()
+    rls_session.expire_all()
+
+    rescued = await maintenance_tasks._reap_stuck_drawings_body(rls_session, str(tenant_id))
+
+    assert rescued == 1
+    assert drawing.status == DrawingStatus.READY.value
+    assert drawing.error_message is None
+
+
 # --------------------------------------------------------------------------
 # the outer task wrapper: terminal failure swallowed, in-progress retry not
 # --------------------------------------------------------------------------
@@ -339,3 +438,95 @@ def test_extract_sheet_task_still_lets_an_in_progress_retry_through(monkeypatch,
 
     with pytest.raises(Retry):
         takeoff_tasks.extract_sheet(str(uuid.uuid4()), str(uuid.uuid4()))
+
+
+# --------------------------------------------------------------------------
+# _record_extraction_failure: the failure record must survive its own
+# session's rollback (the bug that motivated it, found live -- see
+# app/workers/tasks/takeoff.py's module docstring)
+# --------------------------------------------------------------------------
+
+
+async def test_extract_sheet_failure_is_durably_recorded_across_the_rollback(app_engine, monkeypatch):
+    """rls_session's single, test-scoped, never-committed transaction can't
+    exercise this: _record_extraction_failure's whole point is to commit
+    through a SECOND, genuinely independent connection/transaction, which
+    can only be observed once the first transaction's own writes are
+    actually committed and visible to it. So this test uses real committed
+    sessions (worker_session_scope, exactly as production does) instead of
+    the rls_session fixture, and cleans up its own rows explicitly at the
+    end rather than relying on a rollback."""
+    from app.core.context import system_context
+    from app.db.session import worker_session_scope
+    from app.workers.tasks import takeoff as takeoff_tasks
+
+    tenant_id = uuid.uuid4()
+    ctx = system_context(tenant_id)
+
+    async with worker_session_scope(ctx) as session:
+        await session.execute(
+            text("INSERT INTO tenants (id, slug, name) VALUES (:id, :slug, :name)"),
+            {"id": str(tenant_id), "slug": f"resfail-{uuid.uuid4().hex[:8]}", "name": "Resilience Failure Test"},
+        )
+        project_id = (
+            await session.execute(
+                text("INSERT INTO projects (tenant_id, code, name) VALUES (:t, :c, 'P') RETURNING id"),
+                {"t": str(tenant_id), "c": f"RESFAIL-{uuid.uuid4().hex[:8]}"},
+            )
+        ).scalar_one()
+        drawing = Drawing(
+            tenant_id=tenant_id, project_id=project_id, original_filename="x.pdf", kind="vector_pdf",
+            bucket="installtec-drawings", object_key="x", size_bytes=1, sha256=uuid.uuid4().hex.ljust(64, "0"),
+            status=DrawingStatus.EXTRACTING.value,
+        )
+        session.add(drawing)
+        await session.flush()
+        sheet = DrawingSheet(
+            tenant_id=tenant_id, drawing_id=drawing.id, project_id=project_id, sheet_index=0,
+            source_name="page-1", units="pt", is_raster=False,
+            # Non-empty raw_text -- _extract_sheet_body only reaches for the
+            # object in S3 (get_object_bytes) when is_raster or raw_text is
+            # blank; this test wants the failure to come from the
+            # monkeypatched extract_title_block, not an unrelated S3/
+            # credentials error from a step this test never intends to
+            # reach at all (confirmed live: without this, it fails on
+            # botocore.exceptions.NoCredentialsError instead).
+            raw_text="some extracted text",
+        )
+        session.add(sheet)
+        await session.flush()
+        drawing_id, sheet_id = drawing.id, sheet.id
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated title-block extraction failure")
+
+    monkeypatch.setattr(takeoff_tasks, "extract_title_block", _boom)
+
+    try:
+        with pytest.raises(RuntimeError, match="simulated title-block extraction failure"):
+            await takeoff_tasks.with_worker_session(ctx, takeoff_tasks._extract_sheet_body, str(sheet_id), "task-durability-test")
+
+        # A FRESH session/connection (worker_session_scope again, not the
+        # one above, which is long since closed) -- this is exactly what
+        # finalize_drawing/the sweeper/the frontend all read afterward.
+        async with worker_session_scope(ctx) as verify_session:
+            job = (
+                await verify_session.execute(
+                    select(ExtractionJob).where(
+                        ExtractionJob.drawing_id == drawing_id, ExtractionJob.job_type == ExtractionJobType.EXTRACT_TITLE_BLOCK.value
+                    )
+                )
+            ).scalar_one()
+            assert job.status == ExtractionJobStatus.FAILED.value
+            assert job.error is not None and "simulated title-block extraction failure" in job.error
+            refreshed_sheet = (
+                await verify_session.execute(select(DrawingSheet).where(DrawingSheet.id == sheet_id))
+            ).scalar_one()
+            assert refreshed_sheet.extraction_status == "failed"
+    finally:
+        async with worker_session_scope(ctx) as cleanup_session:
+            await cleanup_session.execute(text("DELETE FROM extraction_jobs WHERE drawing_id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM drawing_sheets WHERE drawing_id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM drawings WHERE id = :d"), {"d": str(drawing_id)})
+            await cleanup_session.execute(text("DELETE FROM projects WHERE tenant_id = :t"), {"t": str(tenant_id)})
+            await cleanup_session.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": str(tenant_id)})

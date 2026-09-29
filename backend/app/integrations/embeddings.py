@@ -55,9 +55,22 @@ class OnnxEmbedder:
             n = len(enc.ids)
             input_ids[i, :n] = enc.ids
             attention_mask[i, :n] = 1
+        # BAAI/bge-small-en-v1.5's ONNX export is a standard BERT-family
+        # graph with 3 required inputs, confirmed via
+        # InferenceSession.get_inputs() -- token_type_ids (the
+        # sentence-A/sentence-B segment id BERT-style models take) is
+        # always 0 here since every embed() call is a single sequence per
+        # row, never a sentence pair. Found live: every embed_drawing
+        # attempt failed with "Required inputs (['token_type_ids']) are
+        # missing" once a real model was actually provisioned and this
+        # path first ran for real (see docs/deploy-deltas.md) -- with the
+        # model missing entirely (the previous, more common dev state),
+        # _ensure_loaded() raised FileNotFoundError before ever reaching
+        # this call, which is why this had never been exercised before.
+        token_type_ids = np.zeros((len(texts), max_len), dtype=np.int64)
 
         outputs = self._session.run(
-            None, {"input_ids": input_ids, "attention_mask": attention_mask}
+            None, {"input_ids": input_ids, "attention_mask": attention_mask, "token_type_ids": token_type_ids}
         )
         token_embeddings = outputs[0]  # (batch, seq_len, hidden)
         mask = attention_mask[..., None].astype(np.float32)

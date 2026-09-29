@@ -130,15 +130,33 @@ finalize_drawing: status = 'ready' (nothing failed), 'partial' (some
   succeeded) -- aggregate_drawing_status() in this module. drawing.
   error_message gets a short per-job summary of what failed. Always runs:
   extract_sheet/embed_drawing/extract_geometry_measurements each swallow
-  their own terminal (post-retry) failure at the Celery-task level -- after
-  recording it into extraction_jobs -- specifically so a permanently-failing
-  chord member never blocks this callback (see the module's own docstring).
-  A stale-drawing sweeper (celery-beat, hourly, DRAWING_STUCK_TIMEOUT_S,
-  reap_stuck_drawings in maintenance.py) resolves any drawing that still
-  gets stuck in indexing/extracting/embedding regardless (e.g. a worker
-  crash), using the same aggregation. "Retry extraction" (frontend, any
-  upload role) is just POST /drawings/{id}/ingest again -- safe because
-  every task here is already idempotent-replay-safe (see above).
+  their own terminal (post-retry) failure at the Celery-task level --
+  specifically so a permanently-failing chord member never blocks this
+  callback -- after durably recording it into extraction_jobs via
+  _record_extraction_failure(), a SECOND, fully independent worker session
+  opened just for that one write. It has to be independent: the caller's
+  own session/transaction is rolled back in full by the `raise` right after
+  (worker_session_scope's normal, correct behavior for everything else in
+  that transaction), so a plain write on that same session, right before
+  re-raising, never survives -- confirmed live, and by an audit of every
+  other worker task body before this shipped (a shared-session version of
+  this fix would have durably committed unrelated partial state on random
+  unrelated failures elsewhere, e.g. duplicate rows from a retried loop).
+  See the module's own docstring and _record_extraction_failure's for the
+  full reasoning. A stale-drawing sweeper (celery-beat, hourly,
+  DRAWING_STUCK_TIMEOUT_S, reap_stuck_drawings in maintenance.py) resolves
+  any drawing that still gets stuck in indexing/extracting/embedding
+  regardless (e.g. a worker crash), using the same aggregation. "Retry
+  extraction" (frontend, any upload role) is just POST /drawings/{id}/ingest
+  again -- safe because every task here is already idempotent-replay-safe
+  (see above). finalize_drawing itself is a deliberate exception to that
+  idempotent-skip pattern (_upsert_job's `force=True`, finalize_drawing
+  only): it doesn't do idempotent work of its own, it just reflects the
+  CURRENT state of every other job, so it must always re-run on every
+  retry rather than silently no-op because it "already succeeded" once --
+  confirmed live: without `force`, a retry whose embed_sheet genuinely
+  went from failed to succeeded left the drawing frozen at its OLD
+  `partial` status/reason forever.
 ```
 
 Every task upserts its own `extraction_jobs(drawing_id, sheet_id, job_type)`
