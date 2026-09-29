@@ -311,6 +311,7 @@ export interface BoqImportColumnMappingIn {
   rate_column?: string | null
   amount_column?: string | null
   header_row?: number
+  sheet_name?: string | null
 }
 
 export interface BoqImportRowOut {

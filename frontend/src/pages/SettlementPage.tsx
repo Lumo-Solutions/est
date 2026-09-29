@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
@@ -21,6 +21,7 @@ import {
   useSubmitSettlement,
   useUpdateSettlementLine,
 } from '../features/settlement/api'
+import { useProjectAddenda } from '../features/tenderIntake/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
 import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
@@ -632,11 +633,28 @@ export function SettlementPage() {
   const { data: detail } = useSettlement(current?.id)
   const buildDraft = useBuildSettlementDraft(projectId)
   const refreshQuantities = useRefreshQuantities(projectId, current?.id)
+  // Addenda that changed the tender documents after this settlement was built.
+  // Only these four roles can open the settlement page, and the addenda
+  // endpoint may 403 for anyone else, so do not call it for other roles.
+  const { data: addenda } = useProjectAddenda(projectId, { enabled: hasRole(...BUILD_DRAFT_ROLES) })
+  const staleAddendum = current ? addenda?.find((a) => a.open_settlement_ids.includes(current.id)) : undefined
   const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
 
   return (
     <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Settlement cockpit</PageTitle>
+      {staleAddendum && current && projectId && (
+        <div role="status" className="mt-4 rounded-card bg-warning-subtle px-4 py-3 text-sm text-amber-800">
+          {staleAddendum.addendum_no ? `Addendum ${staleAddendum.addendum_no}` : 'An addendum'} changed the tender documents after this settlement was built.{' '}
+          {current.status === 'draft' ? 'Refresh quantities before you submit.' : 'Ask for a re-review before deciding.'}{' '}
+          <Link
+            to={`/projects/${projectId}?tab=tender-documents`}
+            className="rounded font-medium underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
+            View addenda
+          </Link>
+        </div>
+      )}
       {isLoading && <SkeletonRows count={4} />}
       {isError && (
         <p role="alert" className="mt-4 text-sm text-danger">
