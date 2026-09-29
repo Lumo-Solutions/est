@@ -46,6 +46,9 @@ export function useSettlement(settlementId: string | undefined) {
 function invalidateSettlement(queryClient: ReturnType<typeof useQueryClient>, projectId: string | undefined, settlementId: string | undefined) {
   queryClient.invalidateQueries({ queryKey: ['bid-settlements', settlementId] })
   queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'bid-settlements'] })
+  // Submitting/deciding changes what is waiting on whom: keep the dashboard
+  // tile and /approvals in step.
+  queryClient.invalidateQueries({ queryKey: ['approvals'] })
 }
 
 export function useUpdateSettlementDefaults(projectId: string | undefined, settlementId: string | undefined) {

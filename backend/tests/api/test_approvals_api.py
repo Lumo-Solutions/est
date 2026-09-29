@@ -243,3 +243,46 @@ async def test_genuine_step_up_is_not_flagged_as_bypassed_when_dev_mfa_is_off(
     payloads = await _audit_payloads(app_engine, request_id)
     assert len(payloads) == 1
     assert "mfa_bypassed_dev" not in payloads[0]
+
+
+async def test_inbox_lowest_allowed_role_and_denied_role(authed_client):
+    """New endpoint: lead_estimator is the lowest role that can ever be a
+    tier's required_role (200); estimator is denied (403)."""
+    ok = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
+    resp = await ok.get("/api/v1/approvals/inbox")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {"pending", "recent"}
+
+    denied = authed_client(frozenset({Role.ESTIMATOR.value}))
+    assert (await denied.get("/api/v1/approvals/inbox")).status_code == 403
+
+
+async def test_inbox_states_enrichment_and_recent(authed_client):
+    submitter = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), username="lead1")
+    created = await submitter.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": 10000, "currency": "AED"},
+    )
+    request_id = created.json()["id"]
+
+    # The submitter sees it, but flagged so the UI shows no actions.
+    mine = (await submitter.get("/api/v1/approvals/inbox")).json()
+    row = next(r for r in mine["pending"] if r["id"] == request_id)
+    assert row["view_state"] == "awaiting_other"
+    assert row["waiting_role"] == "lead_estimator"
+    # pending-for-me still excludes it (SoD), unchanged.
+    assert request_id not in {r["id"] for r in (await submitter.get("/api/v1/approvals/pending-for-me")).json()}
+
+    approver = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), acr="silver")
+    pending = (await approver.get("/api/v1/approvals/inbox")).json()["pending"]
+    assert next(r for r in pending if r["id"] == request_id)["view_state"] == "actionable"
+
+    assert (await approver.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})).status_code == 200
+    after = (await approver.get("/api/v1/approvals/inbox")).json()
+    assert request_id not in {r["id"] for r in after["pending"]}
+    recent = next(r for r in after["recent"] if r["id"] == request_id)
+    assert recent["status"] == "approved" and recent["view_state"] == "decided"
+
+    # A different lead who never decided it does not see it as recent.
+    other = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
+    assert request_id not in {r["id"] for r in (await other.get("/api/v1/approvals/inbox")).json()["recent"]}

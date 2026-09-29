@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -11,8 +11,15 @@ from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError
+from app.models.settlement import BidSettlement
+from app.models.tenancy import Project, User
 from app.models.approvals import ApprovalPolicy, ApprovalPolicyTier, ApprovalRequest, ApprovalStep
-from app.schemas.approvals import ApprovalPolicyCreate, ApprovalRequestCreate
+from app.schemas.approvals import (
+    ApprovalPolicyCreate,
+    ApprovalRequestCreate,
+    ApprovalRequestOut,
+    ApprovalStepOut,
+)
 from app.security.deps import has_recent_step_up, mfa_audit_payload
 from app.services import audit
 
@@ -211,6 +218,20 @@ async def create_request(session: AsyncSession, ctx: RequestContext, data: Appro
     return request
 
 
+async def _drop_stale(session: AsyncSession, requests: list[ApprovalRequest]) -> list[ApprovalRequest]:
+    """A bid_submission request is only actionable while its settlement is
+    still the submitted one pointing at it. Rebuilding a settlement version
+    demotes the old one but leaves its request 'pending', and such an orphan
+    would show up (linking to the *current* settlement) for every approver
+    forever -- decide_settlement refuses it anyway, so hide it."""
+    bid_ids = [r.entity_id for r in requests if r.entity_type == "bid_submission"]
+    if not bid_ids:
+        return requests
+    rows = await session.execute(select(BidSettlement).where(BidSettlement.id.in_(bid_ids)))
+    live = {s.id for s in rows.scalars().all() if s.status == "submitted" and s.is_current}
+    return [r for r in requests if r.entity_type != "bid_submission" or r.entity_id in live]
+
+
 async def list_pending_for_caller(session: AsyncSession, ctx: RequestContext) -> list[ApprovalRequest]:
     """Phase 3 gap-fill (docs/ui-qa-brief.md): home dashboard's "approvals
     waiting for me" tile -- no list endpoint existed before this, only
@@ -220,7 +241,7 @@ async def list_pending_for_caller(session: AsyncSession, ctx: RequestContext) ->
     "every pending request", so a caller never sees one they can't actually
     act on."""
     result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending"))
-    requests = list(result.scalars().all())
+    requests = await _drop_stale(session, list(result.scalars().all()))
     if not requests:
         return []
     steps_result = await session.execute(
@@ -307,3 +328,107 @@ async def decide(
         payload={"step_seq": current_step.seq, "note": note, **mfa_audit_payload(ctx, settings)},
     )
     return request
+
+
+async def enrich(
+    session: AsyncSession, ctx: RequestContext, requests: list[ApprovalRequest]
+) -> list[ApprovalRequestOut]:
+    """Approval requests plus the display context an approver needs (project
+    code/name, who submitted, waiting role, settlement version/margin) and a
+    caller-relative view_state. Display only -- decide() stays the single
+    authority on who may act."""
+    if not requests:
+        return []
+    ids = [r.id for r in requests]
+    steps_result = await session.execute(
+        select(ApprovalStep).where(ApprovalStep.request_id.in_(ids)).order_by(ApprovalStep.seq)
+    )
+    steps_by_request: dict[UUID, list[ApprovalStep]] = {}
+    for step in steps_result.scalars().all():
+        steps_by_request.setdefault(step.request_id, []).append(step)
+
+    project_ids = {r.project_id for r in requests if r.project_id}
+    projects: dict[UUID, Project] = {}
+    if project_ids:
+        rows = await session.execute(select(Project).where(Project.id.in_(project_ids)))
+        projects = {p.id: p for p in rows.scalars().all()}
+
+    rows = await session.execute(select(User).where(User.id.in_({r.requested_by for r in requests})))
+    users: dict[UUID, User] = {u.id: u for u in rows.scalars().all()}
+
+    bid_ids = [r.entity_id for r in requests if r.entity_type == "bid_submission"]
+    settlements: dict[UUID, BidSettlement] = {}
+    if bid_ids:
+        rows = await session.execute(select(BidSettlement).where(BidSettlement.id.in_(bid_ids)))
+        settlements = {s.id: s for s in rows.scalars().all()}
+
+    out: list[ApprovalRequestOut] = []
+    for r in requests:
+        steps = steps_by_request.get(r.id, [])
+        item = ApprovalRequestOut.model_validate(r)
+        item.steps = [ApprovalStepOut.model_validate(s) for s in steps]
+        project = projects.get(r.project_id) if r.project_id else None
+        if project is not None:
+            item.project_code, item.project_name = project.code, project.name
+        submitter = users.get(r.requested_by)
+        item.requested_by_name = (submitter.display_name or submitter.email) if submitter else None
+        settlement = settlements.get(r.entity_id)
+        if settlement is not None:
+            item.settlement_version_no = settlement.version_no
+            item.margin_on_sell_pct = settlement.margin_on_sell_pct
+        current = next((s for s in steps if s.seq == r.current_seq), None)
+        if r.status == "pending" and current is not None and current.status == "pending":
+            item.waiting_role = current.required_role
+            if r.requested_by == ctx.user_id:
+                item.view_state = "awaiting_other"
+            elif current.required_role in ctx.roles:
+                item.view_state = "actionable"
+            else:
+                item.view_state = "other"
+        elif any(s.decided_by == ctx.user_id for s in steps):
+            item.view_state = "decided"
+        else:
+            item.view_state = "other"
+        out.append(item)
+    return out
+
+
+async def inbox_for_caller(
+    session: AsyncSession, ctx: RequestContext
+) -> tuple[list[ApprovalRequestOut], list[ApprovalRequestOut]]:
+    """/approvals page: every pending request whose current step is for one of
+    the caller's roles (their own submissions included, flagged
+    awaiting_other so the UI shows no actions) plus requests the caller
+    decided in the last 30 days."""
+    result = await session.execute(
+        select(ApprovalRequest).where(ApprovalRequest.status == "pending").order_by(ApprovalRequest.requested_at)
+    )
+    pending_reqs = await _drop_stale(session, list(result.scalars().all()))
+    steps_by_request: dict[UUID, list[ApprovalStep]] = {}
+    if pending_reqs:
+        steps_result = await session.execute(
+            select(ApprovalStep).where(ApprovalStep.request_id.in_([r.id for r in pending_reqs]))
+        )
+        for step in steps_result.scalars().all():
+            steps_by_request.setdefault(step.request_id, []).append(step)
+    mine = []
+    for r in pending_reqs:
+        current = next((s for s in steps_by_request.get(r.id, []) if s.seq == r.current_seq), None)
+        if current is not None and current.status == "pending" and current.required_role in ctx.roles:
+            mine.append(r)
+
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    decided = await session.execute(
+        select(ApprovalRequest)
+        .join(ApprovalStep, ApprovalStep.request_id == ApprovalRequest.id)
+        .where(ApprovalStep.decided_by == ctx.user_id, ApprovalStep.decided_at >= since)
+        .order_by(ApprovalStep.decided_at.desc())
+        .limit(50)
+    )
+    recent_reqs: list[ApprovalRequest] = []
+    seen: set[UUID] = set()
+    for r in decided.scalars().all():
+        if r.id not in seen:
+            seen.add(r.id)
+            recent_reqs.append(r)
+    return await enrich(session, ctx, mine), await enrich(session, ctx, recent_reqs)

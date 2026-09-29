@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   Calculator,
   ClipboardList,
+  CheckCircle2,
   Coins,
   Download,
   FolderKanban,
@@ -99,6 +100,13 @@ const GLOBAL_NAV_ITEMS: NavItem[] = [
   // shows a sensible message for a role with no cross-project tile (an
   // estimator, whose relevant items are all project-scoped today).
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
+  // Same roles as the dashboard's approvals tile and GET /approvals/inbox.
+  {
+    label: 'Approvals',
+    icon: CheckCircle2,
+    to: '/approvals',
+    requiresRoles: [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR],
+  },
   // No requiresRoles: reading the vendor directory is useful to every role
   // (matches GET /vendors's own "any authenticated user" server check) --
   // only the write actions inside VendorsPage/VendorDetailPage are gated.

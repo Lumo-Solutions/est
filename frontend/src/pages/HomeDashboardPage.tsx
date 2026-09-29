@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { ApprovalSummary } from '../components/ApprovalSummary'
 import { SkeletonRows } from '../components/Skeleton'
 import {
   useExpiringCertificatesForDashboard,
@@ -7,7 +8,6 @@ import {
   usePendingApprovalsForMe,
   useQuarantineQueueForDashboard,
 } from '../features/dashboard/api'
-import { formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
 
@@ -83,14 +83,21 @@ function ApprovalsTile() {
       count={data?.length ?? 0}
       emptyLabel="Nothing waiting on your decision."
     >
-      {data?.map((r) => (
-        <li key={r.id} className="flex items-center justify-between">
-          <span>
-            {r.entity_type} -- {formatMoney(r.amount, r.currency)}
-          </span>
-          <span className="text-xs text-muted">step {r.current_seq}</span>
+      {data?.slice(0, 5).map((r) => (
+        <li key={r.id}>
+          <ApprovalSummary request={r} />
         </li>
       ))}
+      {(data?.length ?? 0) > 0 && (
+        <li className="pt-1">
+          <Link
+            to="/approvals"
+            className="rounded text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
+            View all
+          </Link>
+        </li>
+      )}
     </Tile>
   )
 }
