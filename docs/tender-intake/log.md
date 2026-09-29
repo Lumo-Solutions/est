@@ -26,3 +26,11 @@ Resume from the first unfinished step. Brief: `docs/tender-intake-brief.md`.
 - Verified: api + integration approvals tests, vitest, `tsc -b`, real-backend
   `approvals-inbox.spec.ts` (settlement, cost rate, axe) with MFA off and on, plus home-dashboard
   and settlement specs.
+
+## Part 2: tender intake (`feat/tender-intake`)
+- [x] Plan committed (`docs/tender-intake-plan.md`).
+- [x] Subagent A (`agent/intake-fixtures`, synthetic pack) verified: commit d5418b8 exists, only the 2 allow-listed files, merged. Main session fixed one thing it got wrong (xlsx `modified` timestamp is stamped inside `save()`, so the pack was not deterministic) and ran its tests.
+- [x] Migration 0030, models, constants, settings, archive/safety, extract, rules, metadata, classifier, prompt+schema, mock-vllm branch. 97 unit tests pass.
+- [ ] service, routes, worker, ai-service prompt contract test, integration/API tests (RLS, roles, audit, routing)
+- [ ] frontend (subagent B), BOQ wizard prefill, settlement banner
+- [ ] Playwright real-backend spec, full regression, report, merge
