@@ -14,7 +14,7 @@ export function VendorDuplicatesPage() {
   const resolve = useResolveDuplicate()
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <Link
         to="/vendors"
         className="rounded text-sm text-muted hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"

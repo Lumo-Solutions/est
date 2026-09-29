@@ -149,7 +149,7 @@ export function CostItemDetailPage() {
   if (!item) return null
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       {backLink}
       <PageTitle>
         {item.code} — {item.description}
@@ -199,7 +199,7 @@ export function CostItemDetailPage() {
               {rate.confidence !== null && ` · Confidence: ${Math.round(rate.confidence * 100)}%`}
             </p>
             {rate.components.length > 0 && (
-              <div className="overflow-x-auto rounded-card bg-white p-2">
+              <div className="relative overflow-x-auto rounded-card bg-white p-2">
                 <table className="mt-2 w-full text-left text-xs">
                   <thead className="border-b border-hairline text-muted">
                     <tr>

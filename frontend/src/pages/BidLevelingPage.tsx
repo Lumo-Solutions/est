@@ -77,7 +77,7 @@ export function BidLevelingPage() {
   const totalsByQuotation = new Map((totals ?? []).map((t) => [t.quotation_id, t]))
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Bid-leveling matrix</PageTitle>
       <select
         aria-label="Package"
@@ -98,7 +98,7 @@ export function BidLevelingPage() {
       )}
 
       {rows && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-card bg-white p-2">
+        <div className="relative overflow-x-auto rounded-card bg-white p-2">
           <table className="mt-4 w-full text-left text-sm">
             <thead className="border-b border-hairline text-muted">
               <tr>

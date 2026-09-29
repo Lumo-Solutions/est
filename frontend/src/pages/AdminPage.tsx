@@ -37,7 +37,7 @@ export function AdminPage() {
           tabs={TABS.map((t) => ({ id: t.key, label: t.label }))}
         />
       </div>
-      <div className="mt-6">
+      <div className="mt-6 rounded-card bg-white p-6">
         <Active />
       </div>
     </div>

@@ -16,7 +16,7 @@ export function AuditPage() {
   const verifyChain = useVerifyAuditChain()
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Audit viewer</PageTitle>
 
       <div className="mt-3 flex gap-2">
@@ -58,7 +58,7 @@ export function AuditPage() {
       )}
       {events && events.length === 0 && <p className="mt-4 text-sm text-muted">No audit events match this filter.</p>}
       {events && events.length > 0 && (
-        <div className="overflow-x-auto rounded-card bg-white p-2">
+        <div className="relative overflow-x-auto rounded-card bg-white p-2">
           <table className="mt-4 w-full text-left text-sm">
             <thead className="border-b border-hairline font-medium text-muted">
               <tr>

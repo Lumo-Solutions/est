@@ -126,7 +126,7 @@ export function ApprovalPoliciesAdmin() {
       </form>
       )}
 
-      <div className="overflow-x-auto rounded-card bg-white p-2">
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
         <table className="mt-4 w-full text-left text-sm">
           <thead className="border-b border-hairline font-medium text-muted">
             <tr>

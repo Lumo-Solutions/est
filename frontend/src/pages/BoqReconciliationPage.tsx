@@ -178,7 +178,7 @@ export function BoqReconciliationPage() {
         </p>
       )}
       <div className="flex min-h-0 flex-1 gap-6">
-        <div className="min-w-0 flex-1 overflow-hidden rounded-card bg-white">
+        <div className="min-w-0 flex-1 rounded-card bg-white p-2">
           {isLoading ? (
             <div className="p-4">
               <SkeletonRows count={8} />

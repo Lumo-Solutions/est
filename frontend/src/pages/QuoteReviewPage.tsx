@@ -238,7 +238,7 @@ function QuotationCard({ rfqId, quotation }: { rfqId: string; quotation: Quotati
       </button>
       {attachmentsOpen && <AttachmentsList quotationId={quotation.id} />}
 
-      <div className="overflow-x-auto rounded-card bg-white p-2">
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
         <table className="mt-2 w-full text-left text-xs">
           <thead className="border-b border-hairline text-muted">
             <tr>
@@ -320,7 +320,7 @@ export function QuoteReviewPage() {
   const { data: quotations } = useQuotationsForRfq(rfqId ?? undefined)
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Quote review and acceptance</PageTitle>
 
       <div className="mt-4 flex gap-4">

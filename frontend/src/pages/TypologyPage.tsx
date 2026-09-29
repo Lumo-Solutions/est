@@ -55,7 +55,7 @@ function ConfirmForm({
   return (
     <div className="mt-4 rounded-card p-5 bg-white">
       <h4 className="text-sm font-semibold text-ink">Confirm cluster</h4>
-      <div className="overflow-x-auto rounded-card bg-white p-2">
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
         <table className="mt-2 w-full text-left text-sm">
           <thead className="text-muted">
             <tr>
@@ -254,7 +254,7 @@ function ClusterDetail({ projectId, clusterId, status }: { projectId: string; cl
       {rollup && (
         <div className="mt-3">
           <h3 className="text-lg font-semibold text-ink-title">Rollup ({rollup.total_instance_count} instances)</h3>
-          <div className="overflow-x-auto rounded-card bg-white p-2">
+          <div className="relative overflow-x-auto rounded-card bg-white p-2">
             <table className="mt-1 w-full text-left text-sm">
               <thead className="border-b border-hairline text-muted">
                 <tr>
@@ -290,7 +290,7 @@ export function TypologyPage() {
   const selectedCluster = clusters?.find((c) => c.id === selectedClusterId) ?? null
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <div className="flex items-center justify-between">
         <PageTitle>Typology cluster review</PageTitle>
         {hasRole(...STRUCTURE_ROLES) && (

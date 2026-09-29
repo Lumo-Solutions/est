@@ -38,7 +38,7 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg"
+        className="w-full max-w-md rounded-card bg-white p-6 shadow-lg"
       >
         <h2 className="text-lg font-semibold text-ink-title">{title}</h2>
         {children}

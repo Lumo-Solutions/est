@@ -10,6 +10,7 @@ import { CalibrationPanel } from '../features/takeoff/CalibrationPanel'
 import { DxfSheetView } from '../features/takeoff/DxfSheetView'
 import { MeasurementPanel } from '../features/takeoff/MeasurementPanel'
 import { PdfSheetView } from '../features/takeoff/PdfSheetView'
+import { PageTitle } from '../components/PageTitle'
 
 export function TakeoffViewerPage() {
   const { projectId, drawingId, sheetIndex: sheetIndexParam } = useParams()
@@ -54,6 +55,7 @@ export function TakeoffViewerPage() {
 
   return (
     <div className="flex h-full">
+      <PageTitle>Takeoff viewer</PageTitle>
       <div className="flex-1 overflow-auto bg-slate-100">
         {sheet.is_raster === false && drawing.kind === 'dxf' ? (
           <DxfSheetView

@@ -132,7 +132,7 @@ export function QuarantineQueuePage() {
   }
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Quarantine and review queue</PageTitle>
       {isLoading && (
         <div className="mt-4">

@@ -79,7 +79,7 @@ export function CalibrationPanel({ drawingId, sheetIndex, calibrating, onCalibra
       {setScale.isError && <p className="mt-1 text-sm text-red-600">{setScale.error.message}</p>}
 
       {history && history.length > 0 && (
-        <div className="overflow-x-auto rounded-card bg-white p-2">
+        <div className="relative overflow-x-auto rounded-card bg-white p-2">
           <table className="mt-3 w-full text-left text-xs">
             <thead className="text-muted">
               <tr>

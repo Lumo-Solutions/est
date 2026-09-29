@@ -36,7 +36,7 @@ export function BoqImportWizardPage() {
   const canCommit = preview.data != null && previewedKey === currentKey && preview.data.error_count === 0
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>BOQ import wizard</PageTitle>
 
       <div className="mt-4">
@@ -127,7 +127,7 @@ export function BoqImportWizardPage() {
           <p className="text-sm text-ink-2">
             {preview.data.valid_count} valid, {preview.data.error_count} with errors.
           </p>
-          <div className="overflow-x-auto rounded-card bg-white p-2">
+          <div className="relative overflow-x-auto rounded-card bg-white p-2">
             <table className="mt-2 w-full text-left text-sm">
               <thead className="border-b border-hairline text-muted">
                 <tr>

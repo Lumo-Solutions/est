@@ -635,7 +635,7 @@ export function SettlementPage() {
   const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Settlement cockpit</PageTitle>
       {isLoading && <SkeletonRows count={4} />}
       {isError && (

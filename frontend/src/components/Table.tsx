@@ -54,5 +54,5 @@ export function Td({ className = '', numeric, ...rest }: { numeric?: boolean } &
 // table-card look and horizontal scroll at narrow widths instead of
 // page-level overflow (layout-widths.spec fails on page-level overflow).
 export function TableCard({ className = '', children }: { className?: string; children: React.ReactNode }) {
-  return <div className={`overflow-x-auto rounded-card bg-white p-2 ${className}`}>{children}</div>
+  return <div className={`relative overflow-x-auto rounded-card bg-white p-2 ${className}`}>{children}</div>
 }

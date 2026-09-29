@@ -157,7 +157,7 @@ function PackageDetail({ projectId, packageId }: { projectId: string; packageId:
       )}
 
       <h3 className="mt-4 text-lg font-semibold text-ink-title">RFQs</h3>
-      <div className="overflow-x-auto rounded-card bg-white p-2">
+      <div className="relative overflow-x-auto rounded-card bg-white p-2">
         <table className="mt-1 w-full text-left text-sm">
           <thead className="border-b border-hairline text-muted">
             <tr>
@@ -236,7 +236,7 @@ export function ProcurementPackagesPage() {
   const tradeNodeSelectId = useId()
 
   return (
-    <div className="px-6 py-6 xl:px-10">
+    <div className="mx-6 my-6 rounded-card bg-white p-6 xl:mx-10">
       <PageTitle>Procurement packages and RFQs</PageTitle>
 
       {hasRole(...STRUCTURE_ROLES) && (

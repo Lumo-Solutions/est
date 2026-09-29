@@ -11,6 +11,10 @@ ModuleRegistry.registerModules([AllCommunityModule])
 // virtualization or other perf setting touched. The 5,000-row benchmark
 // (frontend/e2e/boq-reconciliation.spec.ts) is re-run after this change,
 // not assumed safe.
+// Note: no `wrapperBorderRadius` and no `overflow-hidden` clip on the
+// page's grid card (BoqReconciliationPage) -- A/B benchmarked on the dev
+// server, the extra rounded clip cost measurable scroll frame time; the
+// card's own padding keeps the square grid corners inside its rounding.
 const installtecGridTheme = themeQuartz.withParams({
   accentColor: '#1814F3', // --color-brand
   foregroundColor: '#232323', // --color-ink
@@ -19,7 +23,6 @@ const installtecGridTheme = themeQuartz.withParams({
   oddRowBackgroundColor: '#FFFFFF',
   rowHoverColor: '#F5F7FA',
   borderColor: '#E6EFF5', // --color-hairline
-  wrapperBorderRadius: 20,
   fontFamily: 'IBM Plex Sans, system-ui, sans-serif',
   fontSize: 13,
 })
