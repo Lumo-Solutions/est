@@ -29,7 +29,7 @@ test('every page lays out at 1440 / 1280 / 1024 without horizontal page overflow
     ['boq-import', `${p}/boq/import`],
     ['boq-reconciliation', `${p}/boq`],
     ['procurement-packages', `${p}/procurement/packages`],
-    ['quarantine', `${p}/procurement/quarantine`],
+    ['quarantine', '/inbox'],
     ['quote-review', `${p}/procurement/quotes`],
     ['bid-leveling', `${p}/procurement/bid-leveling`],
     ['settlement', `${p}/settlement`],

@@ -97,8 +97,7 @@ test.describe('Phase 4 accessibility -- procurement, quotation and settlement pa
 
   test('QuarantineQueuePage has no serious/critical axe violations', async ({ page }) => {
     await loginViaKeycloak(page, 'procurement1', 'Procurement1Pass!')
-    const project = await findProjectByCode(page, 'QA-DEMO')
-    await page.goto(`/projects/${project.id}/procurement/quarantine`)
+    await page.goto('/inbox')
     await expect(page.getByRole('heading', { name: 'Quarantine and review queue' })).toBeVisible()
 
     const results = await new AxeBuilder({ page }).analyze()
