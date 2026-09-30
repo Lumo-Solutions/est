@@ -23,6 +23,8 @@ import {
 } from '../features/settlement/api'
 import { useProjectAddenda } from '../features/tenderIntake/api'
 import { useCurrentSettlement } from '../features/settlement/useCurrentSettlement'
+import { AiCostProposalsPanel } from '../features/settlementAi/AiCostProposalsPanel'
+import { MarkupAdvicePanel } from '../features/settlementAi/MarkupAdvicePanel'
 import { formatMarginPct, formatMoney } from '../lib/format'
 import { Role } from '../lib/roles'
 import type { BidSettlementLineItemOut, BidSettlementOut, BidSettlementTradeOverrideOut, SimulateRequest, SimulateResult } from '../types/api'
@@ -705,10 +707,18 @@ export function SettlementPage() {
               )}
             </div>
           </div>
-          <SimulationSliders settlement={current} />
+          {/* key: remount the sliders when the defaults change (e.g. "Use these values") so they show the saved values */}
+          <SimulationSliders
+            key={`${current.default_plant_pct}-${current.default_overhead_pct}-${current.default_volatility_pct}-${current.default_markup_pct}`}
+            settlement={current}
+          />
+          {current.status === 'draft' && <MarkupAdvicePanel projectId={projectId} settlementId={current.id} currency={current.currency} />}
           {detail && (
             <>
               <TradeOverridesPanel projectId={projectId} settlementId={current.id} tradeOverrides={detail.trade_overrides} />
+              {current.status === 'draft' && (
+                <AiCostProposalsPanel projectId={projectId} settlementId={current.id} currency={current.currency} />
+              )}
               <LineOverridesPanel projectId={projectId} settlementId={current.id} currency={current.currency} lines={detail.lines} />
             </>
           )}

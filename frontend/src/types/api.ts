@@ -1550,3 +1550,150 @@ export interface AnnotationSummaryOut {
   unread: number
   annotations: number
 }
+
+// --- AI pricing assistant (settlement draft) ---
+export type SettlementAiRunKind = 'costs' | 'markup'
+export type SettlementAiRunStatus = 'queued' | 'running' | 'ready' | 'failed'
+
+export interface SettlementAiCostCounts {
+  lines: number
+  with_source: number
+  no_source: number
+  ai_chosen: number
+  rules_chosen: number
+  blocked: number
+  bulk_acceptable: number
+}
+
+export interface MarkupAdviceOption {
+  label: 'competitive' | 'balanced' | 'protective'
+  markup_pct: number
+  overhead_pct: number
+  volatility_pct: number
+  rationale: string
+  tender_total: string
+  margin_on_sell_pct: string | null
+  required_role: string | null
+  unresolved_lines: number
+}
+
+export interface MarkupAdviceTrade {
+  trade: string
+  markup_low: number
+  markup_high: number
+  volatility_low: number | null
+  volatility_high: number | null
+  rationale: string
+}
+
+export interface MarkupAdviceHistoryRow {
+  margin_bucket: string
+  bids: number
+  won: number
+  win_rate_pct: number | null
+  avg_price_gap_when_lost_pct: number | null
+}
+
+export interface MarkupAdviceResult {
+  options: MarkupAdviceOption[]
+  per_trade: MarkupAdviceTrade[]
+  overall: string | null
+  history: MarkupAdviceHistoryRow[]
+  current: { tender_total: string; margin_on_sell_pct: string | null; required_role: string | null }
+  context?: Record<string, unknown>
+}
+
+export interface SettlementAiRun {
+  id: string
+  settlement_id: string
+  kind: SettlementAiRunKind
+  status: SettlementAiRunStatus
+  use_ai: boolean
+  progress_done: number
+  progress_total: number
+  counts: Partial<SettlementAiCostCounts> | null
+  result: MarkupAdviceResult | null
+  warnings: string[]
+  error: string | null
+  ai_calls: number
+  ai_cost_usd: number
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export type CostCandidateType = 'quote' | 'library' | 'historical'
+
+export interface CostCandidate {
+  ref: string
+  type: CostCandidateType
+  label: string
+  rate: number
+  currency: string
+  uom: string
+  vendor: string | null
+  as_of: string | null
+  samples: number
+  match_score: number
+  score: number
+  reason: string
+  selected: boolean
+  flags: string[]
+  detail: {
+    age_months?: number
+    deviation_pct?: number
+    components?: unknown
+    open_exclusions?: unknown
+    min?: number
+    max?: number
+    [key: string]: unknown
+  }
+}
+
+export type CostProposalStatus = 'proposed' | 'accepted' | 'overridden' | 'rejected'
+
+export interface CostProposal {
+  id: string
+  run_id: string
+  settlement_id: string
+  settlement_line_id: string
+  boq_line_item_id: string
+  item_no: string | null
+  description: string
+  uom: string | null
+  quantity: number
+  status: CostProposalStatus
+  source: 'ai' | 'rules' | 'none'
+  chosen: CostCandidate | null
+  candidates: CostCandidate[]
+  rationale: string | null
+  flags: string[]
+  blocked: boolean
+  bulk_acceptable: boolean
+  no_source: boolean
+  confidence: number
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
+  created_at: string
+}
+
+export interface CostProposalPage {
+  items: CostProposal[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface CostProposalDecision {
+  action: 'accept' | 'choose' | 'manual' | 'reject'
+  candidate_ref?: string
+  manual_unit_cost?: number
+  manual_currency?: string
+  note?: string
+}
+
+export interface BulkAcceptResult {
+  accepted: number
+  skipped: number
+}
