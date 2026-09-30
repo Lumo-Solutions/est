@@ -166,6 +166,30 @@ succeeded — a chain replay after a worker crash is safe.
 `task_reject_on_worker_lost=True`, exponential backoff with jitter on
 `ConnectionError`/`TimeoutError`.
 
+## DWG ingestion (converted to DXF by a sandboxed ODA File Converter)
+
+DWG uploads (and DWGs routed from tender intake) are accepted and measured. The decision, licence position and installation are in `docs/deploy-deltas.md` ("DWG conversion") -- it knowingly departs from the SRS's "no ODA" line and is **internal use only**.
+
+```
+upload / intake ── content sniff ("AC10xx" magic) ──► drawings row, kind=dwg   (original kept in S3, untouched)
+POST /drawings/{id}/ingest ─► convert_dwg  (queue: convert, celery-worker-convert)
+   S3 original ─► /spool/jobs/<id>/input.dwg ─► dwg-converter container (no network) ─► output.dxf
+   ─► S3 projects/<p>/drawings/derived/<original sha256>.dxf, drawings.derived_* columns set
+   ─► index_sheets ─► the ordinary DXF chord (extract_sheet / embed_drawing / geometry / finalize)
+```
+
+- **Content beats names.** `takeoff_service.classify_upload` decides the kind from the bytes: a `.dwg` that is really a PDF is a `vector_pdf` (and never touches the converter), a `.pdf` that is really a DWG goes down the DWG path, and a `.dwg` that is neither DWG, PDF nor DXF is refused with a 422 ("not a valid DWG file") before anything is stored. A file with a valid header but a garbage body passes sniffing and fails in the converter (below).
+- **One drawing row.** The DWG stays the drawing; the derived DXF is linked by columns added in migration `0031` (`derived_object_key`, `derived_sha256`, `derived_size_bytes`, `converter_version`, `conversion_target`, `converted_at`, `conversion_ms`, `conversion_reason`). Sheets, entities and measurements hang off that one row. `Drawing.measure_kind` / `measure_object_key` are what the pipeline reads (the derived DXF for a converted DWG), so the DXF branches in `index_sheets`/`extract_sheet` are unchanged in substance. `GET /drawings/{id}/download?variant=original|derived` serves both files; the sheet page shows **Converted from DWG** with both links.
+- **Statuses.** `converting` and `needs_conversion` are new `DrawingStatus` values (varchar column, no DDL). `needs_conversion` carries `conversion_reason` (`timeout`, `convert_failed`, `not_installed`, `unavailable`, `disabled`) and an `error_message` ending in the manual workaround. It is a retryable state: `POST /drawings/{id}/ingest` (the **Retry conversion** button) queues it again.
+- **Failure handling never raises.** `convert_dwg` writes every failure onto the drawing and returns normally, so the write commits (the `worker_session_scope` rollback-on-exception behaviour described at the top of this file does not apply) and the drawing cannot stay in `converting`. Unexpected exceptions (S3 down, etc.) are caught the same way. A worker killed mid-task is the one way to leave `converting` behind; the hourly `reap_stuck_drawings` sweeper parks `converting`/`queued` DWGs past `DRAWING_STUCK_TIMEOUT_S` as `needs_conversion`. With `DWG_CONVERSION_ENABLED=false`, `trigger_ingest` parks the drawing immediately and queues nothing.
+- **Idempotent.** A drawing that already has `derived_object_key` is not converted again on re-ingest (the derived DXF is a pure function of the original); a failed attempt never sets it, so a retry always converts. The derived object key is content-addressed by the original's sha256.
+- **Tender intake.** A `.dwg` is routed like any other drawing (`routed_kind="drawing"`, `kind="dwg"`) instead of the old "stored, convert manually" dead end. The `convert_to_dxf`/`not_measurable` flags now appear only when conversion is switched off.
+- **Round-trip guarantee** (`tests/unit/test_dwg_conversion.py`): our synthetic DXFs -> DWG -> DXF with the real converter, then the pipeline's own extractors on both; entity counts per (type, layer), text, vertex counts and every measurement match within 1e-6, and the check is not vacuous (the civil fixture yields alignment, corridor area, pipe network and trench-volume measurements). What does **not** survive a round trip is irrelevant to takeoff and is not compared: entity handles, GUIDs and timestamps.
+
+**Known limits.** The pipeline still only harvests LINE / LWPOLYLINE / ARC / INSERT / text (see Phase 2 above): CIRCLE, ELLIPSE, SPLINE and HATCH entities in a converted DWG are not extracted, exactly as for a native DXF. The four extractors are civil-infrastructure conventions (centrelines, corridor pairs, sewer runs, trench sections), so an architectural DWG converts and indexes fine but yields no measurements until architectural extractors exist.
+
+**Tests.** `make dwg-fixtures` (`deploy/dwg-converter/build-fixtures.sh` -> `backend/tests/fixtures/build_dwg_fixtures.py`) builds `backend/tests/fixtures/dwg/` (gitignored) with the real converter in the same hardened sandbox: each source DXF -> `.dwg` -> `.roundtrip.dxf`, a corrupt DWG, a PDF named `.dwg`, and the converter's real verdicts for a corrupt file and for a per-file timeout. Every `make test-*` target depends on it and passes `REQUIRE_DWG_FIXTURES=1` when the .deb is present (a machine that has the converter cannot silently skip; one without it skips). `tests/unit/test_dwg_conversion.py` (sniffing, round trip, client), `tests/integration/test_dwg_conversion_flow.py` (upload -> convert -> derived link -> identical measurements; corrupt / timeout / missing converter / flag off / crash / reaper all end in `needs_conversion`), `tests/api/test_drawings_upload_api.py`, and the real-backend spec `frontend/e2e/real-backend/dwg-conversion.spec.ts` (multi-file upload through to `ready`, measurements equal to the source DXF's, both downloads byte-checked, corrupt and PDF-named-`.dwg` files, converter stopped -> unavailable -> Retry conversion -> ready). The unit/integration tests replay the real converter's recorded outputs through a fake spool loop (`tests/fixtures/dwg_fake_converter.py`) because the pytest container has no ODA binary.
+
 ## Design simplification vs. the original sketch
 
 Tasks take `tenant_id` (and `actor_user_id`/`actor_roles` where an audit

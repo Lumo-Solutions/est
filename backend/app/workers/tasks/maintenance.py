@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.enums import CertificateStatus, DrawingStatus, ExtractionJobStatus
+from app.core.enums import CertificateStatus, DrawingKind, DrawingStatus, ExtractionJobStatus
 from app.db.session import session_scope
 from app.models.audit import AuditCheckpoint
 from app.models.prequal import CertificateAlert, VendorCertificate
@@ -172,6 +172,26 @@ async def _reap_stuck_drawings_body(session: AsyncSession, tenant_id: str) -> in
             select(Drawing).where(Drawing.status.in_(_STUCK_DRAWING_STATUSES), Drawing.updated_at < cutoff)
         )
     ).scalars().all()
+    # A worker killed mid-conversion leaves the drawing in `converting`
+    # (convert_dwg itself never raises, so it always records its own
+    # failures) or, with no convert worker running, in `queued`: park it in
+    # needs_conversion so it can be retried.
+    stuck_converting = (
+        await session.execute(
+            select(Drawing).where(
+                Drawing.status.in_([DrawingStatus.CONVERTING.value, DrawingStatus.QUEUED.value]),
+                Drawing.kind == DrawingKind.DWG.value,
+                Drawing.updated_at < cutoff,
+            )
+        )
+    ).scalars().all()
+    for drawing in stuck_converting:
+        drawing.status = DrawingStatus.NEEDS_CONVERSION.value
+        drawing.conversion_reason = "unavailable"
+        drawing.error_message = (
+            f"DWG conversion stalled: no progress for over {settings.drawing_stuck_timeout_s}s. "
+            "Retry ingestion, or convert the file to DXF (or PDF) yourself and upload that."
+        )
     for drawing in stuck:
         await session.execute(
             text(
@@ -205,7 +225,7 @@ async def _reap_stuck_drawings_body(session: AsyncSession, tenant_id: str) -> in
                 f"rescued by the stale-drawing sweeper. {reason}"
             )
     await session.flush()
-    return len(stuck)
+    return len(stuck) + len(stuck_converting)
 
 
 @celery_app.task(name="app.workers.tasks.maintenance.reap_stuck_drawings")

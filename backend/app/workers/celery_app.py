@@ -17,6 +17,7 @@ celery_app = Celery(
         "app.workers.tasks.procurement",
         "app.workers.tasks.quotation_ingestion",
         "app.workers.tasks.tender_intake",
+        "app.workers.tasks.dwg",
     ],
 )
 
@@ -35,6 +36,9 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.embed_drawing": {"queue": "embed"},
         "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "ingest"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
+        # DWG -> DXF conversion (sandboxed ODA converter); own queue/worker so a
+        # slow or hostile DWG can never back up DXF/PDF ingestion.
+        "app.workers.tasks.dwg.convert_dwg": {"queue": "convert"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
         # Tender intake: classification of an uploaded pack (docs/tender-intake-plan.md).
         "app.workers.tasks.tender_intake.*": {"queue": "ingest"},

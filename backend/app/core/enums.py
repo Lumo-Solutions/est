@@ -133,12 +133,17 @@ class DrawingKind(StrEnum):
     VECTOR_PDF = "vector_pdf"
     SCANNED_PDF = "scanned_pdf"
     DXF = "dxf"
+    # Original DWG upload; measured through its derived DXF (see
+    # app/integrations/dwg_converter.py). Never parsed directly.
+    DWG = "dwg"
     UNKNOWN = "unknown"
 
 
 class DrawingStatus(StrEnum):
     UPLOADED = "uploaded"
     QUEUED = "queued"
+    CONVERTING = "converting"
+    NEEDS_CONVERSION = "needs_conversion"
     INDEXING = "indexing"
     EXTRACTING = "extracting"
     EMBEDDING = "embedding"

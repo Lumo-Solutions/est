@@ -54,6 +54,8 @@ export interface UserOut {
 export type DrawingStatus =
   | 'uploaded'
   | 'queued'
+  | 'converting'
+  | 'needs_conversion'
   | 'indexing'
   | 'extracting'
   | 'embedding'
@@ -73,6 +75,16 @@ export interface DrawingOut {
   status: DrawingStatus
   error_message: string | null
   created_at: string
+  // DWG conversion: kind === 'dwg' is the original upload; the DXF derived
+  // from it (downloadable via ?variant=derived) is what gets measured.
+  converted_from_dwg: boolean
+  derived_size_bytes: number | null
+  derived_sha256: string | null
+  converter_version: string | null
+  conversion_target: string | null
+  converted_at: string | null
+  conversion_ms: number | null
+  conversion_reason: string | null
 }
 
 export interface DrawingSheetOut {

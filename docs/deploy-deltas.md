@@ -142,6 +142,42 @@ this same `FileNotFoundError` and degrades to leaving the embedding column
 NULL rather than failing the request -- see
 `docs/module-b-c-phase5-plan.md` §2.
 
+## DWG conversion (ODA File Converter) -- a knowing deviation from the SRS
+
+**The deviation.** `MASTER_SRS.MD` (CAD Ingestion Standard, line 18) says the platform parses **DXF and vector PDF only, "bypassing third-party proprietary CAD runtime licensing (like ODA)"**. That was a deliberate product decision and it is **knowingly reversed** here, by the project owner: real tender drawings arrive as DWG, and asking estimators to re-export every one defeats the point of the takeoff pipeline. DWG is now accepted and converted to DXF by the **ODA File Converter** (a proprietary Open Design Alliance binary), then measured by the unchanged DXF pipeline. Nothing else in the SRS's stance changes: DXF and vector PDF remain first-class, nothing leaves the site, and the platform's own code stays free of any proprietary CAD runtime -- the converter is an isolated, replaceable container, and `DWG_CONVERSION_ENABLED=false` returns the system to the SRS's original behaviour (DWGs are parked with a manual-conversion message).
+
+**Licence position (read before deploying anywhere new).** The package (`ODAFileConverter_QT6_lnxX64_11dll_27.9.deb`, converter v27.9.0.0) ships **no licence file**. Its control file calls it "a free application ... Free to download" (homepage `opendesign.com/guestfiles`), and its About box states: *"This software may not be licensed, sold, distributed or included with other software products without the written consent of Open Design Alliance."* ODA's public download page carries no further terms. Nothing found addresses server-side, automated or commercial use either way. The owner decided to proceed on an **internal-use-only** basis, which means:
+
+- The image is **built locally** from a .deb we hold, and **run only on servers we control**.
+- It is **never pushed to a registry, never bundled into a release or another product image, never handed to a customer or third party.** (Moving it between our own machines, e.g. `docker save | docker load` to an air-gapped host, is internal.)
+- The .deb and the images built from it are **not committed** (`deploy/vendor/` is gitignored). The `dwg-converter` Compose service is behind the `dwg` profile so nothing tries to build it where the .deb is absent.
+- If any of that changes (a hosted/SaaS offering, shipping to clients, a registry), get ODA's **written consent first**; the About-box sentence above is the constraint.
+
+**What was built.**
+
+| Piece | Where | Notes |
+|---|---|---|
+| `dwg-converter` container | `deploy/dwg-converter/` (Dockerfile, `converter_loop.py`) | Ubuntu 24.04 + `xvfb-run` + the .deb via `dpkg -i` from a local file (`additional_contexts: oda: ./vendor/oda`); **no download of the converter at build or run time**. |
+| Sandbox | `docker-compose.yml` | `network_mode: none`, `read_only: true`, tmpfs `/tmp` (1 GB), uid 1000, `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit`/`memswap_limit` 2 GB, `cpus: 1.5`, `pids_limit: 256`. DWG is untrusted input; the converter can reach nothing. |
+| Channel | named volume `dwgspool` at `/spool` | No network means no socket, so the converter watches a spool directory instead (job dir with `input.dwg` + `request.json`; it answers with `output.dxf` + `result.json`, and refreshes `heartbeat.json` every 5 s). |
+| `celery-worker-convert` | `docker-compose.yml` | Queue **`convert`**, concurrency 1 (the converter is serial and CPU-bound), 512 MB. Has network (Redis/Postgres/S3) but never opens a DWG: it moves bytes between S3 and `/spool`. Always started, even without the converter, so a DWG upload reports "converter not installed" instead of waiting in `queued`. |
+| Per-file timeout | `DWG_CONVERT_TIMEOUT_S` (default 120) | Enforced **inside** the converter container by killing the whole process group (ODAFileConverter + xvfb-run + Xvfb); the worker waits that plus a 15 s grace. Verified against the real converter, which stays healthy afterwards. |
+| Feature flag | `DWG_CONVERSION_ENABLED` | Empty/unset = **auto** (on while the converter's heartbeat is fresh); `true` = on (a missing converter still parks the drawing with a reason); `false` = off (drawings are parked immediately, nothing is queued). |
+| Fixed target | `DWG_TARGET_VERSION` (default `ACAD2018`) | The converter version and target are stored on every drawing. |
+
+New settings are wired through `x-backend-env` and the `backend` service's own environment list; `docker-compose.prod.yml` pins `APP_ENV`/`PRODUCTION_MODE` for `celery-worker-convert` and `check-prod-app-env.sh` checks it.
+
+**Installing the converter on a server.**
+
+1. Put the ODA File Converter Linux **QT6 x64 .deb** at `deploy/vendor/oda/ODAFileConverter*.deb` on that server (copy it from wherever we already hold it; do not download it during a deploy, and never commit it). The file `deploy/vendor/` is gitignored.
+2. `make up` (dev) detects the .deb and enables the `dwg` Compose profile itself. For production, which does not go through the Makefile: `docker compose --profile dwg -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build`.
+3. The image build itself needs the Ubuntu package repositories once (for `xvfb` and the Qt runtime libraries). On a host with **no** internet, build the image on a machine we control that has it, then `docker save installtec-dwg-converter:dev | docker load` onto the server (internal transfer, see the licence bullets), or point apt at an internal mirror. After the image exists, nothing needs the network at run time.
+4. Run `make migrate` (migration `0031` adds the derived-file columns to `drawings`; no RLS change).
+5. Verify: `docker logs installtec_dwg_converter` prints `converter loop up; ODA version=27.9.0.0`; `docker exec installtec_celery_worker_convert cat /spool/heartbeat.json` shows `"ok": true`; `docker inspect installtec_dwg_converter --format '{{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}'` prints `none true`. `make dwg-fixtures` runs the real round trip end to end.
+6. Upgrading the converter: replace the .deb, rebuild (`docker compose --profile dwg build dwg-converter`) and recreate the container. Existing derived DXFs are kept as they are (each records the converter version that made it); a drawing is only re-converted if its derived file is missing.
+
+**Operating notes.** A drawing shows *needs conversion* (never stuck, never a 500) when: the converter is missing/stopped (`unavailable`/`not_installed`), the file is corrupt, truncated or an unsupported version (`convert_failed`), it exceeds the timeout (`timeout`), or the flag is off (`disabled`). The reason and the manual workaround (re-export as DXF/PDF from AutoCAD/BricsCAD/LibreCAD and upload it) are on the drawing; **Retry conversion** re-queues it. The hourly stale-drawing sweeper parks anything left in `converting`/`queued` past `DRAWING_STUCK_TIMEOUT_S` (a killed worker, or no `convert` worker running) as *needs conversion* too. The derived DXFs are a pure function of the original DWG, so they need no separate backup. Dev note: the converter container ships with `restart: unless-stopped`; stop it (`docker stop installtec_dwg_converter`) to see the "unavailable" path -- the heartbeat goes stale after `DWG_HEARTBEAT_MAX_AGE_S` (30 s).
+
 ## Role separation (RLS correctness)
 
 `deploy/postgres/initdb/10-roles.sh` creates two Postgres roles:

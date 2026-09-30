@@ -458,19 +458,26 @@ async def _flag_settlements(session: AsyncSession, project_id: UUID) -> list[str
 
 async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
     flags = list(doc.flags)
-    if doc.ext == "dwg":
-        doc.routed_kind, doc.routed_ref = "convert_dwg", {"note": "DWG is stored, not parsed: convert to DXF or PDF"}
-        return
     if doc.ext in ("jpg", "jpeg", "png"):
         doc.routed_kind, doc.routed_ref = "not_measurable", {"note": "raster image: not measurable"}
         return
-    if doc.ext not in ("dxf", "pdf"):
+    if doc.ext not in ("dxf", "pdf", "dwg"):
         raise ConflictError(f"A .{doc.ext} file cannot be routed as a drawing")
-    scanned = Flag.NOT_MEASURABLE.value in flags
-    kind = DrawingKind.DXF.value if doc.ext == "dxf" else (DrawingKind.SCANNED_PDF.value if scanned else DrawingKind.VECTOR_PDF.value)
+    is_dwg = doc.ext == "dwg"
+    # A DWG is routed like any drawing: the convert worker turns it into a DXF
+    # and then runs the normal pipeline (or parks it in needs_conversion with a
+    # reason when the converter is off/missing -- see app/workers/tasks/dwg.py).
+    scanned = Flag.NOT_MEASURABLE.value in flags and not is_dwg
+    if is_dwg:
+        kind, content_type = DrawingKind.DWG.value, "application/acad"
+    elif doc.ext == "dxf":
+        kind, content_type = DrawingKind.DXF.value, "application/dxf"
+    else:
+        kind = DrawingKind.SCANNED_PDF.value if scanned else DrawingKind.VECTOR_PDF.value
+        content_type = "application/pdf"
     drawing, created = await takeoff_service.create_drawing_from_stored(
         session, ctx, project_id=doc.project_id, filename=doc.original_filename,
-        content_type="application/dxf" if doc.ext == "dxf" else "application/pdf", kind=kind, bucket=doc.bucket,
+        content_type=content_type, kind=kind, bucket=doc.bucket,
         object_key=doc.object_key, sha256=doc.sha256, size_bytes=doc.size_bytes, revision_label=doc.revision_label,
         discipline_hint=doc.sub_type,
     )

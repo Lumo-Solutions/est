@@ -1,6 +1,15 @@
-.PHONY: dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
+.PHONY: dwg-fixtures dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
 
-COMPOSE=docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
+# The DWG converter sandbox (deploy/dwg-converter, ODA File Converter, INTERNAL
+# USE ONLY) is built from a local .deb that is never committed; enable its
+# compose profile only on machines that hold it. `make up` therefore works
+# unchanged everywhere, and DWG uploads report "converter not installed"
+# where the .deb is absent.
+# 1 when this machine holds the converter package: then missing DWG fixtures FAIL the
+# tests instead of skipping them.
+DWG_REQUIRE=$(if $(wildcard deploy/vendor/oda/ODAFileConverter*.deb),1,0)
+DWG_PROFILE=$(if $(wildcard deploy/vendor/oda/ODAFileConverter*.deb),--profile dwg,)
+COMPOSE=docker compose $(DWG_PROFILE) -f deploy/docker-compose.yml -f deploy/docker-compose.override.dev.yml --env-file deploy/.env
 # -p pins its own Compose project name -- without one, Compose defaults to
 # the directory holding the compose file ("deploy"), the SAME default the
 # main COMPOSE above gets. Running this stack while the main dev stack is
@@ -217,12 +226,13 @@ typecheck:
 # target previously just ran `cd backend && python -m pytest`, which only
 # ever worked by coincidence on a host Python that happened to have the
 # dev extras pre-installed.
-test-unit:
+test-unit: dwg-fixtures
 	export MSYS_NO_PATHCONV=1; \
 	docker run --rm \
 	  -v "$(CURDIR)/backend:/workspace" \
 	  -v "$(CURDIR)/ai-service:/ai-service" \
 	  -v installtec-test-pip-cache:/root/.cache/pip \
+	  -e REQUIRE_DWG_FIXTURES=$(DWG_REQUIRE) \
 	  -w /workspace \
 	  python:3.12-slim \
 	  bash -c "pip install --quiet -e '.[dev]' && python -m pytest tests/unit -q"
@@ -257,7 +267,7 @@ test-unit:
 # hostname resolve to the real Docker host even on native Linux Docker
 # (host.docker.internal is a Docker Desktop-only builtin otherwise --
 # `host-gateway` is the magic value dockerd resolves it to since 20.10).
-test-integration:
+test-integration: dwg-fixtures
 	$(COMPOSE_TEST) up -d
 	export MSYS_NO_PATHCONV=1; \
 	docker run --rm \
@@ -268,6 +278,7 @@ test-integration:
 	  -v "$(CURDIR)/ai-service:/ai-service" \
 	  -v /var/run/docker.sock:/var/run/docker.sock \
 	  -v installtec-test-pip-cache:/root/.cache/pip \
+	  -e REQUIRE_DWG_FIXTURES=$(DWG_REQUIRE) \
 	  -w /workspace \
 	  python:3.12-slim \
 	  bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential >/dev/null && pip install --quiet -e '.[dev]' && python -m pytest tests/integration -q"; \
@@ -282,7 +293,7 @@ test-integration:
 # container (Docker socket mount, host.docker.internal override) -- see
 # test-integration's comment above for why. Mirrors that target exactly,
 # just pointed at tests/api.
-test-api:
+test-api: dwg-fixtures
 	$(COMPOSE_TEST) up -d
 	export MSYS_NO_PATHCONV=1; \
 	docker run --rm \
@@ -293,12 +304,21 @@ test-api:
 	  -v "$(CURDIR)/ai-service:/ai-service" \
 	  -v /var/run/docker.sock:/var/run/docker.sock \
 	  -v installtec-test-pip-cache:/root/.cache/pip \
+	  -e REQUIRE_DWG_FIXTURES=$(DWG_REQUIRE) \
 	  -w /workspace \
 	  python:3.12-slim \
 	  bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential >/dev/null && pip install --quiet -e '.[dev]' && python -m pytest tests/api -q"; \
 	STATUS=$$?; \
 	$(COMPOSE_TEST) down -v; \
 	exit $$STATUS
+
+# Builds the DWG test fixtures (DXF -> DWG -> DXF, plus recorded corrupt/timeout
+# verdicts) with the real ODA converter sandbox; see
+# deploy/dwg-converter/build-fixtures.sh. Every test target depends on it and
+# passes REQUIRE_DWG_FIXTURES=1 when the .deb is present, so a machine that HAS the
+# converter can never silently skip the DWG tests (one without it skips them).
+dwg-fixtures:
+	REQUIRE_DWG_FIXTURES=$(DWG_REQUIRE) bash deploy/dwg-converter/build-fixtures.sh
 
 test: test-unit test-integration
 

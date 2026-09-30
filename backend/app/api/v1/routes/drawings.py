@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -38,6 +39,9 @@ _UPLOAD_ROLES = (Role.ESTIMATOR.value, Role.LEAD_ESTIMATOR.value, Role.PROCUREME
 # not the operational _UPLOAD_ROLES above.
 _TRADE_MAPPING_ROLES = (Role.LEAD_ESTIMATOR.value, Role.PROCUREMENT_HEAD.value, Role.MANAGING_DIRECTOR.value)
 _ALLOWED_CONTENT_TYPES = {"application/pdf", "application/dxf", "image/vnd.dxf"}
+# .dwg has no registered type: browsers send octet-stream or nothing. The type
+# is only a gate here -- takeoff_service.classify_upload() decides from the bytes.
+_ALLOWED_EXTENSIONS = (".pdf", ".dxf", ".dwg")
 
 
 @router.post("/projects/{project_id}/drawings", response_model=DrawingOut, status_code=201)
@@ -50,8 +54,12 @@ async def upload_drawing_endpoint(
 ) -> DrawingOut:
     content_type = file.content_type or ""
     filename = file.filename or "upload"
-    if content_type not in _ALLOWED_CONTENT_TYPES and not filename.lower().endswith((".pdf", ".dxf")):
-        raise ValidationAppError(f"Unsupported content type '{content_type}' for {filename}")
+    if (
+        content_type not in _ALLOWED_CONTENT_TYPES
+        and content_type not in takeoff_service.DWG_CONTENT_TYPES
+        and not filename.lower().endswith(_ALLOWED_EXTENSIONS)
+    ):
+        raise ValidationAppError(f"Unsupported file type for {filename}: upload PDF (vector), DXF or DWG")
 
     data = await file.read(settings.max_upload_size_bytes + 1)
     if len(data) > settings.max_upload_size_bytes:
@@ -176,9 +184,13 @@ async def list_measurements_endpoint(
 
 @router.get("/drawings/{drawing_id}/download")
 async def download_drawing_endpoint(
-    drawing_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+    drawing_id: UUID,
+    variant: Literal["original", "derived"] = "original",
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
-    url = await takeoff_service.presigned_download_url(session, ctx, drawing_id)
+    """`variant=derived` is the DXF a DWG was converted to."""
+    url = await takeoff_service.presigned_download_url(session, ctx, drawing_id, variant=variant)
     return RedirectResponse(url)
 
 

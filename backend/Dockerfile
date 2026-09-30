@@ -18,7 +18,8 @@ RUN python -m venv /opt/venv \
 FROM python:3.12-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 app
+    && useradd --create-home --uid 1000 app \
+    && mkdir -p /spool && chown 1000:1000 /spool
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY backend/app ./app

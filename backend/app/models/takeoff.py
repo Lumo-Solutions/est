@@ -54,6 +54,35 @@ class Drawing(TenantEntity):
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("drawings.id", ondelete="SET NULL"), nullable=True
     )
+    # DWG conversion (migration 0031): for kind='dwg', the DXF derived from
+    # the original (same bucket), and how it was made. See
+    # app/integrations/dwg_converter.py.
+    derived_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    derived_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    derived_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    converter_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    conversion_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    converted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    conversion_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    conversion_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)
+
+    @property
+    def is_dwg(self) -> bool:
+        return self.kind == DrawingKind.DWG.value
+
+    @property
+    def converted_from_dwg(self) -> bool:
+        return self.is_dwg and self.derived_object_key is not None
+
+    @property
+    def measure_kind(self) -> str:
+        """The kind the extraction pipeline works with: a converted DWG is
+        measured as the DXF derived from it."""
+        return DrawingKind.DXF.value if self.is_dwg else self.kind
+
+    @property
+    def measure_object_key(self) -> str:
+        return self.derived_object_key if self.is_dwg and self.derived_object_key else self.object_key
 
 
 class DrawingSheet(TenantEntity):

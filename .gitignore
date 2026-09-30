@@ -53,3 +53,7 @@ build/
 # normally removed automatically; ignored defensively in case a run fails
 # partway through and leaves it behind.
 .onnx-model-export/
+
+# Third-party vendor binaries and user samples (ODA File Converter) -- never commit
+deploy/vendor/
+backend/tests/fixtures/dwg/

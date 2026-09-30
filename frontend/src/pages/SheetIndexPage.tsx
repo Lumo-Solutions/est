@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { SkeletonRows } from '../components/Skeleton'
-import { useDrawing, useRetryIngest, useSheets } from '../features/drawings/api'
+import { drawingDownloadHref, useDrawing, useRetryIngest, useSheets } from '../features/drawings/api'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
 
@@ -12,6 +12,8 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   ready: 'success',
   failed: 'danger',
   partial: 'warning',
+  needs_conversion: 'warning',
+  converting: 'info',
   queued: 'neutral',
   indexing: 'info',
   extracting: 'info',
@@ -46,20 +48,51 @@ export function SheetIndexPage() {
       <PageTitle>{drawing?.original_filename ?? 'Sheets'}</PageTitle>
       {drawing && (
         <p className="mt-1 flex items-center gap-2 text-sm text-muted">
-          Status: <Badge tone={STATUS_TONE[drawing.status] ?? 'neutral'}>{drawing.status}</Badge>
-          {(drawing.status === 'failed' || drawing.status === 'partial') && hasRole(..._RETRY_ROLES) && (
+          Status: <Badge tone={STATUS_TONE[drawing.status] ?? 'neutral'}>{drawing.status.replace('_', ' ')}</Badge>
+          {(drawing.status === 'failed' || drawing.status === 'partial' || drawing.status === 'needs_conversion') &&
+            hasRole(..._RETRY_ROLES) && (
             <button
               type="button"
               onClick={() => retryIngest.mutate()}
               disabled={retryIngest.isPending}
               className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
             >
-              {retryIngest.isPending ? 'Retrying…' : 'Retry extraction'}
+              {retryIngest.isPending
+                ? 'Retrying…'
+                : drawing.status === 'needs_conversion'
+                  ? 'Retry conversion'
+                  : 'Retry extraction'}
             </button>
           )}
         </p>
       )}
-      {drawing?.error_message && (drawing.status === 'failed' || drawing.status === 'partial') && (
+      {drawing && drawing.kind === 'dwg' && (
+        <p data-testid="dwg-provenance" className="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-muted">
+          {drawing.converted_from_dwg && <Badge tone="info">Converted from DWG</Badge>}
+          <a
+            href={drawingDownloadHref(drawing.id, 'original')}
+            className="rounded text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+          >
+            Download original DWG
+          </a>
+          {drawing.converted_from_dwg && (
+            <>
+              <a
+                href={drawingDownloadHref(drawing.id, 'derived')}
+                className="rounded text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              >
+                Download converted DXF
+              </a>
+              <span>
+                {drawing.conversion_target} via ODA File Converter {drawing.converter_version}
+                {drawing.conversion_ms != null && `, ${(drawing.conversion_ms / 1000).toFixed(1)}s`}
+              </span>
+            </>
+          )}
+        </p>
+      )}
+      {drawing?.error_message &&
+        (drawing.status === 'failed' || drawing.status === 'partial' || drawing.status === 'needs_conversion') && (
         <p role="alert" className="mt-1 text-sm text-danger">
           {drawing.error_message}
         </p>

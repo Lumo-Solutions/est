@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext
-from app.core.enums import AuditAction, DrawingStatus
+from app.core.enums import AuditAction, DrawingKind, DrawingStatus
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
+from app.integrations import dwg_converter
 from app.integrations.embeddings import get_embedder
 from app.integrations.s3 import presign_get_url, put_object_streaming
 from app.models.takeoff import (
@@ -24,6 +25,7 @@ from app.models.takeoff import (
     PdfLayerMappingRule,
     SheetScaleCalibration,
 )
+from app.intake.safety import extension_of, sniff
 from app.services import audit
 from app.services.projects import assert_can_see_project
 from app.takeoff.geometry.entities import GeometricEntity
@@ -33,6 +35,37 @@ _ALLOWED_CONTENT_TYPES = {
     "application/dxf": "dxf",
     "image/vnd.dxf": "dxf",
 }
+
+# What a browser may send for a .dwg (there is no registered type, so most
+# send octet-stream or nothing). The declared type is never trusted anyway:
+# classify_upload() sniffs the bytes.
+DWG_CONTENT_TYPES = {"application/acad", "application/x-acad", "application/x-dwg", "image/vnd.dwg", "image/x-dwg"}
+_SNIFFED_KIND = {"pdf": DrawingKind.VECTOR_PDF.value, "dxf": DrawingKind.DXF.value, "dwg": DrawingKind.DWG.value}
+_SNIFFED_CONTENT_TYPE = {"pdf": "application/pdf", "dxf": "application/dxf", "dwg": "application/acad"}
+
+
+def classify_upload(filename: str, content_type: str | None, data: bytes) -> tuple[str, str | None]:
+    """(kind, content_type) decided by the file's CONTENT ("AC10xx" magic for
+    DWG, %PDF, DXF section markers), not its name: a .dwg that is really a PDF
+    is a PDF, and a .pdf that is really a DWG goes down the DWG path. Only
+    when the bytes are unrecognisable does the declared type/extension apply,
+    except for .dwg -- there a non-DWG payload is rejected outright (422),
+    since nothing downstream can do anything useful with it."""
+    sniffed = sniff(data)
+    if sniffed in _SNIFFED_KIND:
+        return _SNIFFED_KIND[sniffed], _SNIFFED_CONTENT_TYPE[sniffed]
+    ext = extension_of(filename)
+    if ext == "dwg" or (content_type or "") in DWG_CONTENT_TYPES:
+        raise ValidationAppError(
+            f"{filename} is not a valid DWG file (no AutoCAD 'AC10xx' header) and is not a PDF or DXF either. "
+            "Re-export it from your CAD program."
+        )
+    kind = _ALLOWED_CONTENT_TYPES.get(content_type or "", "unknown")
+    if kind == "unknown" and ext == "dxf":
+        kind = DrawingKind.DXF.value
+    elif kind == "unknown" and ext == "pdf":
+        kind = DrawingKind.VECTOR_PDF.value
+    return kind, content_type
 
 # Entity types that carry a `geometry` payload (see app.takeoff.dxf::
 # index_dxf_geometry / app.takeoff.pdf::index_pdf_geometry); excludes
@@ -225,11 +258,8 @@ async def upload_drawing(
     # clean 403 immediately, not a 500 (or a wasted upload) partway through.
     await assert_can_see_project(session, ctx, project_id)
 
-    kind = _ALLOWED_CONTENT_TYPES.get(content_type or "", "unknown")
-    if kind == "unknown" and filename.lower().endswith(".dxf"):
-        kind = "dxf"
-    elif kind == "unknown" and filename.lower().endswith(".pdf"):
-        kind = "vector_pdf"
+    declared_ext = extension_of(filename)
+    kind, content_type = classify_upload(filename, content_type, data)
 
     object_key = f"projects/{project_id}/drawings/{filename}"
     sha256 = await put_object_streaming(object_key, data, content_type)
@@ -257,7 +287,8 @@ async def upload_drawing(
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.CREATE, entity_type="drawing", entity_id=drawing.id,
-        project_id=project_id, payload={"filename": filename, "size_bytes": len(data)},
+        project_id=project_id,
+        payload={"filename": filename, "size_bytes": len(data), "kind": kind, "declared_ext": declared_ext},
     )
     return drawing
 
@@ -332,7 +363,25 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
     if drawing.status in (DrawingStatus.INDEXING.value, DrawingStatus.EXTRACTING.value, DrawingStatus.EMBEDDING.value):
         raise ConflictError(f"Drawing {drawing_id} is already being processed (status={drawing.status})")
 
+    if drawing.is_dwg and get_settings().dwg_conversion_enabled is False:
+        # Switched off: park it now with the reason instead of queueing work
+        # nobody will do. (When the converter is merely missing/down, the
+        # convert worker is the one that can tell -- it holds the spool.)
+        drawing.status = DrawingStatus.NEEDS_CONVERSION.value
+        drawing.conversion_reason = dwg_converter.R_DISABLED
+        drawing.error_message = (
+            "DWG conversion is turned off on this server (DWG_CONVERSION_ENABLED=false). "
+            + dwg_converter.MANUAL_WORKAROUND
+        )
+        await session.flush()
+        await audit.record(
+            session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id,
+            project_id=drawing.project_id, payload={"status": "needs_conversion", "reason": "disabled"},
+        )
+        return []
+
     drawing.status = DrawingStatus.QUEUED.value
+    drawing.error_message = None
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id,
@@ -340,6 +389,12 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
     )
 
     args = (str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles))
+    if drawing.is_dwg:
+        from app.workers.tasks.dwg import convert_dwg
+
+        # convert_dwg hands over to index_sheets itself once the DXF exists.
+        task = convert_dwg.apply_async(args=args, countdown=countdown) if countdown else convert_dwg.delay(*args)
+        return [task.id]
     if countdown:
         # A caller that creates the drawing in the same request (tender intake) gives the
         # request transaction time to commit before the worker looks for the row.
@@ -473,12 +528,22 @@ async def revert_scale_calibration(
     return sheet
 
 
-async def presigned_download_url(session: AsyncSession, ctx: RequestContext, drawing_id: UUID) -> str:
+async def presigned_download_url(
+    session: AsyncSession, ctx: RequestContext, drawing_id: UUID, *, variant: str = "original"
+) -> str:
+    """variant="original" is the uploaded file; "derived" is the DXF a DWG
+    was converted to (404 when there is none)."""
     drawing = await get_drawing(session, drawing_id)
-    url = await presign_get_url(drawing.object_key)
+    if variant == "derived":
+        if not drawing.derived_object_key:
+            raise NotFoundError(f"Drawing {drawing_id} has no converted DXF")
+        object_key = drawing.derived_object_key
+    else:
+        object_key = drawing.object_key
+    url = await presign_get_url(object_key)
     await audit.record(
         session, ctx, action=AuditAction.DOWNLOAD, entity_type="drawing", entity_id=drawing.id,
-        project_id=drawing.project_id,
+        project_id=drawing.project_id, payload={"variant": variant},
     )
     return url
 

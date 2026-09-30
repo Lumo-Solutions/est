@@ -20,6 +20,15 @@ class DrawingOut(ORMModel):
     status: str
     error_message: str | None
     created_at: datetime
+    # DWG conversion (kind == "dwg"): the derived DXF and how it was made.
+    converted_from_dwg: bool = False
+    derived_size_bytes: int | None = None
+    derived_sha256: str | None = None
+    converter_version: str | None = None
+    conversion_target: str | None = None
+    converted_at: datetime | None = None
+    conversion_ms: int | None = None
+    conversion_reason: str | None = None
 
 
 class DrawingSheetOut(ORMModel):
