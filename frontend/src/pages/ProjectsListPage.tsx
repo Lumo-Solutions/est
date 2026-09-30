@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
 import { Button } from '../components/Button'
@@ -27,7 +27,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   archived: 'neutral',
 }
 
-function NewProjectForm({ onDone }: { onDone: () => void }) {
+function NewProjectForm({ onDone }: { onDone: (projectId: string) => void }) {
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [clientName, setClientName] = useState('')
@@ -40,7 +40,7 @@ function NewProjectForm({ onDone }: { onDone: () => void }) {
         e.preventDefault()
         createProject.mutate(
           { code, name, client_name: clientName || null },
-          { onSuccess: onDone },
+          { onSuccess: (created) => onDone(created.id) },
         )
       }}
     >
@@ -66,6 +66,7 @@ export function ProjectsListPage() {
   const { data, isLoading, isError, error } = useProjectsPage({ limit: PAGE_SIZE, offset })
   const projects = data?.items
   const [showForm, setShowForm] = useState(false)
+  const navigate = useNavigate()
   const canCreate = hasRole(...CREATE_ROLES)
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
@@ -79,7 +80,14 @@ export function ProjectsListPage() {
           </Button>
         )}
       </div>
-      {showForm && <NewProjectForm onDone={() => setShowForm(false)} />}
+      {showForm && (
+        <NewProjectForm
+          onDone={(id) => {
+            setShowForm(false)
+            navigate(`/projects/${id}?tab=tender-documents`)
+          }}
+        />
+      )}
       {isLoading && <SkeletonRows count={5} />}
       {isError && (
         <p role="alert" className="text-red-700">

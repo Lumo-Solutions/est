@@ -206,10 +206,20 @@ export function TenderDocumentsTab({ projectId }: { projectId: string }) {
   const total = docsQuery.data?.total ?? 0
   const offset = docsQuery.data?.offset ?? 0
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const isEmpty =
+    packages.length === 0 && docsQuery.data?.total === 0 && !packageId && !docClass && !status && !flag && !q
   const selectedPackage = packages.find((p) => p.id === packageId)
 
   return (
     <div>
+      {canUpload && isEmpty && (
+        <div className="mt-6 rounded-card border-2 border-dashed border-brand bg-brand-subtle p-8 text-center">
+          <h2 className="text-xl font-semibold text-ink">Drop the tender package here</h2>
+          <p className="mx-auto mt-2 max-w-xl text-base text-ink-2">
+            Drop a whole folder, several files or a .zip and the documents are sorted and classified for you to review.
+          </p>
+        </div>
+      )}
       {canUpload && <UploadPanel projectId={projectId} onUploaded={(id) => { setPackageId(id); resetView() }} />}
 
       <Card className="mt-6">
