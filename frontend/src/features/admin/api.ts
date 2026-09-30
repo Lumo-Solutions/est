@@ -168,3 +168,25 @@ export function useUpdateReasonCode() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settlement-reason-codes'] }),
   })
 }
+
+// --- tender intake settings ---
+
+export interface IntakeSettings {
+  auto_accept_min: number
+  default_auto_accept_min: number
+}
+
+export function useIntakeSettings() {
+  return useQuery({
+    queryKey: ['tender-intake-settings'],
+    queryFn: ({ signal }) => api.get<IntakeSettings>('/tender-intake/settings', signal),
+  })
+}
+
+export function useSetIntakeSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { auto_accept_min: number }) => api.put<IntakeSettings>('/admin/intake-settings', data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tender-intake-settings'] }),
+  })
+}
