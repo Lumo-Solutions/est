@@ -6,6 +6,9 @@ import type {
   BoqPrefill,
   BulkConfirmBody,
   BulkConfirmResult,
+  BulkReclassifyBody,
+  ReclassifyBody,
+  TreeOut,
   EditMetadataBody,
   RegisterFilters,
   TenderClass,
@@ -45,6 +48,21 @@ export function useTenderDocuments(projectId: string | undefined, filters: Tende
     enabled: Boolean(projectId),
     refetchInterval: (query) =>
       query.state.data?.items.some((d) => IN_FLIGHT_STATUSES.includes(d.status)) ? POLL_MS : false,
+  })
+}
+
+const TREE_POLL_MS = 2000
+
+/** The compact document tree for the project page; polls every 2 s while anything is still being read. */
+export function useTenderTree(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['tender-tree', projectId],
+    queryFn: ({ signal }) => api.get<TreeOut>(`/projects/${projectId}/tender-documents/tree`, signal),
+    enabled: Boolean(projectId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.summary
+      return s && (s.in_progress > 0 || s.packages_processing > 0) ? TREE_POLL_MS : false
+    },
   })
 }
 
@@ -104,7 +122,7 @@ export function useBoqPrefill(documentId: string | null | undefined) {
 function useInvalidateIntake(projectId?: string) {
   const qc = useQueryClient()
   return () => {
-    for (const key of ['tender-documents', 'tender-packages', 'tender-register', 'tender-addenda']) {
+    for (const key of ['tender-tree', 'tender-documents', 'tender-packages', 'tender-register', 'tender-addenda']) {
       qc.invalidateQueries({ queryKey: projectId ? [key, projectId] : [key] })
     }
     qc.invalidateQueries({ queryKey: ['tender-document'] })
@@ -205,4 +223,23 @@ export async function fetchTenderDocumentFile(documentId: string, filename: stri
   if (!response.ok) throw new Error(`Could not load the tender document file (${response.status})`)
   const blob = await response.blob()
   return new File([blob], filename, { type: blob.type })
+}
+
+/** Change a document's class (and, with confirm, route it in the same step); routed documents re-route. */
+export function useReclassifyDocument(projectId?: string) {
+  const invalidate = useInvalidateIntake(projectId)
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & ReclassifyBody) =>
+      api.post<TenderDocument>(`/tender-documents/${id}/reclassify`, body),
+    onSuccess: invalidate,
+  })
+}
+
+export function useBulkReclassify(projectId: string | undefined) {
+  const invalidate = useInvalidateIntake(projectId)
+  return useMutation({
+    mutationFn: (body: BulkReclassifyBody) =>
+      api.post<BulkConfirmResult>(`/projects/${projectId}/tender-documents/bulk-reclassify`, body),
+    onSuccess: invalidate,
+  })
 }

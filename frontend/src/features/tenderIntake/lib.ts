@@ -26,6 +26,8 @@ export const FLAG_LABELS: Record<string, string> = {
   not_measurable: 'Not measurable',
   convert_to_dxf: 'Convert to DXF',
   model_unavailable: 'Model unavailable',
+  rules_fallback: 'Classified by rules',
+  injection_suspected: 'Suspicious text ignored',
 }
 
 export const FILTERABLE_FLAGS = [
@@ -94,3 +96,94 @@ export function isSuperseded(doc: TenderDocument, all: TenderDocument[]): boolea
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+// Mirrors backend/app/intake/constants.py (DocClass order and labels, drawing disciplines and types).
+export const CLASS_ORDER = [
+  'drawing',
+  'boq',
+  'addendum',
+  'specification',
+  'contract',
+  'tender_instructions',
+  'tender_forms',
+  'clarification',
+  'programme',
+  'site_investigation',
+  'correspondence',
+  'other',
+]
+
+export const DEFAULT_CLASS_LABELS: Record<string, string> = {
+  drawing: 'Drawing',
+  boq: 'BOQ',
+  addendum: 'Addendum',
+  specification: 'Specification',
+  contract: 'Contract / Conditions',
+  tender_instructions: 'Tender instructions',
+  tender_forms: 'Tender forms and bonds',
+  clarification: 'Clarification / RFI response',
+  programme: 'Programme / schedule',
+  site_investigation: 'Site investigation / geotechnical',
+  correspondence: 'Correspondence',
+  other: 'Other',
+}
+
+// Selectable disciplines (stored in sub_type); the legacy codes are only ever displayed.
+export const DRAWING_DISCIPLINES = [
+  'roads_civil',
+  'stormwater',
+  'sewer',
+  'water_supply',
+  'irrigation',
+  'electrical_lighting',
+  'telecom',
+  'landscape',
+  'architectural',
+  'structural',
+  'mep',
+]
+export const LEGACY_DISCIPLINES = ['civil_infra', 'other']
+
+export const DISCIPLINE_LABELS: Record<string, string> = {
+  roads_civil: 'Roads / civil',
+  stormwater: 'Stormwater drainage',
+  sewer: 'Sewer',
+  water_supply: 'Water supply',
+  irrigation: 'Irrigation',
+  electrical_lighting: 'Electrical / street lighting',
+  telecom: 'Telecom',
+  landscape: 'Landscape',
+  architectural: 'Architectural',
+  structural: 'Structural',
+  mep: 'MEP',
+  civil_infra: 'Civil / infrastructure',
+  other: 'Other discipline',
+}
+
+export const DRAWING_TYPES = [
+  'location_plan',
+  'general_arrangement',
+  'plan_profile',
+  'cross_sections',
+  'typical_details',
+  'schedules',
+  'setting_out',
+]
+
+export const DRAWING_TYPE_LABELS: Record<string, string> = {
+  location_plan: 'Location / key plan',
+  general_arrangement: 'General arrangement / layout',
+  plan_profile: 'Plan & profile / longitudinal section',
+  cross_sections: 'Cross sections',
+  typical_details: 'Typical details',
+  schedules: 'Schedules',
+  setting_out: 'Setting-out',
+}
+
+export function humanize(code: string): string {
+  const s = code.replace(/_/g, ' ')
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+export const disciplineLabel = (code: string) => DISCIPLINE_LABELS[code] ?? humanize(code)
+export const drawingTypeLabel = (code: string) => DRAWING_TYPE_LABELS[code] ?? humanize(code)

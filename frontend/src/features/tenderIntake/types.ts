@@ -165,3 +165,81 @@ export interface EditMetadataBody {
   revision_label?: string | null
   metadata?: Record<string, unknown> | null
 }
+
+export interface ReclassifyBody {
+  doc_class: string
+  sub_type?: string | null
+  drawing_type?: string | null
+  note?: string | null
+  confirm?: boolean
+}
+
+export interface BulkReclassifyBody extends ReclassifyBody {
+  document_ids: string[]
+  confirm: boolean
+}
+
+export type DisplayStatus =
+  | 'queued'
+  | 'reading'
+  | 'classified'
+  | 'extracting'
+  | 'ready'
+  | 'needs_check'
+  | 'failed'
+  | 'excluded'
+
+// The compact document tree (GET /projects/{id}/tender-documents/tree).
+export interface TreeItem {
+  id: string
+  package_id: string
+  name: string
+  path: string | null
+  ext: string
+  size_bytes: number
+  doc_class: string | null
+  discipline: string | null
+  drawing_type: string | null
+  unit_type: string | null
+  document_number: string | null
+  title: string | null
+  revision: string | null
+  sheet_number: string | null
+  scale: string | null
+  confidence: number | null
+  status: string
+  display_status: DisplayStatus | string
+  status_reason: string | null
+  classified_by: 'ai' | 'rules' | 'user' | null
+  decided_by: 'ai' | 'rules' | 'user' | null
+  auto_accepted: boolean
+  flags: string[]
+  routed_kind: 'drawing' | 'boq_wizard' | 'addendum' | 'register' | 'duplicate' | 'not_measurable' | null
+  drawing_id: string | null
+  evidence_quote: string | null
+  evidence_page: number | null
+  ai_note: string | null
+  supersedes: string[]
+  created_at: string
+}
+
+export interface TreeSummary {
+  total: number
+  by_display_status: Record<string, number>
+  by_class: Record<string, number>
+  needs_check: number
+  in_progress: number
+  drawings_total: number
+  drawings_ready: number
+  boq_documents: string[]
+  addenda: number
+  packages_processing: number
+  auto_accept_min: number
+  ai_available: boolean
+  ai_message: string | null
+}
+
+export interface TreeOut {
+  items: TreeItem[]
+  summary: TreeSummary
+}
