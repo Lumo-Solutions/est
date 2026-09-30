@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import Settings
 from app.ai.compat import extract_json
+from app.ai.gateway import AIMeta
 from app.intake.constants import ALL_CLASSES, DRAWING_SUB_TYPES, ClassificationSource, Flag
 from app.intake.extract import DocContent
 from app.intake.rules import RuleOutcome
@@ -74,11 +75,13 @@ def parse_model_output(raw: dict) -> ModelClassification:
 
 
 async def classify_with_model(
-    *, filename: str, content: DocContent, candidates: list[str], image_png: bytes | None = None
+    *, filename: str, content: DocContent, candidates: list[str], image_png: bytes | None = None,
+    folder_path: str | None = None, meta: AIMeta | None = None,
 ) -> ModelClassification:
     system_prompt, user_prompt = render_prompt(
         "document_classification.j2",
         filename=filename,
+        folder_path=folder_path or "",
         document_text=(content.text or "")[:MODEL_TEXT_CHARS],
         title_block_text=(content.title_block_text or "")[:2_000],
         has_image=image_png is not None,
@@ -92,6 +95,7 @@ async def classify_with_model(
         image_data_url=image_data_url,
         max_tokens=MODEL_MAX_TOKENS,
         task="intake_classify",
+        meta=meta,
     )
     return parse_model_output(raw)
 

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/drawing_annotations.schema.json",
+  "title": "DrawingAnnotations",
+  "description": "What is written on ONE drawing sheet: title-block fields, the legend, the drawing schedule, scale notes, and dimension or quantity annotations such as L=245.0m, D300 uPVC, 12 nos. Pure data: no action fields. Annotated values are READ from the sheet, never estimated or measured from the picture. Geometry measurement is done elsewhere, deterministically.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["annotations"],
+  "properties": {
+    "title_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "drawing_number": {"type": ["string", "null"]},
+        "sheet_title": {"type": ["string", "null"]},
+        "revision": {"type": ["string", "null"]},
+        "scale_text": {"type": ["string", "null"]}
+      }
+    },
+    "scale_notes": {"type": "array", "items": {"type": "string"}, "description": "Scale statements printed on the sheet, verbatim."},
+    "legend": {
+      "type": "array",
+      "description": "Legend entries: what each symbol, line style or hatch means, as printed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label"],
+        "properties": {
+          "symbol": {"type": ["string", "null"], "description": "Short description of the symbol or line style, e.g. dashed blue line."},
+          "label": {"type": "string", "description": "The legend text, verbatim, e.g. Proposed 300mm uPVC sewer."}
+        }
+      }
+    },
+    "schedule": {
+      "type": "array",
+      "description": "Rows of any drawing schedule or table on the sheet (manhole schedule, pipe schedule, bar schedule, drawing list), each row as its cell texts in order, verbatim.",
+      "items": {"type": "array", "items": {"type": "string"}}
+    },
+    "annotations": {
+      "type": "array",
+      "description": "Dimension or quantity annotations printed on the sheet.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "kind"],
+        "properties": {
+          "text": {"type": "string", "description": "The annotation exactly as printed, e.g. L=245.0m, D300 uPVC, 12 nos."},
+          "kind": {"type": "string", "enum": ["length", "area", "volume", "count", "diameter", "level", "other"]},
+          "value": {"type": ["number", "null"], "description": "The printed numeric value (245.0 for L=245.0m). Null if there is none."},
+          "unit": {"type": ["string", "null"], "description": "The printed unit (m, m2, nos), null if none."},
+          "material": {"type": ["string", "null"], "description": "Material or size text attached to the annotation, e.g. uPVC SN8 D300."},
+          "bbox": {
+            "type": ["array", "null"],
+            "description": "Bounding box on the page image as [left, top, right, bottom], fractions 0..1 of page width/height. Null if unsure.",
+            "items": {"type": "number"}
+          }
+        }
+      }
+    },
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}
