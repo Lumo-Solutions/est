@@ -122,19 +122,29 @@ def build_boq_pdf(
     return buf.getvalue()
 
 
-def build_scanned_pdf(items: list[BoqItem]) -> bytes:
-    """One image-only page (no text layer) showing the items as a table."""
+def build_scanned_pdf(items: list[BoqItem], *, embed_answer: bool = True) -> bytes:
+    """One image-only page (no text layer) showing the items as a table. With `embed_answer` the rows are also
+    printed as an optical code along the top edge (app/demo/bitgrid.py) so the MOCK AI provider can 'read' the
+    page like a recorded response; a real provider just sees a few marks."""
     from PIL import Image, ImageDraw, ImageFont
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
 
+    from app.demo import bitgrid
+
     img = Image.new("L", (1240, 1754), 255)
+    top = 0
+    if embed_answer:
+        rows = [{"item_no": it.item_no, "description": it.description, "unit": it.unit, "quantity": it.qty} for it in items]
+        strip = bitgrid.encode({"rows": rows}, 1240)
+        img.paste(strip, (0, 0))
+        top = strip.size[1] + 20
     d = ImageDraw.Draw(img)
     font = ImageFont.load_default()
-    d.text((80, 60), "BILL OF QUANTITIES", fill=0, font=font)
-    d.text((80, 110), "Item      Description                                   Unit    Qty      Rate", fill=0, font=font)
-    y = 140
+    d.text((80, top + 60), "BILL OF QUANTITIES", fill=0, font=font)
+    d.text((80, top + 110), "Item      Description                                   Unit    Qty      Rate", fill=0, font=font)
+    y = top + 140
     for it in items:
         d.text((80, y), f"{it.item_no:<9} {it.description[:44]:<44} {(it.unit or ''):<7} {_fmt(it.qty):<9} {_fmt(it.rate)}", fill=0, font=font)
         y += 22

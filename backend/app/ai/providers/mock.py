@@ -1,7 +1,7 @@
 """Deterministic, fixture-driven provider: the default for tests and the
-keyless dev stack. A per-task handler (registered by fixtures, see
-app/ai/mock_fixtures.py) returns the recorded answer; with no handler the
-answer is the smallest schema-valid instance, so every code path still runs.
+keyless dev stack. A handler registered for a task wins; otherwise the built-in
+deterministic answer for known tasks (app/ai/mock_fixtures.py); otherwise the
+smallest schema-valid instance, so every code path still runs.
 Not external: no governance, no cost."""
 
 from __future__ import annotations
@@ -36,6 +36,10 @@ class MockProvider(AIProvider):
     async def _complete(self, req: AIRequest) -> ProviderResult:
         self.calls.append(req)
         handler = _HANDLERS.get(req.task)
+        if handler is None:
+            from app.ai.mock_fixtures import DEFAULT_HANDLERS  # deterministic defaults for the known tasks
+
+            handler = DEFAULT_HANDLERS.get(req.task)
         data = handler(req) if handler else minimal_instance(req.schema)
         return ProviderResult(
             data=data,

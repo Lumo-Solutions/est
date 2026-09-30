@@ -110,6 +110,7 @@ class Evidence:
     ann_kind: str | None = None  # annotation kind: length/area/volume/count/diameter/level/other
     # For a grouped measurement (all pipe runs on one layer of one sheet): the member measurement ids.
     members: tuple[str, ...] = ()
+    member_values: tuple[float, ...] = ()  # the individual values summed into `value` (same unit)
 
     def dimension(self) -> unit_conversion.Dimension | None:
         return unit_conversion.unit_dimension(self.unit) if self.unit else None
@@ -359,9 +360,11 @@ def find_missing_in_boq(evidence: list[Evidence], attached_refs: set[str]) -> li
     for ev in evidence:
         if ev.ref in attached_refs and ev.unit and ev.dimension():
             base_unit = {"length": "m", "area": "m2", "volume": "m3", "count": "nr"}[ev.dimension().value]  # type: ignore[union-attr]
-            v = unit_conversion.convert(ev.value, ev.unit, base_unit)
-            if v is not None:
-                attached_values.setdefault(ev.dimension(), []).append(v)  # type: ignore[arg-type]
+            # a grouped item (several pipe runs) also "accounts for" each run's own printed length
+            for value in (ev.value, *ev.member_values):
+                v = unit_conversion.convert(value, ev.unit, base_unit)
+                if v is not None:
+                    attached_values.setdefault(ev.dimension(), []).append(v)  # type: ignore[arg-type]
     out: list[LineResult] = []
     for ev in evidence:
         if ev.ref in attached_refs or ev.value is None or ev.value <= 0 or not ev.unit:

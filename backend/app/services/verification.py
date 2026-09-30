@@ -64,7 +64,7 @@ def _ev_json(e: Evidence) -> dict:
     return {
         "ref": e.ref, "kind": e.kind, "value": e.value, "unit": e.unit, "label": e.label, "drawing_id": e.drawing_id,
         "sheet_id": e.sheet_id, "page": e.page, "bbox": e.bbox, "layer": e.layer, "confidence": e.confidence,
-        "material": e.material, "ann_kind": e.ann_kind, "members": list(e.members),
+        "material": e.material, "ann_kind": e.ann_kind, "members": list(e.members), "member_values": list(e.member_values),
     }
 
 
@@ -74,6 +74,7 @@ def _ev_from_json(d: dict) -> Evidence:
         drawing_id=d.get("drawing_id"), sheet_id=d.get("sheet_id"), page=d.get("page"), bbox=d.get("bbox"),
         layer=d.get("layer"), confidence=float(d.get("confidence", 1.0)), material=d.get("material"),
         ann_kind=d.get("ann_kind"), members=tuple(d.get("members") or ()),
+        member_values=tuple(float(v) for v in (d.get("member_values") or ())),
     )
 
 
@@ -150,6 +151,7 @@ async def load_evidence(session: AsyncSession, project_id: UUID) -> list[Evidenc
                 drawing_id=str(drawing_id), sheet_id=str(sheet_id), page=(sheet.sheet_index + 1) if sheet else None,
                 bbox=bbox, layer=layer or None, trade_id=str(trade_id) if trade_id else None, trade_name=trade_name,
                 confidence=min(float(m.confidence) for m in members), members=tuple(sorted(str(m.id) for m in members)),
+                member_values=tuple(float(m.effective_value) for m in members),
             )
         )
     anns = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.project_id == project_id))).scalars().all()

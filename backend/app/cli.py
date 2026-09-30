@@ -2066,6 +2066,46 @@ async def clean_demo_data() -> None:
                 await session.flush()
                 print(f"deleted vendor {name!r} ({qa_vendor.id})")
 
+        from app.demo import ai_demo_seed
+
+        ai_counts = await ai_demo_seed.clean(session, tenant_id)
+        print(f"AI demo: deleted {ai_counts['projects']} project(s), {ai_counts['vendors']} vendor(s), {ai_counts['cost_items']} cost item(s).")
+
+
+async def seed_ai_demo() -> None:
+    """DEV ONLY: synthetic UAE infrastructure data for the AI features -- cost library (~150 items with rate
+    history), 20 vendors, 15 past tenders with outcomes. Tagged (AIDEMO-* / AI-DEMO-H*) and removed by
+    `clean-demo-data`. Idempotent. The tender pack itself is written by `write-ai-demo-pack`."""
+    from app.demo import ai_demo_seed
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    async with session_scope(sys_ctx) as session:
+        counts = await ai_demo_seed.seed_library_vendors_history(session, sys_ctx)
+    print(f"AI demo data: {counts['cost_items']} cost items, {counts['vendors']} vendors, {counts['past_tenders']} past tenders created (existing ones skipped).")
+    print("Next: `make dev-ai-demo-pack` writes the tender pack; create project AI-DEMO, upload it, import the BOQ, then `make dev-seed-ai-demo-quotes`.")
+
+
+async def seed_ai_demo_quotes(project_code: str) -> None:
+    """DEV ONLY: accepted vendor quotes for the AI-DEMO project's BOQ lines (run after the BOQ has been imported)."""
+    from app.demo import ai_demo_seed
+
+    settings = get_settings()
+    tenant_id = UUID(settings.demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    async with session_scope(sys_ctx) as session:
+        n = await ai_demo_seed.seed_quotes(session, sys_ctx, project_code)
+    print(f"AI demo: {n} accepted vendor quote line(s) created on project {project_code}.")
+
+
+def write_ai_demo_pack(out_dir: str) -> None:
+    """DEV/TEST: writes the synthetic AI demo tender pack (drawings, BOQs, spec, addendum, contract) to a directory."""
+    from app.demo import ai_demo
+
+    written = ai_demo.write_pack(out_dir)
+    print(f"wrote {len(written)} files under {out_dir}/{ai_demo.PACK_ROOT}")
+
 
 def write_tender_pack(out_dir: str, salt: str, extra: int = 0) -> None:
     """DEV/TEST: writes the synthetic tender pack (app/intake/sample_pack.py) to a directory so the
@@ -2126,6 +2166,11 @@ def main() -> None:
     pack_parser.add_argument("--out", required=True)
     pack_parser.add_argument("--salt", default="")
     pack_parser.add_argument("--extra", type=int, default=0, help="also write N small distinct text PDFs (for 300+ file packs)")
+    subparsers.add_parser("seed-ai-demo", help="DEV ONLY: synthetic cost library, vendors and win/loss history for the AI features (tagged; removed by clean-demo-data)")
+    quotes_parser = subparsers.add_parser("seed-ai-demo-quotes", help="DEV ONLY: accepted vendor quotes for the AI-DEMO project's imported BOQ")
+    quotes_parser.add_argument("--project", default="AI-DEMO")
+    ai_pack_parser = subparsers.add_parser("write-ai-demo-pack", help="DEV/TEST: write the synthetic AI demo tender pack to a directory")
+    ai_pack_parser.add_argument("--out", required=True)
     subparsers.add_parser(
         "clean-demo-data",
         help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
@@ -2154,6 +2199,12 @@ def main() -> None:
         asyncio.run(clean_demo_data())
     elif args.command == "write-tender-pack":
         write_tender_pack(args.out, args.salt, args.extra)
+    elif args.command == "seed-ai-demo":
+        asyncio.run(seed_ai_demo())
+    elif args.command == "seed-ai-demo-quotes":
+        asyncio.run(seed_ai_demo_quotes(args.project))
+    elif args.command == "write-ai-demo-pack":
+        write_ai_demo_pack(args.out)
 
 
 if __name__ == "__main__":

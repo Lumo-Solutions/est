@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from app.ai.errors import AIError
-from app.ai.gateway import AIGateway, AIMeta, RedisRateLimiter
+from app.ai.gateway import AIGateway, AIMeta
 from app.ai.provider import VISION, ImageInput
 from app.boq.pdf_reader import PageResult, PdfBoqRow, read_pdf_boq
 from app.core.config import Settings, get_settings
@@ -84,11 +84,9 @@ def _rows_from_ai(raw: dict, page: int, size: list[float]) -> list[PdfBoqRow]:
 
 
 def default_gateway(settings: Settings | None = None) -> AIGateway:
-    settings = settings or get_settings()
-    limiter = None
-    if settings.ai_provider not in ("local_vllm", "mock"):
-        limiter = RedisRateLimiter(settings.redis_url, settings.ai_rate_limit_per_min)
-    return AIGateway(settings=settings, rate_limiter=limiter)
+    from app.ai.factory import default_gateway as _factory
+
+    return _factory(settings)
 
 
 async def extract_pdf_boq(

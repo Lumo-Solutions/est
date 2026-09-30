@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.ai.errors import AIError
-from app.ai.gateway import AIGateway, AIMeta, RedisRateLimiter
+from app.ai.gateway import AIGateway, AIMeta
 from app.ai.provider import CLASSIFY, EXTRACT, VISION, ImageInput
 from app.core.config import Settings, get_settings
 
@@ -27,10 +27,9 @@ _KIND_FOR_TASK = {
 
 
 def _gateway(settings: Settings) -> AIGateway:
-    limiter = None
-    if settings.ai_provider not in ("local_vllm", "mock"):
-        limiter = RedisRateLimiter(settings.redis_url, settings.ai_rate_limit_per_min)
-    return AIGateway(settings=settings, rate_limiter=limiter)
+    from app.ai.factory import default_gateway
+
+    return default_gateway(settings)
 
 
 def _image_from_data_url(url: str) -> ImageInput:

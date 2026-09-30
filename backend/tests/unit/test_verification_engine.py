@@ -191,3 +191,11 @@ def test_summary_counts_and_top_risks():
     assert s["counts"]["not_verifiable"] == 1 and s["verifiable"] == 3
     assert s["top_risks"][0]["class"] == "missing_in_drawings"
     assert {t["trade"] for t in s["by_trade"]} >= {"drainage", "roads"}
+
+
+def test_annotation_restating_one_run_of_an_attached_group_is_not_extra_scope():
+    group = Evidence(ref="g:x", kind="measurement", value=246.0, unit="m", label="pipe runs", members=("a", "b", "c"),
+                     member_values=(100.0, 90.0, 56.0))
+    evs = [group, ann("run1", 100.0), ann("run3", 56.0), ann("other", 33.0)]
+    out = find_missing_in_boq(evs, {"g:x"})
+    assert [r.evidence[0].ref for r in out] == ["a:other"]
