@@ -118,6 +118,10 @@ class DrawingSheet(TenantEntity):
     # (>=0.5) disagree by more than 10% -- see app/takeoff/scale.py::
     # estimate_scale. Surfaced to a reviewer, never auto-resolved.
     scale_disagreement: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # AI-assisted reading of what is printed on the sheet (legend, schedule, scale notes).
+    ai_notes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    annotations_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    annotations_read_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class DrawingEntity(TenantEntity):
@@ -355,3 +359,30 @@ class DrawingLayerTradeMapping(TenantEntity):
     trade_node_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("trade_nodes.id", ondelete="CASCADE"), nullable=False
     )
+
+
+class DrawingAnnotation(TenantEntity):
+    """A dimension or quantity annotation READ from a sheet by the AI (for example
+    'L=245.0m', 'D300 uPVC', '12 nos'). Never a measurement: the printed value only."""
+
+    __tablename__ = "drawing_annotations"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawings.id", ondelete="CASCADE"), nullable=False
+    )
+    sheet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("drawing_sheets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)
+    value: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    material: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    bbox: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    source: Mapped[str] = mapped_column(String(8), nullable=False, server_default="ai")
+    confidence: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
+    ai_call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

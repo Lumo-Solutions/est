@@ -964,6 +964,11 @@ async def _get_single_eligible_batch(session: AsyncSession, settlement: BidSettl
         )
     (batch_id,) = batch_ids
     batch = (await session.execute(select(BoqImportBatch).where(BoqImportBatch.id == batch_id))).scalar_one_or_none()
+    if batch is not None and batch.source_object_key is None and batch.source_filename.lower().endswith(".pdf"):
+        raise ConflictError(
+            "This settlement's BOQ was read from a PDF, so there is no original workbook to write into -- "
+            "use the generated export instead."
+        )
     if batch is None or batch.source_object_key is None:
         raise ConflictError(
             "This settlement's BOQ import didn't retain the original workbook -- use the generated export instead."

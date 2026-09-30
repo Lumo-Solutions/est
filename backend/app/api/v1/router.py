@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.routes import (
     ai,
+    ai_reading,
     approvals,
     audit,
     auth,
@@ -27,6 +28,7 @@ from app.api.v1.routes import (
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(ai.router)
+api_router.include_router(ai_reading.router)
 api_router.include_router(vendors.router)
 api_router.include_router(taxonomy.router)
 api_router.include_router(tender_intake.router)
