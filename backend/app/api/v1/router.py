@@ -13,6 +13,7 @@ from app.api.v1.routes import (
     drawings,
     module_e,
     prequal,
+    pricing_ai,
     procurement,
     projects,
     quotation_ingestion,
@@ -46,5 +47,6 @@ api_router.include_router(quotation_ingestion.router)
 api_router.include_router(semantic_matching.router)
 api_router.include_router(settlement.router)
 api_router.include_router(typology.router)
+api_router.include_router(pricing_ai.router)
 api_router.include_router(users.router)
 api_router.include_router(verification.router)

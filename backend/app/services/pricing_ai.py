@@ -185,8 +185,7 @@ async def _gather(
             match_score=pe.description_similarity(item.description, qli.vendor_description_text or item.description),
             detail={"vat_inclusive": quotation.vat_inclusive, "quotation_id": str(quotation.id), "vendor_id": str(vendor.id)},
         )
-        cand._exclusions = excl  # type: ignore[attr-defined]
-        cand._eligible = eligible  # type: ignore[attr-defined]
+        cand.exclusions, cand.eligible = excl, eligible
         out[qli.boq_line_item_id].append(cand)
 
     # ---- cost library (fuzzy on description, unit interchangeable, rate as of the tender date)
@@ -289,8 +288,8 @@ async def _gather(
                 c.detail["age_months"] = round(pe.months_between(c.as_of, tender_date), 1)
             c.flags = pe.compute_flags(
                 c, boq_uom=item.uom, settlement_currency=settlement.currency, tender_date=tender_date, stale_months=stale,
-                history_median=hist.rate if hist else None, exclusion_count=getattr(c, "_exclusions", 0),
-                vendor_eligible=getattr(c, "_eligible", None), source_count=max(1, len(real)) if c.ctype != "historical" else 2,
+                history_median=hist.rate if hist else None, exclusion_count=c.exclusions,
+                vendor_eligible=c.eligible, source_count=max(1, len(real)) if c.ctype != "historical" else 2,
             )
     return out, rate_lookups
 
@@ -335,6 +334,7 @@ async def run_cost_proposals(
         text("UPDATE settlement_ai_proposals SET status='superseded', updated_at=now() WHERE settlement_id=:s AND status='proposed'"),
         {"s": str(settlement.id)},
     )
+    created_at = datetime.now(timezone.utc)  # explicit: now() is the transaction time, so two runs in one transaction would tie
     counts = {"lines": len(lines), "with_source": 0, "no_source": 0, "ai_chosen": 0, "rules_chosen": 0, "blocked": 0, "bulk_acceptable": 0}
     for line in lines:
         key = str(line.boq_line_item_id)
@@ -362,6 +362,7 @@ async def run_cost_proposals(
                 settlement_line_id=line.id, boq_line_item_id=line.boq_line_item_id, status="proposed", source=prop.source,
                 chosen=_cand_json(prop.chosen) if prop.chosen else None, candidates=_prop_candidates_json(prop),
                 rationale=prop.rationale, flags=prop.flags, confidence=prop.confidence, created_by=ctx.user_id,
+                created_at=created_at,
             )
         )
     warnings: list[str] = []
@@ -408,6 +409,11 @@ async def list_proposals(
     if max_confidence is not None:
         stmt = stmt.where(SettlementAiProposal.confidence <= max_confidence)
     rows = list((await session.execute(stmt.order_by(SettlementAiProposal.created_at, SettlementAiProposal.id))).scalars().all())
+    # One row per settlement line: the latest proposal (an older, already-decided one is history, not a second row).
+    latest: dict[UUID, SettlementAiProposal] = {}
+    for r in rows:
+        latest[r.settlement_line_id] = r
+    rows = sorted(latest.values(), key=lambda r: (r.created_at, r.id))
     if flagged is not None:
         rows = [r for r in rows if bool(r.flags and pe.is_blocked(list(r.flags))) == flagged]
     total = len(rows)

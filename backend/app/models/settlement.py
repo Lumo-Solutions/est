@@ -130,7 +130,7 @@ class BidSettlementLineItem(TenantEntity):
 
     direct_unit_cost: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
     source_currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="AED")
-    cost_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default=SettlementCostSource.MANUAL.value)
+    cost_source: Mapped[str] = mapped_column(String(24), nullable=False, server_default=SettlementCostSource.MANUAL.value)
     source_quotation_line_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("quotation_line_items.id", ondelete="SET NULL"), nullable=True
     )

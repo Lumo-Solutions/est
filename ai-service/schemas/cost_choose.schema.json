@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/cost_choose.schema.json",
+  "title": "CostChoose",
+  "description": "For each BOQ line, which of the supplied cost candidates (an accepted vendor quote line, a cost-library rate, a historical median) describes the same scope, with a score, a rationale and a selection. The model may only refer to candidates it was given, by ref. It never outputs a rate, a quantity or an action: the rate always comes from the chosen candidate's stored value. Every choice is a proposal that an estimator accepts or overrides.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lines"],
+  "properties": {
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ranked"],
+        "properties": {
+          "id": {"type": "string", "description": "The id of the BOQ line, copied exactly from the input."},
+          "ranked": {
+            "type": "array",
+            "description": "Every supplied candidate for this line, best scope match first.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ref", "score", "selected"],
+              "properties": {
+                "ref": {"type": "string", "description": "The candidate ref exactly as supplied."},
+                "score": {"type": "number", "minimum": 0, "maximum": 1, "description": "How well this candidate's scope matches the BOQ line (1 = certainly the same work, size, material and inclusions)."},
+                "selected": {"type": "boolean", "description": "True for at most ONE candidate per line: the one to propose. False if none is suitable."},
+                "rationale": {"type": "string", "description": "One or two sentences: why this matches or not (size, material, supply-only vs supply-and-lay, inclusions, unit)."}
+              }
+            }
+          },
+          "overall": {"type": "string", "description": "One sentence for the whole line, for example why no candidate is suitable."}
+        }
+      }
+    }
+  }
+}

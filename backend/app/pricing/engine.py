@@ -64,6 +64,8 @@ class CostCandidate:
     samples: int = 0  # historical: number of observations
     flags: list[str] = field(default_factory=list)
     detail: dict = field(default_factory=dict)
+    exclusions: int = 0  # open exclusion flags on the vendor quote (input to flags, not stored)
+    eligible: bool | None = None  # vendor prequal + location eligibility (None = not applicable)
 
 
 @dataclass(slots=True)
