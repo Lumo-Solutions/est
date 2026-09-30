@@ -1415,3 +1415,138 @@ export interface BoqPdfFileUrlOut {
   url: string
   filename: string
 }
+
+// --- Drawing vs BOQ verification ---
+export type VerificationRunStatus = 'queued' | 'running' | 'ready' | 'failed'
+export type VerificationPhase = 'loading' | 'interpreting' | 'ranking' | 'computing'
+export type VerificationClass =
+  | 'match'
+  | 'variance'
+  | 'missing_in_drawings'
+  | 'not_verifiable'
+  | 'missing_in_boq'
+
+export type VerificationCounts = Record<VerificationClass, number>
+
+export interface VerificationTradeSummary {
+  trade: string
+  lines: number
+  match: number
+  variance: number
+  missing_in_drawings: number
+  not_verifiable: number
+  abs_variance_pct_sum: number
+}
+
+export interface VerificationTopRisk {
+  line_id: string
+  class: VerificationClass
+  delta_pct: number | null
+  note: string
+}
+
+export interface VerificationRunOut {
+  id: string
+  project_id: string
+  status: VerificationRunStatus
+  use_ai: boolean
+  phase: VerificationPhase | null
+  progress_done: number
+  progress_total: number
+  counts: VerificationCounts
+  summary: { verifiable: number; by_trade: VerificationTradeSummary[]; top_risks: VerificationTopRisk[] }
+  warnings: string[]
+  error: string | null
+  ai_calls: number
+  ai_cost_usd: number
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface VerificationEvidenceOut {
+  ref: string
+  kind: 'measurement' | 'annotation'
+  value: number | null
+  unit: string | null
+  label: string | null
+  drawing_id: string
+  sheet_id: string | null
+  page: number
+  bbox: number[] | null
+  layer: string | null
+  confidence: number | null
+  material: string | null
+}
+
+export interface VerificationCandidateOut {
+  ref: string
+  score: number
+  reason: string
+  source: 'ai' | 'rules'
+  selected: boolean
+}
+
+export interface VerificationInterpretationOut {
+  work_type: string | null
+  material: string | null
+  size_mm: number | null
+  unit: string | null
+  trade: string | null
+  source: string | null
+  keywords: string[]
+}
+
+export interface VerificationLineOut {
+  id: string
+  run_id: string
+  boq_line_item_id: string | null
+  item_no: string | null
+  description: string
+  trade_name: string | null
+  vclass: VerificationClass
+  method: 'measured' | 'annotated' | 'none'
+  mapped_by: 'ai' | 'rules' | 'user' | 'none'
+  boq_quantity: number | null
+  boq_uom: string | null
+  drawing_quantity: number | null
+  delta: number | null
+  delta_pct: number | null
+  confidence: number
+  note: string | null
+  flags: string[]
+  interpretation: VerificationInterpretationOut | null
+  evidence: VerificationEvidenceOut[]
+  candidates: VerificationCandidateOut[]
+}
+
+export interface VerificationLinesPage {
+  items: VerificationLineOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type VerificationMappingAction = 'accept' | 'reject' | 'include' | 'clear'
+
+export interface VerificationMappingRequest {
+  action: VerificationMappingAction
+  evidence_ref: string
+  note?: string
+}
+
+export interface VerificationMappingResult {
+  line: VerificationLineOut
+  run: VerificationRunOut
+}
+
+export interface AnnotationSummaryOut {
+  sheets: number
+  done: number
+  queued: number
+  unavailable: number
+  failed: number
+  skipped: number
+  unread: number
+  annotations: number
+}

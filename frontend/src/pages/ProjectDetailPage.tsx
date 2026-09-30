@@ -342,7 +342,18 @@ export function ProjectDetailPage() {
       <MembersSection projectId={project.id} />
 
       <Card className="mt-6">
-        <SectionHeading>Drawings</SectionHeading>
+        <SectionHeading
+          action={
+            <Link
+              to={`/projects/${project.id}/verification`}
+              className="rounded text-sm text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+            >
+              Verify BOQ against drawings
+            </Link>
+          }
+        >
+          Drawings
+        </SectionHeading>
         <DrawingUpload projectId={project.id} />
         {drawings && drawings.length === 0 && <p className="mt-3 text-base text-muted">No drawings uploaded yet.</p>}
         {drawings && drawings.length > 0 && (
