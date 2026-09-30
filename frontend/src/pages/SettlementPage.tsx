@@ -650,7 +650,7 @@ export function SettlementPage() {
           {staleAddendum.addendum_no ? `Addendum ${staleAddendum.addendum_no}` : 'An addendum'} changed the tender documents after this settlement was built.{' '}
           {current.status === 'draft' ? 'Refresh quantities before you submit.' : 'Ask for a re-review before deciding.'}{' '}
           <Link
-            to={`/projects/${projectId}?tab=tender-documents`}
+            to={`/projects/${projectId}`}
             className="rounded font-medium underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
             View addenda

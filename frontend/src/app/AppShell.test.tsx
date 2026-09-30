@@ -41,15 +41,15 @@ function renderShellAt(path: string) {
 }
 
 describe('AppShell', () => {
-  it('highlights only Drawings, not Overview as well, on a drawings sub-page', () => {
+  it('highlights only Drawings, not Project as well, on a drawings sub-page', () => {
     renderShellAt('/projects/p1/drawings/d1')
     expect(screen.getByRole('link', { name: 'Drawings' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('link', { name: 'Project' })).not.toHaveAttribute('aria-current')
   })
 
-  it('highlights Overview on the project overview page itself', () => {
+  it('highlights Project on the project page itself', () => {
     renderShellAt('/projects/p1')
-    expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Project' })).toHaveAttribute('aria-current', 'page')
   })
 
   it('shows the login name in the header, keeping the UUID only as a tooltip', () => {
