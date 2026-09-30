@@ -37,7 +37,11 @@ const usage: AiUsageOut = {
 }
 
 function setup(status: AiStatusOut = okStatus) {
-  get.mockImplementation((path: string) => Promise.resolve(path.startsWith('/ai/status') ? status : usage))
+  get.mockImplementation((path: string) => {
+    if (path.startsWith('/tender-intake/settings'))
+      return Promise.resolve({ auto_accept_min: 0.85, default_auto_accept_min: 0.85 })
+    return Promise.resolve(path.startsWith('/ai/status') ? status : usage)
+  })
   put.mockResolvedValue({})
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -93,5 +97,62 @@ describe('AiAdmin', () => {
     await screen.findByRole('switch')
     expect(get.mock.calls.some((c) => String(c[0]).includes('/admin/ai-usage'))).toBe(false)
     expect(screen.getByText(/cannot view AI usage/)).toBeInTheDocument()
+  })
+
+  describe('intake auto-accept', () => {
+    const label = 'Auto-accept at or above (%)'
+
+    it('shows the current value', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      expect(await screen.findByText('85%')).toBeInTheDocument()
+      expect(screen.getByLabelText(label)).toHaveValue(85)
+    })
+
+    it('lets the managing director save a new value', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      fireEvent.change(await screen.findByLabelText(label), { target: { value: '90' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/intake-settings', { auto_accept_min: 0.9 }))
+      expect(await screen.findByText('Saved')).toBeInTheDocument()
+    })
+
+    it('converts percent to a two-decimal fraction', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      fireEvent.change(await screen.findByLabelText(label), { target: { value: '87' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/intake-settings', { auto_accept_min: 0.87 }))
+    })
+
+    it('blocks Save when out of range', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      const input = await screen.findByLabelText(label)
+      fireEvent.change(input, { target: { value: '49' } })
+      expect(screen.getByText(/from 50 to 100/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+      fireEvent.change(input, { target: { value: '101' } })
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+      expect(put).not.toHaveBeenCalled()
+    })
+
+    it('is read-only for other roles', async () => {
+      roles = [Role.BD_DIRECTOR]
+      setup()
+      expect(await screen.findByLabelText(label)).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+      expect(screen.getByText('Only the managing director can change this')).toBeInTheDocument()
+    })
+
+    it('shows server errors', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      put.mockRejectedValue(new Error('Value rejected by server'))
+      fireEvent.change(await screen.findByLabelText(label), { target: { value: '95' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Value rejected by server')
+    })
   })
 })
