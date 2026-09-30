@@ -73,6 +73,11 @@ class BoqPdfExtractionDetail(BoqPdfExtractionOut):
     original_workbook_export_available: bool = False
 
 
+class BoqPdfFileUrlOut(BaseModel):
+    url: str
+    filename: str
+
+
 class BoqPdfCommitOut(BaseModel):
     created_count: int
     batch_id: UUID

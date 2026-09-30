@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
-from app.integrations.s3 import get_object_bytes, put_object_streaming
+from app.integrations.s3 import get_object_bytes, presign_get_url, put_object_streaming
 from app.models.boq import BoqImportBatch, BoqLineItem, BoqPdfExtraction
 from app.services import audit
 from app.services.boq_import import create_items_tree
@@ -238,3 +238,11 @@ async def commit_extraction(session: AsyncSession, ctx: RequestContext, extracti
         },
     )
     return created
+
+
+async def source_url(session: AsyncSession, ctx: RequestContext, ex: BoqPdfExtraction) -> str:
+    await audit.record(
+        session, ctx, action=AuditAction.DOWNLOAD, entity_type="boq_pdf_extraction", entity_id=ex.id,
+        project_id=ex.project_id, payload={"filename": ex.source_filename, "sha256": ex.sha256},
+    )
+    return await presign_get_url(ex.object_key, bucket=ex.bucket)

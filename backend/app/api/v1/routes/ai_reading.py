@@ -19,6 +19,7 @@ from app.schemas.ai_reading import (
     BoqPdfCommitOut,
     BoqPdfExtractionDetail,
     BoqPdfExtractionOut,
+    BoqPdfFileUrlOut,
     BoqPdfPageOut,
     BoqPdfRowOut,
     BoqPdfRowsIn,
@@ -105,6 +106,17 @@ async def get_boq_pdf_extraction_endpoint(
     extraction_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
 ) -> BoqPdfExtractionDetail:
     return _detail(await boq_pdf_service.get_extraction(session, extraction_id))
+
+
+@router.get("/boq-pdf-extractions/{extraction_id}/file-url", response_model=BoqPdfFileUrlOut)
+async def boq_pdf_file_url_endpoint(
+    extraction_id: UUID, ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> BoqPdfFileUrlOut:
+    """A short-lived link to the source PDF, so a row's page can be opened for checking
+    (append `#page=N`)."""
+    ex = await boq_pdf_service.get_extraction(session, extraction_id)
+    url = await boq_pdf_service.source_url(session, ctx, ex)
+    return BoqPdfFileUrlOut(url=url, filename=ex.source_filename)
 
 
 @router.put("/boq-pdf-extractions/{extraction_id}/rows", response_model=BoqPdfExtractionDetail)
