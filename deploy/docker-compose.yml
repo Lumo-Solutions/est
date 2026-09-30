@@ -301,6 +301,20 @@ services:
       - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
       - VLLM_API_KEY=${VLLM_API_KEY:-not-needed}
       - VLLM_TIMEOUT_S=${VLLM_TIMEOUT_S:-120}
+      # --- External AI provider (docs/ai-provider.md); the workers get the same keys from x-backend-env above. ---
+      - AI_PROVIDER=${AI_PROVIDER:-local_vllm}
+      - AI_MODEL=${AI_MODEL:-}
+      - AI_MODEL_CLASSIFY=${AI_MODEL_CLASSIFY:-}
+      - AI_MODEL_VISION=${AI_MODEL_VISION:-}
+      - AI_MODEL_REASONING=${AI_MODEL_REASONING:-}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_TIMEOUT_S=${AI_TIMEOUT_S:-120}
+      - AI_MAX_RETRIES=${AI_MAX_RETRIES:-3}
+      - AI_MONTHLY_BUDGET_USD=${AI_MONTHLY_BUDGET_USD:-}
+      - AI_PROJECT_BUDGET_USD=${AI_PROJECT_BUDGET_USD:-}
+      - AI_RATE_LIMIT_PER_MIN=${AI_RATE_LIMIT_PER_MIN:-120}
+      - AI_STALE_RATE_MONTHS=${AI_STALE_RATE_MONTHS:-12}
       - EMBEDDING_BACKEND=${EMBEDDING_BACKEND:-onnx}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       - EMBEDDING_DIM=${EMBEDDING_DIM:-384}

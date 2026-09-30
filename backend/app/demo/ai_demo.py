@@ -23,6 +23,7 @@ from typing import Any
 
 DEMO_PROJECT_CODE = "AI-DEMO"
 HISTORY_PROJECT_PREFIX = "AI-DEMO-H"
+E2E_PROJECT_PREFIX = "AI-DEMO-E2E"  # projects created by the real-backend walkthrough, one per run
 VENDOR_PREFIX = "AIDEMO "
 COST_CODE_PREFIX = "AIDEMO-"
 PACK_ROOT = "Al Reem Package 3"

@@ -208,7 +208,10 @@ async def clean(session: AsyncSession, tenant_id: UUID) -> dict[str, int]:
     out = {"projects": 0, "vendors": 0, "cost_items": 0}
     projects = (
         await session.execute(
-            select(Project).where(Project.tenant_id == tenant_id, (Project.code == demo.DEMO_PROJECT_CODE) | Project.code.like(f"{demo.HISTORY_PROJECT_PREFIX}%"))
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                (Project.code == demo.DEMO_PROJECT_CODE) | Project.code.like(f"{demo.HISTORY_PROJECT_PREFIX}%") | Project.code.like(f"{demo.E2E_PROJECT_PREFIX}%"),
+            )
         )
     ).scalars().all()
     for p in projects:

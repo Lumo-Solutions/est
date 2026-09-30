@@ -55,3 +55,26 @@ Only the configured AI host may be reachable from the workers that call it (`bac
 ## Files
 
 `backend/app/ai/`: `provider.py` (interface), `providers/` (four implementations), `gateway.py`, `store.py`, `registry.py`, `pricing.py`, `schema_util.py`, `compat.py` (`extract_json` shim for the original callers). Migration `0032`. Admin API in `app/api/v1/routes/ai.py`.
+
+## What leaves the boundary, per task
+
+Only when `AI_PROVIDER` is external **and** the tenant switch is on **and** the project has not opted out. With `local_vllm` or `mock` nothing leaves. Embeddings always stay local (ONNX). Every call is recorded in `ai_calls` (prompt and response kept internally; the admin usage view shows task, model, tokens, cost, latency and status only).
+
+| Task | Sent to the provider | Never sent |
+|---|---|---|
+| `intake_classify` | file name, folder path, the first ~6,000 characters of text, title-block text (~2,000), a page-1 image only when there is no text layer | the file itself, other pages |
+| `title_block` | title-block text and the cropped title-block image of a sheet | the rest of the sheet |
+| `scale_hint` | the printed scale text | anything else |
+| `quotation_extract` | the vendor quotation's text, or its page image | tenant BOQ, other quotes |
+| `boq_pdf_rows` | one page image and up to ~6,000 characters of that page, only for pages the table reader could not read and for scans | pages the reader handled itself, rates and amounts |
+| `drawing_annotations` | the sheet image (PDF) or up to ~8,000 characters of sheet text (DXF), only when someone asks for annotations to be read | measurements |
+| `boq_interpret` | BOQ item numbers, descriptions, units and section headings | quantities, rates |
+| `evidence_rank` | a BOQ description and unit, and up to 8 candidate drawing items (label, value, unit, layer, sheet number) per line | prices |
+| `cost_choose` | a BOQ description, unit and quantity, and up to ~10 candidate cost sources: label, **rate, currency, vendor name**, age and flags | anything not a candidate |
+| `markup_advise` | project name, size band, current percentages, trade names with line counts and **direct-cost totals**, win/loss history by margin bucket | individual rates, competitor names |
+
+`cost_choose` and `markup_advise` therefore expose commercial figures. Keep the tenant switch off, or the project's AI opt-out on, for anything commercially sensitive. AI never supplies a rate, a quantity or a total: each task's schema has no field for one, and the platform's own engines compute every number.
+
+## Files added by the AI work
+
+`backend/app/ai/` (gateway, providers, mock fixtures, eval, smoke), `backend/app/verification/`, `backend/app/pricing/`, `backend/app/boq/pdf_reader.py`, `backend/app/boq/pdf_ai.py`, `backend/app/takeoff/annotations.py`, `backend/app/demo/` (synthetic dataset), `ai-service/prompts|schemas/` (boq_pdf_rows, drawing_annotations, boq_interpret, evidence_rank, cost_choose, markup_advise). Migrations `0032` to `0036`.
