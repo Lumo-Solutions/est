@@ -5,12 +5,14 @@ before this module -- always `import app.models` first (main.py and
 migrations/env.py both do)."""
 
 from app.models import (  # noqa: F401
+    ai,
     approvals,
     audit,
     boq,
     costlib,
     module_e,
     prequal,
+    pricing_ai,
     procurement,
     quotation_ingestion,
     semantic_matching,
@@ -21,15 +23,18 @@ from app.models import (  # noqa: F401
     tender_intake,
     typology,
     vendors,
+    verification,
 )
 
 __all__ = [
+    "ai",
     "approvals",
     "audit",
     "boq",
     "costlib",
     "module_e",
     "prequal",
+    "pricing_ai",
     "procurement",
     "quotation_ingestion",
     "semantic_matching",
@@ -40,4 +45,5 @@ __all__ = [
     "tender_intake",
     "typology",
     "vendors",
+    "verification",
 ]

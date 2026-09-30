@@ -26,11 +26,12 @@ from app.core.enums import AttachmentSafetyStatus, AuditAction
 from app.core.errors import NotFoundError
 from app.integrations.s3 import get_object_bytes, put_object_streaming
 from app.intake.archive import ArchiveLimits, expand_zip
+from app.ai.gateway import AIMeta
 from app.intake.classifier import Proposal, classify_with_model, combine
 from app.intake.constants import ClassificationSource, DocClass, DocStatus, Flag
 from app.intake.extract import DocContent, extract_content
 from app.intake.metadata import normalise_doc_no, revision_sort_key
-from app.intake.rules import RuleOutcome, classify_rules, needs_model
+from app.intake.rules import RuleOutcome, classify_rules, needs_model, normalise_folder
 from app.intake.safety import IntakeSafety, check_file, extension_of
 from app.models.tender_intake import DocumentClassification, ProjectDocument
 from app.services import audit
@@ -265,7 +266,8 @@ async def process_document(session: AsyncSession, ctx: RequestContext, document_
         asyncio.to_thread(extract_content, filename=doc.original_filename, ext=doc.ext, sniffed=safety.sniffed, data=data),
         timeout=settings.intake_doc_timeout_s,
     )
-    rules = classify_rules(content, doc.original_filename)
+    folder = normalise_folder(doc.archive_path)
+    rules = classify_rules(content, doc.original_filename, folder=folder)
     wanted = needs_model(rules, settings.intake_rules_confident)
     model_result = None
     if wanted:
@@ -273,7 +275,9 @@ async def process_document(session: AsyncSession, ctx: RequestContext, document_
         try:
             model_result = await asyncio.wait_for(
                 classify_with_model(
-                    filename=doc.original_filename, content=content, candidates=sorted(rules.candidates), image_png=image
+                    filename=doc.original_filename, content=content, candidates=sorted(rules.candidates), image_png=image,
+                    folder_path=folder,
+                    meta=AIMeta(project_id=doc.project_id, entity_type="project_document", entity_id=str(doc.id)),
                 ),
                 timeout=settings.intake_doc_timeout_s,
             )

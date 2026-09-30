@@ -72,6 +72,48 @@ _FILENAME_RULES: tuple[tuple[str, float, str, re.Pattern[str]], ...] = (
 )
 
 
+# The folder a file sits in is a weak-to-moderate signal: estimators file tender
+# packages into folders called "Drawings", "BOQ", "Addenda". Weights stay below the
+# filename rules so a misfiled document is still decided by its own content.
+_FOLDER_RULES: tuple[tuple[str, float, str, re.Pattern[str]], ...] = (
+    (DocClass.DRAWING.value, 0.45, "folder_drawings", re.compile(r"(?<![a-z0-9])(?:drawings?|dwgs?|plans?|sheets?)(?![a-z0-9])", re.I)),
+    (DocClass.BOQ.value, 0.45, "folder_boq", re.compile(r"(?<![a-z0-9])(?:boq|bills?[-_ ]of[-_ ]quantit\w*|quantities)(?![a-z0-9])", re.I)),
+    (DocClass.ADDENDUM.value, 0.50, "folder_addenda", re.compile(r"(?<![a-z0-9])addend(?:a|um)s?(?![a-z0-9])", re.I)),
+    (DocClass.SPECIFICATION.value, 0.45, "folder_specs", re.compile(r"(?<![a-z0-9])spec(?:ification)?s?(?![a-z0-9])", re.I)),
+    (DocClass.CONTRACT.value, 0.45, "folder_contract", re.compile(r"(?<![a-z0-9])(?:contract|conditions)(?![a-z0-9])", re.I)),
+    (DocClass.TENDER_INSTRUCTIONS.value, 0.40, "folder_itt", re.compile(r"(?<![a-z0-9])(?:itt|instructions)(?![a-z0-9])", re.I)),
+    (DocClass.TENDER_FORMS.value, 0.45, "folder_forms", re.compile(r"(?<![a-z0-9])(?:forms?|bonds?)(?![a-z0-9])", re.I)),
+    (DocClass.CLARIFICATION.value, 0.40, "folder_rfi", re.compile(r"(?<![a-z0-9])(?:rfis?|clarifications?|queries)(?![a-z0-9])", re.I)),
+    (DocClass.PROGRAMME.value, 0.40, "folder_programme", re.compile(r"(?<![a-z0-9])(?:programme|program|schedule)(?![a-z0-9])", re.I)),
+    (DocClass.SITE_INVESTIGATION.value, 0.45, "folder_geotech", re.compile(r"geotech\w*|(?<![a-z0-9])(?:soil|boreholes?|site[-_ ]investigation)(?![a-z0-9])", re.I)),
+    (DocClass.CORRESPONDENCE.value, 0.40, "folder_letters", re.compile(r"(?<![a-z0-9])(?:correspondence|letters?|emails?)(?![a-z0-9])", re.I)),
+)
+
+
+def normalise_folder(path: str | None) -> str:
+    """Folder part of an upload path ('Tender/Drawings/C-101.pdf' -> 'Tender/Drawings'); '' if none."""
+    if not path:
+        return ""
+    parts = [p for p in path.replace("\\", "/").split("/")[:-1] if p and p not in (".", "..")]
+    return "/".join(parts)
+
+
+def _folder_hits(folder: str | None) -> list[Hit]:
+    if not folder:
+        return []
+    hits: list[Hit] = []
+    # The nearest folder counts fully; higher ancestors count half (a package-level
+    # folder such as "Tender Package" says little about a single file).
+    segments = [s for s in folder.replace("\\", "/").split("/") if s]
+    for depth, segment in enumerate(reversed(segments)):
+        factor = 1.0 if depth == 0 else 0.5
+        for cls, weight, rule, pattern in _FOLDER_RULES:
+            m = pattern.search(segment)
+            if m:
+                hits.append(Hit(cls, weight * factor, rule, f"{segment}/"[:80]))
+    return hits
+
+
 def _basename(filename: str) -> str:
     return filename.replace("\\", "/").rsplit("/", 1)[-1]
 
@@ -149,9 +191,9 @@ def combine(hits: list[Hit]) -> dict[str, float]:
     return {cls: min(1.0 - rem, CONFIDENCE_CAP) for cls, rem in remaining.items()}
 
 
-def classify_rules(content: DocContent, filename: str | None = None) -> RuleOutcome:
+def classify_rules(content: DocContent, filename: str | None = None, folder: str | None = None) -> RuleOutcome:
     filename = filename or content.filename
-    hits = _text_hits(content) + _structure_hits(content) + _filename_hits(filename)
+    hits = _text_hits(content) + _structure_hits(content) + _filename_hits(filename) + _folder_hits(folder)
     if not hits:
         hits = [Hit(DocClass.OTHER.value, 0.20, "no_rule_fired", "")]
     scores = combine(hits)

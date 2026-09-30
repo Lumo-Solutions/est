@@ -50,6 +50,7 @@ class DrawingSheetOut(ORMModel):
     scale_confidence: float | None
     scale_disagreement: bool
     extraction_status: str | None
+    annotations_status: str | None = None
 
 
 class ManualScaleCalibration(BaseModel):

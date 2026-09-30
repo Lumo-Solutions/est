@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/markup_advise.schema.json",
+  "title": "MarkupAdvice",
+  "description": "Advisory markup, overhead and volatility suggestions for a settlement draft, with reasoning. Pure data: it has no field that sets anything. Only a person sets the values, approval thresholds are enforced exactly as before, and every margin figure is computed by the platform from these percentages, never by the model.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["options"],
+  "properties": {
+    "options": {
+      "type": "array",
+      "description": "Three project-level scenarios, from lower to higher price.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "markup_pct", "overhead_pct", "volatility_pct", "rationale"],
+        "properties": {
+          "label": {"type": "string", "enum": ["competitive", "balanced", "protective"]},
+          "markup_pct": {"type": "number", "minimum": 0, "maximum": 40},
+          "overhead_pct": {"type": "number", "minimum": 0, "maximum": 30},
+          "volatility_pct": {"type": "number", "minimum": 0, "maximum": 20},
+          "rationale": {"type": "string", "description": "Why these percentages: the win/loss history, the risk in the flagged lines, the volatility setting, the project size."}
+        }
+      }
+    },
+    "per_trade": {
+      "type": "array",
+      "description": "Optional ranges per trade where the trade's risk or history differs from the project as a whole.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trade", "markup_low", "markup_high", "rationale"],
+        "properties": {
+          "trade": {"type": "string", "description": "The trade name exactly as supplied."},
+          "markup_low": {"type": "number", "minimum": 0, "maximum": 40},
+          "markup_high": {"type": "number", "minimum": 0, "maximum": 40},
+          "volatility_low": {"type": ["number", "null"], "minimum": 0, "maximum": 20},
+          "volatility_high": {"type": ["number", "null"], "minimum": 0, "maximum": 20},
+          "rationale": {"type": "string"}
+        }
+      }
+    },
+    "overall": {"type": "string", "description": "Two or three sentences summarising the advice and its main risk."}
+  }
+}

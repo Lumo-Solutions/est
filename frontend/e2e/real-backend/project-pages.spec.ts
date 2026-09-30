@@ -34,11 +34,10 @@ test.describe('ProjectsListPage', () => {
     await page.getByLabel('Name').fill('Created by lead_estimator')
     await page.getByRole('button', { name: 'Create project' }).click()
 
-    // Newest first, so the new project is on page 1; and the creator is its owner.
-    const link = page.getByRole('link', { name: code })
-    await expect(link).toBeVisible()
-    await link.click()
+    // Creating a project lands on its Tender documents tab (drop the package here); the creator is its owner.
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\?tab=tender-documents/)
     await expect(page.getByRole('heading', { name: new RegExp(`^${code}`) })).toBeVisible()
+    await page.getByRole('button', { name: 'Overview' }).click()
     await expect(page.getByRole('listitem').filter({ hasText: 'lead1' })).toContainText('(owner)')
   })
 })

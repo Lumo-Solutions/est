@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { SelectField } from '../components/Field'
-import { fetchTenderDocumentFile, useBoqPrefill } from '../features/tenderIntake/api'
+import { useAuth } from '../auth/AuthContext'
+import { Role } from '../lib/roles'
+import { fetchTenderDocumentFile, useBoqPrefill, useTenderDocument } from '../features/tenderIntake/api'
+import { PdfImportFlow } from '../features/boq/pdf/PdfImportFlow'
 import { useBoqImportCommit, useBoqImportPreview } from '../features/boq/api'
 import type { BoqImportColumnMappingIn } from '../types/api'
 import { PageTitle } from '../components/PageTitle'
@@ -16,6 +19,10 @@ const EMPTY_MAPPING: BoqImportColumnMappingIn = {
   amount_column: '',
   header_row: 1,
 }
+
+// Mirrors the backend's PDF extraction roles (lead_estimator, procurement_head,
+// managing_director); other roles get a 403 from the extraction endpoints.
+const PDF_ROLES = [Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.MANAGING_DIRECTOR]
 
 function cleanMapping(mapping: BoqImportColumnMappingIn): BoqImportColumnMappingIn {
   const cleaned: BoqImportColumnMappingIn = { ...mapping }
@@ -39,12 +46,19 @@ export function BoqImportWizardPage() {
   // and mapping. The user still runs Preview and Commit themselves.
   const [searchParams] = useSearchParams()
   const documentId = searchParams.get('document')
-  const prefill = useBoqPrefill(documentId)
+  const { hasRole } = useAuth()
+  const canPdf = hasRole(...PDF_ROLES)
+  // A classified PDF BOQ has no sheets to map: detect it from the document
+  // itself and skip the workbook prefill (which would only fail).
+  const tenderDoc = useTenderDocument(documentId ?? undefined)
+  const docIsPdf = tenderDoc.data?.ext?.toLowerCase().replace('.', '') === 'pdf'
+  const prefillId = documentId && (tenderDoc.isSuccess || tenderDoc.isError) && !docIsPdf ? documentId : null
+  const prefill = useBoqPrefill(prefillId)
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null)
   const [prefillError, setPrefillError] = useState<string | null>(null)
   const prefillData = prefill.data
   useEffect(() => {
-    if (!documentId || !prefillData) return
+    if (!documentId || !prefillId || !prefillData) return
     let cancelled = false
     fetchTenderDocumentFile(documentId, prefillData.filename)
       .then((f) => {
@@ -77,7 +91,10 @@ export function BoqImportWizardPage() {
     return () => {
       cancelled = true
     }
-  }, [documentId, prefillData])
+  }, [documentId, prefillId, prefillData])
+
+  const fileIsPdf = file ? file.name.toLowerCase().endsWith('.pdf') : false
+  const isPdf = fileIsPdf || (!file && docIsPdf)
 
   const currentKey = file ? `${file.name}:${JSON.stringify(mapping)}` : null
   const canCommit = preview.data != null && previewedKey === currentKey && preview.data.error_count === 0
@@ -88,29 +105,40 @@ export function BoqImportWizardPage() {
 
       <div className="mt-4">
         <label className="mb-1 block text-sm text-ink" htmlFor="boq-file">
-          BOQ file (Excel/CSV)
+          BOQ file ({canPdf ? 'Excel/CSV/PDF' : 'Excel/CSV'})
         </label>
         <input
           id="boq-file"
           type="file"
-          accept=".xlsx,.xls,.csv"
+          accept={canPdf ? '.xlsx,.xls,.csv,.pdf' : '.xlsx,.xls,.csv'}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           className="text-sm"
         />
       </div>
 
-      {prefillNotice && (
+      {isPdf && projectId && (
+        <PdfImportFlow
+          key={file ? `${file.name}:${file.size}` : `doc:${documentId}`}
+          projectId={projectId}
+          file={file}
+          documentId={file ? null : documentId}
+          sourceName={file?.name ?? tenderDoc.data?.original_filename ?? 'the PDF'}
+          canImport={canPdf}
+        />
+      )}
+
+      {!isPdf && prefillNotice && (
         <p role="status" className="mt-4 text-sm text-ink-2">
           {prefillNotice}
         </p>
       )}
-      {(prefillError || (documentId && prefill.isError)) && (
+      {!isPdf && (prefillError || (prefillId && prefill.isError)) && (
         <p role="alert" className="mt-4 text-sm text-danger">
           {prefillError ?? (prefill.error instanceof Error ? prefill.error.message : 'Could not load the tender document')}
           {' '}You can still choose a file and map the columns by hand.
         </p>
       )}
-      {prefillData && prefillData.sheet_names.length > 1 && (
+      {!isPdf && prefillData && prefillData.sheet_names.length > 1 && (
         <div className="mt-4 max-w-lg">
           <SelectField
             label="Sheet"
@@ -126,6 +154,8 @@ export function BoqImportWizardPage() {
         </div>
       )}
 
+      {!isPdf && (
+      <>
       <div className="mt-4 grid max-w-lg grid-cols-2 gap-2">
         {(
           [
@@ -229,6 +259,8 @@ export function BoqImportWizardPage() {
             </table>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   )

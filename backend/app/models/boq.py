@@ -4,8 +4,8 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import TenantEntity
@@ -55,6 +55,12 @@ class BoqLineItem(TenantEntity):
         UUID(as_uuid=True), ForeignKey("boq_import_batches.id", ondelete="SET NULL"), nullable=True, index=True
     )
     source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # AI-assisted reading: xlsx | csv | pdf, and for a PDF the page + region the line
+    # was read from. ai_read flags a line a model read (the UI shows it).
+    source_kind: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_bbox: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    ai_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     # Module B/C Phase 5: embeds f"{item_no} {description}" (same text
     # shape app.procurement.quotation_matching._candidate_text() already
@@ -211,3 +217,31 @@ class BoqImportBatch(TenantEntity):
     amount_column: Mapped[str | None] = mapped_column(String(8), nullable=True)
     imported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     imported_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+
+
+class BoqPdfExtraction(TenantEntity):
+    """One PDF BOQ read. Rows stay editable JSON until committed through the
+    import wizard; boq_line_items is untouched before that."""
+
+    __tablename__ = "boq_pdf_extractions"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_documents.id", ondelete="SET NULL"), nullable=True
+    )
+    source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="queued")
+    use_ai: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    pages_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    pages_done: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    page_summary: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    rows: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    warnings: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    committed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

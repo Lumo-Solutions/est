@@ -11,6 +11,7 @@ import { AuditPage } from './pages/AuditPage'
 import { BidLevelingPage } from './pages/BidLevelingPage'
 import { BoqImportWizardPage } from './pages/BoqImportWizardPage'
 import { BoqReconciliationPage } from './pages/BoqReconciliationPage'
+import { VerificationPage } from './pages/VerificationPage'
 import { CostItemDetailPage } from './pages/CostItemDetailPage'
 import { CostLibraryPage } from './pages/CostLibraryPage'
 import { ExportPage } from './pages/ExportPage'
@@ -77,6 +78,7 @@ function AppRoutes() {
         <Route path="/projects/:projectId/typology" element={<TypologyPage />} />
         <Route path="/projects/:projectId/boq/import" element={<BoqImportWizardPage />} />
         <Route path="/projects/:projectId/boq" element={<BoqReconciliationPage />} />
+        <Route path="/projects/:projectId/verification" element={<VerificationPage />} />
         <Route path="/projects/:projectId/procurement/packages" element={<ProcurementPackagesPage />} />
         {/* Old project-scoped URL -- kept registered, just redirecting, for
             any bookmarked/old links. See the /inbox route above. */}

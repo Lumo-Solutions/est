@@ -95,14 +95,14 @@ async def disambiguate_via_vlm(raw_scale_text: str, discipline: str | None = Non
     resolve (confidence == 0.0) -- asks the VLM to interpret it. Only called
     when parse_scale_text() alone isn't enough; see
     workers/tasks/takeoff.py::extract_sheet."""
-    from app.integrations.vllm import extract_json
+    from app.ai.compat import extract_json
     from app.takeoff.prompts import load_schema, render_prompt
 
     system_prompt, user_prompt = render_prompt(
         "scale_hint.j2", raw_scale_text=raw_scale_text, drawing_discipline=discipline
     )
     schema = load_schema("scale_hint.schema.json")
-    raw = await extract_json(system_prompt=system_prompt, user_prompt=user_prompt, json_schema=schema)
+    raw = await extract_json(system_prompt=system_prompt, user_prompt=user_prompt, json_schema=schema, task="scale_hint")
     ratio = raw.get("scale_ratio")
     confidence = float(raw.get("confidence") or 0.0)
     return ScaleResult(float(ratio) if ratio is not None else None, "title_block_text", confidence)

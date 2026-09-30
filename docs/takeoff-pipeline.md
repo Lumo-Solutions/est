@@ -212,7 +212,7 @@ was available at build time. The real image + GPU reservation is defined as
 a separate `vllm-gpu` service gated behind the `gpu` Compose profile; switch
 by running `docker compose --profile gpu up -d vllm-gpu` and pointing
 `VLLM_API_BASE` at it. The request/response contract
-(`app/integrations/vllm.py`) is identical either way — nothing in
+(`app/ai/`, via `app.ai.compat.extract_json`) is identical either way — nothing in
 `app/takeoff/` needs to change.
 
 ## Two real bugs found by end-to-end Docker verification (Phase 2)

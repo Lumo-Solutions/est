@@ -36,6 +36,7 @@ from app.intake.constants import (
     PackageStatus,
 )
 from app.intake.metadata import normalise_doc_no, revision_sort_key
+from app.intake.rules import normalise_folder
 from app.intake.safety import extension_of
 from app.models.settlement import BidSettlement
 from app.models.tender_intake import (
@@ -83,6 +84,7 @@ async def _add_files(
     created: list[ProjectDocument] = []
     for raw_name, data in files:
         name = _safe_name(raw_name)
+        folder = normalise_folder(raw_name)
         sha = hashlib.sha256(data).hexdigest()
         earlier = (
             await session.execute(
@@ -103,6 +105,7 @@ async def _add_files(
             object_key=earlier.object_key if earlier is not None else key, size_bytes=len(data),
             status=DocStatus.RECEIVED.value, duplicate_of_id=earlier.id if earlier is not None else None,
             flags=[Flag.DUPLICATE.value] if earlier is not None else [],
+            archive_path=f"{folder}/{name}"[:1024] if folder else None,
         )
         session.add(doc)
         await session.flush()
@@ -488,13 +491,14 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
 
 
 async def _route_boq(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
-    if doc.ext not in ("xlsx", "csv", "xls"):
+    # A PDF BOQ opens the wizard's PDF flow (table reader first, AI only for unclear pages); an .xls is routed but not importable.
+    if doc.ext not in ("xlsx", "csv", "xls", "pdf"):
         raise ConflictError(f"A .{doc.ext} file cannot go to the BOQ import wizard")
     mapping = suggest_mapping(doc.doc_metadata)
     doc.routed_kind = "boq_wizard"
     doc.routed_ref = {
         "sheet_name": mapping["sheet_name"], "header_row": mapping["header_row"], "suggested_mapping": mapping,
-        "importable": doc.ext in ("xlsx", "csv"),
+        "importable": doc.ext in ("xlsx", "csv", "pdf"),
     }
 
 

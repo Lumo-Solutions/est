@@ -8,6 +8,7 @@
 
    Template variables:
      filename        (str)  - original filename (untrusted)
+     folder_path     (str)  - folder the file was uploaded from, may be empty (untrusted hint)
      document_text   (str)  - text of the first pages (untrusted, may be empty)
      title_block_text(str)  - text from the title block region (untrusted)
      has_image       (bool) - a page image is attached (no text layer)
@@ -42,6 +43,9 @@ Rules:
 - confidence is your honest 0 to 1 confidence in doc_class.
 {# user #}
 Filename: {{ filename }}
+{%- if folder_path %}
+Folder path (a weak hint; the content decides): {{ folder_path }}
+{%- endif %}
 {%- if candidates %}
 The automatic rules were unsure between: {{ candidates | join(", ") }}. Decide from the content.
 {%- endif %}

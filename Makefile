@@ -1,4 +1,4 @@
-.PHONY: dwg-fixtures dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
+.PHONY: check-ai-env dev-seed-ai-demo dev-seed-ai-demo-quotes dev-ai-demo-pack ai-eval ai-smoke dwg-fixtures dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
 
 # The DWG converter sandbox (deploy/dwg-converter, ODA File Converter, INTERNAL
 # USE ONLY) is built from a local .deb that is never committed; enable its
@@ -159,6 +159,41 @@ dev-simulate-e2e:
 # certificates. Cleaned by `make dev-clean-demo-data` alongside E2E-SIM.
 dev-seed-qa-demo-data:
 	$(COMPOSE) exec backend python -m app.cli seed-qa-demo-data
+
+# docs/ai-provider-brief.md Phase 5: synthetic UAE infrastructure data for the AI features -- a ~150-item cost
+# library with rate history, 20 vendors (some with expiring/lapsed prequalification), 15 past tenders with
+# outcomes. Tagged, so `make dev-clean-demo-data` removes it. Idempotent. Needs `make seed` first.
+dev-seed-ai-demo:
+	$(COMPOSE) exec backend python -m app.cli seed-ai-demo
+
+# Writes the synthetic tender pack (DXF + vector-PDF drawings, Excel and PDF BOQ, spec, addendum, contract) to
+# ./.ai-demo-pack/ on the host, ready to drop into a project's Tender documents tab.
+dev-ai-demo-pack:
+	export MSYS_NO_PATHCONV=1; \
+	$(COMPOSE) exec backend rm -rf /tmp/ai-demo-pack && \
+	$(COMPOSE) exec backend python -m app.cli write-ai-demo-pack --out /tmp/ai-demo-pack && \
+	rm -rf .ai-demo-pack && mkdir -p .ai-demo-pack && \
+	docker cp installtec_backend:/tmp/ai-demo-pack/. .ai-demo-pack/
+
+# Accepted vendor quotes for project AI-DEMO's BOQ lines (run after the BOQ has been imported).
+dev-seed-ai-demo-quotes:
+	$(COMPOSE) exec backend python -m app.cli seed-ai-demo-quotes --project AI-DEMO
+
+# Evaluation harness: golden sets for every AI task, accuracy / cost / latency per provider and model, written to
+# docs/ai-eval/. Runs against the provider in AI_PROVIDER (mock by default, so it works without a key); pass
+# PROVIDER=anthropic (etc.) with the key in deploy/.env to evaluate a real one.
+ai-eval:
+	export MSYS_NO_PATHCONV=1; \
+	$(COMPOSE) exec -e AI_PROVIDER=$${PROVIDER:-mock} backend python -m app.ai.eval --out /tmp/ai-eval && \
+	mkdir -p docs/ai-eval && docker cp installtec_backend:/tmp/ai-eval/. docs/ai-eval/
+
+# Fails if a worker AI_* key is not also passed to the backend service (they keep separate environment lists).
+check-ai-env:
+	bash deploy/check-ai-env.sh
+
+# One tiny real call per task; skipped with a clear message when no key is configured.
+ai-smoke:
+	$(COMPOSE) exec backend python -m app.ai.smoke
 
 # Deletes what `make dev-simulate-e2e` and `make dev-seed-qa-demo-data` created above.
 dev-clean-demo-data:

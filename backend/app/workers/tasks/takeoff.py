@@ -63,7 +63,8 @@ from app.takeoff.scale import (
     parse_scale_text,
     scale_bar_signal,
 )
-from app.takeoff.titleblock import extract_title_block
+from app.ai.errors import AIError
+from app.takeoff.titleblock import TitleBlockResult, extract_title_block
 from app.workers.base import build_worker_context, run_async, system_ctx, with_worker_session
 from app.workers.celery_app import celery_app
 
@@ -413,7 +414,13 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
             page_png = pdf_mod.render_page_png(data, sheet.sheet_index)
             image_png = pdf_mod.crop_title_block_png(page_png)
 
-        result = await extract_title_block(candidate_text=candidate_text[-2000:], image_png=image_png)
+        try:
+            result = await extract_title_block(candidate_text=candidate_text[-2000:], image_png=image_png)
+        except AIError as exc:
+            # AI unavailable (not configured / not allowed / budget / provider down):
+            # the sheet is still indexed, just without AI-read title-block fields.
+            logger.warning("title block AI unavailable for sheet %s: %s", sheet.id, exc)
+            result = TitleBlockResult(raw={"ai_unavailable": exc.code})
 
         sheet.title_block = result.raw
         sheet.drawing_number = result.drawing_number
@@ -429,7 +436,10 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
         if scale_result.confidence == 0.0 and result.scale_text:
             from app.takeoff.scale import disambiguate_via_vlm
 
-            scale_result = await disambiguate_via_vlm(result.scale_text, result.discipline)
+            try:
+                scale_result = await disambiguate_via_vlm(result.scale_text, result.discipline)
+            except AIError:
+                pass  # keep the regex parse (confidence 0): a person confirms the scale
 
         # Module B Phase 4a: fuse the annotation-text signal above with
         # whatever else is available from this sheet's persisted geometry

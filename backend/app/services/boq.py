@@ -72,7 +72,10 @@ async def create_line_item(
     # server-side write, so the ORM object still holds our "placeholder"
     # value until explicitly refreshed (same pattern as
     # app/services/taxonomy.py::create_node for trade_nodes).
-    await session.refresh(item, attribute_names=["path", "level"])
+    # "reconciliation" is loaded here too: BoqLineItemOut reads item.variance etc. through it, and a
+    # freshly created item never had it loaded, so serialising the POST response used to raise
+    # MissingGreenlet (no API test exercised POST /projects/{id}/boq-items).
+    await session.refresh(item, attribute_names=["path", "level", "reconciliation"])
 
     # Module B/C Phase 5: best-effort, degrades to leaving
     # description_embedding NULL when the ONNX model isn't provisioned.

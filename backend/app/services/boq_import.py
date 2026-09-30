@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.boq.import_parser import BoqImportColumnMapping, BoqImportResult, parse_boq_file
+from app.boq.import_parser import BoqImportColumnMapping, BoqImportResult, ParsedBoqRow, parse_boq_file
 from app.core.context import RequestContext
 from app.core.errors import ValidationAppError
 from app.integrations.s3 import put_object_streaming
@@ -15,6 +16,50 @@ from app.services import boq as boq_service
 from app.services.projects import assert_can_see_project
 
 _XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def create_items_tree(
+    session: AsyncSession,
+    ctx: RequestContext,
+    project_id: UUID,
+    rows: list[ParsedBoqRow],
+    batch_id: UUID,
+    annotate: Callable[[BoqLineItem, ParsedBoqRow], None],
+) -> list[BoqLineItem]:
+    """Topological (layer-by-layer) creation: a row's parent must already exist as a real DB
+    row (with a real id) before create_line_item can reference it as parent_id -- rows with no
+    parent create first, then each pass creates whatever's left whose parent was just created.
+    Shared by the xlsx/csv import and the PDF extraction commit."""
+    created_by_item_no: dict[str, BoqLineItem] = {}
+    created: list[BoqLineItem] = []
+    remaining = list(rows)
+    while remaining:
+        still_remaining = []
+        progressed = False
+        for row in remaining:
+            parent = created_by_item_no.get(row.parent_item_no) if row.parent_item_no else None
+            if row.parent_item_no is not None and parent is None:
+                still_remaining.append(row)
+                continue
+            assert row.item_no is not None and row.description is not None  # guaranteed by error_count == 0
+            item = await boq_service.create_line_item(
+                session, ctx, project_id,
+                BoqLineItemCreate(
+                    parent_id=parent.id if parent else None, item_no=row.item_no, description=row.description,
+                    uom=row.uom, boq_quantity=row.boq_quantity,
+                ),
+            )
+            item.import_batch_id = batch_id
+            annotate(item, row)
+            created_by_item_no[row.item_no] = item
+            created.append(item)
+            progressed = True
+        if not progressed:
+            # _validate_hierarchy() (app/boq/import_parser.py) already rejects unresolvable/cyclic
+            # parent references before error_count could be 0 -- this should be unreachable.
+            raise ValidationAppError("BOQ import hierarchy could not be fully resolved")
+        remaining = still_remaining
+    return created
 
 
 async def preview_import(
@@ -81,44 +126,15 @@ async def commit_import(
     session.add(batch)
     await session.flush()
 
-    # Topological (layer-by-layer) creation: a row's parent must already
-    # exist as a real DB row (with a real id) before create_line_item can
-    # reference it as parent_id -- rows with no parent create first, then
-    # each pass creates whatever's left whose parent was just created.
-    created_by_item_no: dict[str, BoqLineItem] = {}
-    created: list[BoqLineItem] = []
-    remaining = list(result.rows)
-    while remaining:
-        still_remaining = []
-        progressed = False
-        for row in remaining:
-            parent = created_by_item_no.get(row.parent_item_no) if row.parent_item_no else None
-            if row.parent_item_no is not None and parent is None:
-                still_remaining.append(row)
-                continue
-            assert row.item_no is not None and row.description is not None  # guaranteed by error_count == 0 above
-            item = await boq_service.create_line_item(
-                session, ctx, project_id,
-                BoqLineItemCreate(
-                    parent_id=parent.id if parent else None, item_no=row.item_no, description=row.description,
-                    uom=row.uom, boq_quantity=row.boq_quantity,
-                ),
-            )
-            item.import_batch_id = batch.id
-            # row.row_number is 1-indexed relative to the DATA rows (see
-            # app/boq/import_parser.py::ParsedBoqRow) -- convert to the
-            # actual spreadsheet row so D3 can address the exact cell
-            # (mapping.header_row + 1 is the first data row).
-            item.source_row_number = mapping.header_row + row.row_number
-            created_by_item_no[row.item_no] = item
-            created.append(item)
-            progressed = True
-        if not progressed:
-            # _validate_hierarchy() (app/boq/import_parser.py) already
-            # rejects unresolvable/cyclic parent references before
-            # error_count could be 0 -- this should be unreachable.
-            raise ValidationAppError("BOQ import hierarchy could not be fully resolved")
-        remaining = still_remaining
+    def _annotate(item: BoqLineItem, row: ParsedBoqRow) -> None:
+        # row.row_number is 1-indexed relative to the DATA rows (see
+        # app/boq/import_parser.py::ParsedBoqRow) -- convert to the
+        # actual spreadsheet row so D3 can address the exact cell
+        # (mapping.header_row + 1 is the first data row).
+        item.source_row_number = mapping.header_row + row.row_number
+        item.source_kind = "xlsx" if filename.lower().endswith(".xlsx") else "csv"
+
+    created = await create_items_tree(session, ctx, project_id, result.rows, batch.id, _annotate)
 
     await session.flush()
     return created

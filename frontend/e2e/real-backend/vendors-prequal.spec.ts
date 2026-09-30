@@ -32,10 +32,15 @@ test.describe('VendorsPage', () => {
     await page.getByRole('button', { name: 'Check for duplicates' }).click()
     await expect(page.getByText(/No likely duplicates found\.|Possible duplicates/)).toBeVisible()
 
-    await page.getByRole('button', { name: 'Create vendor' }).click()
-    await expect(page.getByRole('link', { name: uniqueName })).toBeVisible()
-
-    await page.getByRole('link', { name: uniqueName }).click()
+    // The list is name-sorted and shows the first 50 vendors (no paging yet), so on a database that already holds
+    // more than 50 vendors the new one may not be on the page: open it by the id the create call returned.
+    const [created] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/api/v1/vendors') && r.request().method() === 'POST'),
+      page.getByRole('button', { name: 'Create vendor' }).click(),
+    ])
+    expect(created.ok(), await created.text()).toBeTruthy()
+    const vendorId = ((await created.json()) as { id: string }).id
+    await page.goto(`/vendors/${vendorId}`)
     await expect(page.getByRole('heading', { name: uniqueName })).toBeVisible()
     await expect(page.getByText('No certificates on file.')).toBeVisible()
   })

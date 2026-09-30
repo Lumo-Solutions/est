@@ -273,3 +273,13 @@ initiated action (see `docs/audit-chain.md`). Run `make up` +
 `make bootstrap-keycloak` yourself before relying on this stack in a new
 environment; the above was validated with ad hoc `docker run`/`docker
 compose` invocations during development, not via a from-scratch `make up`.
+
+## External AI provider (temporary reversal of SRS §1.1)
+
+The owner decided, knowingly, to allow an external AI API until a GPU server runs the in-house model. Everything is opt-in and reversible:
+
+- Default `AI_PROVIDER=local_vllm`: behaviour unchanged, no external calls.
+- External providers (`anthropic`, `openai_compatible`) also require the tenant switch (`External AI allowed`, managing_director only, default off) and honour a per-project opt-out. See `docs/ai-provider.md` for governance, budgets and the audit table.
+- **Egress checklist when enabling:** allow outbound HTTPS from `backend`, `celery_worker`, `celery_worker_vlm` and `celery_worker_quotation` to the single AI host only (Anthropic: `api.anthropic.com:443`); keep the rest denied. `AI_BASE_URL` must be `https://` (validated at startup).
+- New env keys (all in `deploy/.env.example`): `AI_PROVIDER`, `AI_MODEL`, `AI_MODEL_CLASSIFY`, `AI_MODEL_VISION`, `AI_MODEL_REASONING`, `AI_API_KEY`, `AI_BASE_URL`, `AI_TIMEOUT_S`, `AI_MAX_RETRIES`, `AI_MONTHLY_BUDGET_USD`, `AI_PROJECT_BUDGET_USD`, `AI_RATE_LIMIT_PER_MIN`, `AI_STALE_RATE_MONTHS`. Migration `0032` adds `tenant_ai_settings`, `ai_calls`, `ai_cache`, `projects.external_ai_override`.
+- To revert: `AI_PROVIDER=local_vllm` and recreate the containers. No code change, no data migration.

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   useDrawing,
   useMeasurements,
@@ -15,7 +15,9 @@ import { PageTitle } from '../components/PageTitle'
 export function TakeoffViewerPage() {
   const { projectId, drawingId, sheetIndex: sheetIndexParam } = useParams()
   const sheetIndex = Number(sheetIndexParam)
-  const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
+  // ?measurement=<id> (deep link from the BOQ verification report) preselects a measurement.
+  const [searchParams] = useSearchParams()
+  const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(() => searchParams.get('measurement'))
   const [calibrating, setCalibrating] = useState(false)
   const [calibrationPoints, setCalibrationPoints] = useState<[number, number][]>([])
 

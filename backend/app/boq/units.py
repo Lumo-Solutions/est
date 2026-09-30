@@ -57,6 +57,7 @@ _UNITS: dict[str, tuple[Dimension, float]] = {
     # count (dimensionless -- factor is always 1)
     "NO": (Dimension.COUNT, 1.0),
     "NR": (Dimension.COUNT, 1.0),  # "number" -- common BOQ abbreviation
+    "NOS": (Dimension.COUNT, 1.0),  # "nos" -- how drawings and BOQs often print a count ("12 nos")
     "EA": (Dimension.COUNT, 1.0),
     "EACH": (Dimension.COUNT, 1.0),
     "ITEM": (Dimension.COUNT, 1.0),

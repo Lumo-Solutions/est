@@ -4,7 +4,7 @@ import base64
 
 from pydantic import BaseModel
 
-from app.integrations.vllm import extract_json
+from app.ai.compat import extract_json
 from app.takeoff.prompts import load_schema, render_prompt
 
 _DISCIPLINES = {"civil", "structural", "mep", "architectural", "landscape", "other"}
@@ -43,7 +43,11 @@ async def extract_title_block(
         image_data_url = f"data:image/png;base64,{b64}"
 
     raw = await extract_json(
-        system_prompt=system_prompt, user_prompt=user_prompt, json_schema=schema, image_data_url=image_data_url
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        json_schema=schema,
+        image_data_url=image_data_url,
+        task="title_block",
     )
 
     discipline = raw.get("discipline")

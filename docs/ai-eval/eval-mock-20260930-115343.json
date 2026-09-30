@@ -1,0 +1,520 @@
+{
+  "provider": "mock",
+  "models": [
+    "mock"
+  ],
+  "date": "2026-09-30T11:53:43+00:00",
+  "note": "mock = deterministic fixtures (an honest baseline of the fixtures, not of a model)",
+  "results": [
+    {
+      "task": "intake_classify",
+      "cases": 15,
+      "score": 1.0,
+      "passed": 15,
+      "details": [
+        {
+          "case": "C-101 Road and Drainage Plan Rev B.dxf",
+          "expected": "drawing",
+          "got": "drawing"
+        },
+        {
+          "case": "L-201 Landscape Plan Rev A.pdf",
+          "expected": "drawing",
+          "got": "drawing"
+        },
+        {
+          "case": "BOQ Rev 0.xlsx",
+          "expected": "boq",
+          "got": "boq"
+        },
+        {
+          "case": "BOQ Rev 0 (print copy).pdf",
+          "expected": "boq",
+          "got": "boq"
+        },
+        {
+          "case": "Particular Specification.pdf",
+          "expected": "specification",
+          "got": "specification"
+        },
+        {
+          "case": "Addendum No 1.pdf",
+          "expected": "addendum",
+          "got": "addendum"
+        },
+        {
+          "case": "Conditions of Contract.pdf",
+          "expected": "contract",
+          "got": "contract"
+        },
+        {
+          "case": "Minutes of clarification meeting 2.pdf",
+          "expected": "clarification",
+          "got": "clarification"
+        },
+        {
+          "case": "letter_client_2026-03-02.pdf",
+          "expected": "correspondence",
+          "got": "correspondence"
+        },
+        {
+          "case": "BH logs.pdf",
+          "expected": "site_investigation",
+          "got": "site_investigation"
+        },
+        {
+          "case": "Form of Tender.pdf",
+          "expected": "tender_forms",
+          "got": "tender_forms"
+        },
+        {
+          "case": "Master programme.pdf",
+          "expected": "programme",
+          "got": "programme"
+        },
+        {
+          "case": "ITT.pdf",
+          "expected": "tender_instructions",
+          "got": "tender_instructions"
+        },
+        {
+          "case": "Addendum 2.pdf",
+          "expected": "addendum",
+          "got": "addendum"
+        },
+        {
+          "case": "Technical spec roads.pdf",
+          "expected": "specification",
+          "got": "specification"
+        }
+      ],
+      "errors": 0,
+      "calls": 15,
+      "tokens_in": 7235,
+      "tokens_out": 318,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 0.5,
+      "seconds": 1.14
+    },
+    {
+      "task": "boq_pdf_rows",
+      "cases": 2,
+      "score": 1.0,
+      "passed": 2,
+      "details": [
+        {
+          "case": "page 1",
+          "f1": 1.0,
+          "expected": 16,
+          "got": 16,
+          "status": "ai"
+        },
+        {
+          "case": "page 3",
+          "f1": 1.0,
+          "expected": 8,
+          "got": 8,
+          "status": "ai"
+        }
+      ],
+      "errors": 0,
+      "calls": 2,
+      "tokens_in": 966,
+      "tokens_out": 669,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 24.5,
+      "seconds": 0.39
+    },
+    {
+      "task": "drawing_annotations",
+      "cases": 2,
+      "score": 1.0,
+      "passed": 2,
+      "details": [
+        {
+          "case": "C-101 (DXF text)",
+          "f1": 1.0,
+          "missed": [],
+          "extra": []
+        },
+        {
+          "case": "L-201 (PDF text)",
+          "f1": 1.0,
+          "missed": [],
+          "extra": []
+        }
+      ],
+      "errors": 0,
+      "calls": 2,
+      "tokens_in": 791,
+      "tokens_out": 514,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 0.0,
+      "seconds": 0.14
+    },
+    {
+      "task": "boq_interpret",
+      "cases": 3,
+      "score": 1.0,
+      "passed": 3,
+      "details": [
+        {
+          "case": "2.1",
+          "ok": true,
+          "expected": {
+            "size_mm": 300.0,
+            "material": [
+              "upvc"
+            ]
+          },
+          "got": {
+            "size_mm": 300.0,
+            "material": "upvc",
+            "source": "ai"
+          }
+        },
+        {
+          "case": "2.2",
+          "ok": true,
+          "expected": {
+            "size_mm": 150.0,
+            "material": [
+              "upvc"
+            ]
+          },
+          "got": {
+            "size_mm": 150.0,
+            "material": "upvc",
+            "source": "ai"
+          }
+        },
+        {
+          "case": "2.3",
+          "ok": true,
+          "expected": {
+            "size_mm": 1200.0,
+            "material": [
+              "concrete",
+              "precast",
+              "precast concrete"
+            ]
+          },
+          "got": {
+            "size_mm": 1200.0,
+            "material": "concrete",
+            "source": "ai"
+          }
+        }
+      ],
+      "errors": 0,
+      "calls": 1,
+      "tokens_in": 623,
+      "tokens_out": 533,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 1.0,
+      "seconds": 0.07
+    },
+    {
+      "task": "evidence_rank",
+      "cases": 16,
+      "score": 1.0,
+      "passed": 16,
+      "details": [
+        {
+          "case": "1.1 Excavate in all types of soil for roadwa",
+          "expected": [
+            "a:exc"
+          ],
+          "selected": [
+            "a:exc"
+          ],
+          "ok": true
+        },
+        {
+          "case": "1.2 Trim and compact formation level to rece",
+          "expected": [
+            "m:corridor"
+          ],
+          "selected": [
+            "m:corridor"
+          ],
+          "ok": true
+        },
+        {
+          "case": "1.3 Supply and place approved granular sub-b",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "2.1 Supply, lay and joint 300mm diameter uPV",
+          "expected": [
+            "g:sewer300"
+          ],
+          "selected": [
+            "g:sewer300"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.2 Supply, lay and joint 150mm diameter uPV",
+          "expected": [
+            "g:sewer150"
+          ],
+          "selected": [
+            "g:sewer150"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.3 Precast concrete manhole 1200mm internal",
+          "expected": [
+            "a:mh"
+          ],
+          "selected": [
+            "a:mh"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.4 Connection to existing manhole including",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "3.1 Supply and lay asphalt wearing course 50",
+          "expected": [
+            "a:asph",
+            "m:corridor"
+          ],
+          "selected": [
+            "a:asph"
+          ],
+          "ok": true
+        },
+        {
+          "case": "3.2 Precast concrete kerb Type A 300x150 sup",
+          "expected": [
+            "a:kerb"
+          ],
+          "selected": [
+            "a:kerb"
+          ],
+          "ok": true
+        },
+        {
+          "case": "3.3 Thermoplastic road marking 100mm centre ",
+          "expected": [
+            "m:align"
+          ],
+          "selected": [
+            "m:align"
+          ],
+          "ok": true
+        },
+        {
+          "case": "3.4 Thermoplastic road marking arrows and sy",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "4.1 Street lighting column 8m complete with ",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "4.2 Armoured cable 4c 16mm2 supply and lay i",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "5.1 Supply and spread topsoil 200mm thick",
+          "expected": [
+            "a:top"
+          ],
+          "selected": [
+            "a:top"
+          ],
+          "ok": true
+        },
+        {
+          "case": "5.2 Supply and plant Ghaf tree 2.5m height",
+          "expected": [
+            "a:tree"
+          ],
+          "selected": [
+            "a:tree"
+          ],
+          "ok": true
+        },
+        {
+          "case": "5.3 Turfing with irrigation ready subgrade",
+          "expected": [
+            "a:turf"
+          ],
+          "selected": [
+            "a:turf"
+          ],
+          "ok": true
+        }
+      ],
+      "errors": 0,
+      "calls": 2,
+      "tokens_in": 2784,
+      "tokens_out": 1256,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 0.5,
+      "seconds": 0.01
+    },
+    {
+      "task": "cost_choose",
+      "cases": 9,
+      "score": 1.0,
+      "passed": 9,
+      "details": [
+        {
+          "case": "2.1 Supply, lay and joint 300mm diameter uPV",
+          "expected": [
+            "c:PP-UPVC-300",
+            "q:2.1"
+          ],
+          "selected": [
+            "q:2.1"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.2 Supply, lay and joint 150mm diameter uPV",
+          "expected": [
+            "c:PP-UPVC-150"
+          ],
+          "selected": [
+            "c:PP-UPVC-150"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.3 Precast concrete manhole 1200mm internal",
+          "expected": [
+            "c:MH-1200-up"
+          ],
+          "selected": [
+            "c:MH-1200-up"
+          ],
+          "ok": true
+        },
+        {
+          "case": "2.4 Connection to existing manhole including",
+          "expected": [],
+          "selected": [],
+          "ok": true
+        },
+        {
+          "case": "3.1 Supply and lay asphalt wearing course 50",
+          "expected": [
+            "c:AS-001"
+          ],
+          "selected": [
+            "c:AS-001"
+          ],
+          "ok": true
+        },
+        {
+          "case": "3.2 Precast concrete kerb Type A 300x150 sup",
+          "expected": [
+            "c:KB-001"
+          ],
+          "selected": [
+            "c:KB-001"
+          ],
+          "ok": true
+        },
+        {
+          "case": "3.4 Thermoplastic road marking arrows and sy",
+          "expected": [
+            "c:RM-003",
+            "c:RM-004"
+          ],
+          "selected": [
+            "c:RM-003"
+          ],
+          "ok": true
+        },
+        {
+          "case": "4.1 Street lighting column 8m complete with ",
+          "expected": [
+            "c:SL-COL-8"
+          ],
+          "selected": [
+            "c:SL-COL-8"
+          ],
+          "ok": true
+        },
+        {
+          "case": "5.2 Supply and plant Ghaf tree 2.5m height",
+          "expected": [
+            "c:LS-TREE-GHAF"
+          ],
+          "selected": [
+            "c:LS-TREE-GHAF"
+          ],
+          "ok": true
+        }
+      ],
+      "errors": 0,
+      "calls": 2,
+      "tokens_in": 1930,
+      "tokens_out": 808,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 0.0,
+      "seconds": 0.04
+    },
+    {
+      "task": "markup_advise",
+      "cases": 2,
+      "score": 1.0,
+      "passed": 2,
+      "details": [
+        {
+          "case": "context 1",
+          "checks": {
+            "three_options": true,
+            "ordered": true,
+            "in_range": true,
+            "reasoned": true
+          },
+          "ok": true
+        },
+        {
+          "case": "context 2",
+          "checks": {
+            "three_options": true,
+            "ordered": true,
+            "in_range": true,
+            "reasoned": true
+          },
+          "ok": true
+        }
+      ],
+      "errors": 0,
+      "calls": 2,
+      "tokens_in": 817,
+      "tokens_out": 370,
+      "cost_usd": 0.0,
+      "avg_latency_ms": 0.0,
+      "seconds": 0.01
+    }
+  ],
+  "mean_score": 1.0,
+  "total_cost_usd": 0.0,
+  "config": {
+    "ai_model": "",
+    "classify": "",
+    "vision": "",
+    "reasoning": ""
+  }
+}

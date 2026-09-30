@@ -13,6 +13,7 @@ export interface ProjectOut {
   area: string | null
   latitude: number | null
   longitude: number | null
+  external_ai_override?: boolean | null
   created_at: string
 }
 
@@ -106,6 +107,48 @@ export interface DrawingSheetOut {
   scale_confidence: number | null
   scale_disagreement: boolean
   extraction_status: string | null
+  annotations_status: string | null
+}
+
+export interface DrawingAnnotationOut {
+  id: string
+  sheet_id: string
+  page: number | null
+  text: string
+  kind: string | null
+  value: number | null
+  unit: string | null
+  material: string | null
+  bbox: number[] | null
+  source: string | null
+  confidence: number | null
+}
+
+export interface DrawingAnnotationPage {
+  items: DrawingAnnotationOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface DrawingAnnotationSummaryOut {
+  sheets: number
+  done: number
+  queued: number
+  unavailable: number
+  failed: number
+  skipped: number
+  unread: number
+  annotations: number
+}
+
+export interface ReadAnnotationsIn {
+  drawing_id: string
+  force: boolean
+}
+
+export interface ReadAnnotationsOut {
+  queued_sheets: number
 }
 
 export interface ManualScaleCalibrationIn {
@@ -1232,4 +1275,426 @@ export interface ChainVerifyResult {
   date_to: string
   ok: boolean
   detail?: string | null
+}
+
+// --- external AI governance ---
+
+export interface AiStatusOut {
+  provider: string
+  external: boolean
+  configured: boolean
+  external_ai_allowed: boolean
+  available: boolean
+  message: string | null
+}
+
+export interface AiSettingsOut {
+  external_ai_allowed: boolean
+  provider: string
+  external: boolean
+  configured: boolean
+}
+
+export type AiCallStatus = 'ok' | 'cached' | 'error' | 'blocked'
+
+export interface AiUsageRow {
+  task: string
+  provider: string
+  model: string
+  calls: number
+  cached: number
+  errors: number
+  blocked: number
+  tokens_in: number
+  tokens_out: number
+  cost_usd: number
+}
+
+export interface AiRecentCall {
+  id: string
+  created_at: string
+  task: string
+  provider: string
+  model: string
+  project_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  status: AiCallStatus
+  tokens_in: number
+  tokens_out: number
+  cost_usd: number
+  latency_ms: number
+  error: string | null
+  created_by: string | null
+}
+
+export interface AiUsageOut {
+  month_to_date_usd: number
+  monthly_budget_usd: number | null
+  project_budget_usd: number | null
+  rows: AiUsageRow[]
+  recent: AiRecentCall[]
+}
+
+export interface ProjectAiOverrideOut {
+  project_id: string
+  external_ai_override: boolean | null
+}
+
+// --- PDF BOQ extraction (features/boq/pdf) ---
+
+export type BoqPdfExtractionStatus = 'queued' | 'running' | 'ready' | 'failed' | 'committed'
+
+export type BoqPdfPageStatus = 'table' | 'ai' | 'skipped_collection' | 'empty' | 'needs_ai' | 'ai_unavailable'
+
+export interface BoqPdfExtractionOut {
+  id: string
+  project_id: string
+  document_id: string | null
+  source_filename: string
+  status: BoqPdfExtractionStatus
+  use_ai: boolean
+  pages_total: number | null
+  pages_done: number | null
+  warnings: string[]
+  error: string | null
+  batch_id: string | null
+  committed_at: string | null
+  created_at: string
+}
+
+export interface BoqPdfPageInfo {
+  page: number
+  status: BoqPdfPageStatus
+  note?: string | null
+  rows?: number | null
+  quality?: number | null
+}
+
+export interface BoqPdfRow {
+  row_id: string
+  page: number
+  item_no: string | null
+  description: string | null
+  uom: string | null
+  quantity: number | null
+  bbox: number[] | null
+  page_size: number[] | null
+  source: 'table' | 'ai' | 'manual'
+  confidence: number | null
+  edited: boolean
+  ai_read: boolean
+  errors: string[]
+}
+
+export interface BoqPdfExtractionDetail extends BoqPdfExtractionOut {
+  pages: BoqPdfPageInfo[]
+  rows: BoqPdfRow[]
+  valid_count: number
+  error_count: number
+  ai_row_count: number
+  original_workbook_export_available: boolean
+}
+
+export interface BoqPdfRowIn {
+  row_id?: string
+  item_no: string
+  description: string
+  uom: string
+  quantity: number | null
+  page: number
+}
+
+export interface BoqPdfCommitOut {
+  created_count: number
+  batch_id: string
+  created_item_ids: string[]
+}
+
+export interface BoqPdfFileUrlOut {
+  url: string
+  filename: string
+}
+
+// --- Drawing vs BOQ verification ---
+export type VerificationRunStatus = 'queued' | 'running' | 'ready' | 'failed'
+export type VerificationPhase = 'loading' | 'interpreting' | 'ranking' | 'computing'
+export type VerificationClass =
+  | 'match'
+  | 'variance'
+  | 'missing_in_drawings'
+  | 'not_verifiable'
+  | 'missing_in_boq'
+
+export type VerificationCounts = Record<VerificationClass, number>
+
+export interface VerificationTradeSummary {
+  trade: string
+  lines: number
+  match: number
+  variance: number
+  missing_in_drawings: number
+  not_verifiable: number
+  abs_variance_pct_sum: number
+}
+
+export interface VerificationTopRisk {
+  /** null for "missing in BOQ": a drawing item has no BOQ line */
+  line_id: string | null
+  class: VerificationClass
+  delta_pct: number | null
+  note: string
+}
+
+export interface VerificationRunOut {
+  id: string
+  project_id: string
+  status: VerificationRunStatus
+  use_ai: boolean
+  phase: VerificationPhase | null
+  progress_done: number
+  progress_total: number
+  counts: VerificationCounts
+  summary: { verifiable: number; by_trade: VerificationTradeSummary[]; top_risks: VerificationTopRisk[] }
+  warnings: string[]
+  error: string | null
+  ai_calls: number
+  ai_cost_usd: number
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface VerificationEvidenceOut {
+  ref: string
+  kind: 'measurement' | 'annotation'
+  value: number | null
+  unit: string | null
+  label: string | null
+  drawing_id: string
+  sheet_id: string | null
+  page: number
+  bbox: number[] | null
+  layer: string | null
+  confidence: number | null
+  material: string | null
+}
+
+export interface VerificationCandidateOut {
+  ref: string
+  score: number
+  reason: string
+  source: 'ai' | 'rules'
+  selected: boolean
+}
+
+export interface VerificationInterpretationOut {
+  work_type: string | null
+  material: string | null
+  size_mm: number | null
+  unit: string | null
+  trade: string | null
+  source: string | null
+  keywords: string[]
+}
+
+export interface VerificationLineOut {
+  id: string
+  run_id: string
+  boq_line_item_id: string | null
+  item_no: string | null
+  description: string
+  trade_name: string | null
+  vclass: VerificationClass
+  method: 'measured' | 'annotated' | 'none'
+  mapped_by: 'ai' | 'rules' | 'user' | 'none'
+  boq_quantity: number | null
+  boq_uom: string | null
+  drawing_quantity: number | null
+  delta: number | null
+  delta_pct: number | null
+  confidence: number
+  note: string | null
+  flags: string[]
+  interpretation: VerificationInterpretationOut | null
+  evidence: VerificationEvidenceOut[]
+  candidates: VerificationCandidateOut[]
+}
+
+export interface VerificationLinesPage {
+  items: VerificationLineOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type VerificationMappingAction = 'accept' | 'reject' | 'include' | 'clear'
+
+export interface VerificationMappingRequest {
+  action: VerificationMappingAction
+  evidence_ref: string
+  note?: string
+}
+
+export interface VerificationMappingResult {
+  line: VerificationLineOut
+  run: VerificationRunOut
+}
+
+export interface AnnotationSummaryOut {
+  sheets: number
+  done: number
+  queued: number
+  unavailable: number
+  failed: number
+  skipped: number
+  unread: number
+  annotations: number
+}
+
+// --- AI pricing assistant (settlement draft) ---
+export type SettlementAiRunKind = 'costs' | 'markup'
+export type SettlementAiRunStatus = 'queued' | 'running' | 'ready' | 'failed'
+
+export interface SettlementAiCostCounts {
+  lines: number
+  with_source: number
+  no_source: number
+  ai_chosen: number
+  rules_chosen: number
+  blocked: number
+  bulk_acceptable: number
+}
+
+export interface MarkupAdviceOption {
+  label: 'competitive' | 'balanced' | 'protective'
+  markup_pct: number
+  overhead_pct: number
+  volatility_pct: number
+  rationale: string
+  tender_total: string
+  margin_on_sell_pct: string | null
+  required_role: string | null
+  unresolved_lines: number
+}
+
+export interface MarkupAdviceTrade {
+  trade: string
+  markup_low: number
+  markup_high: number
+  volatility_low: number | null
+  volatility_high: number | null
+  rationale: string
+}
+
+export interface MarkupAdviceHistoryRow {
+  margin_bucket: string
+  bids: number
+  won: number
+  win_rate_pct: number | null
+  avg_price_gap_when_lost_pct: number | null
+}
+
+export interface MarkupAdviceResult {
+  options: MarkupAdviceOption[]
+  per_trade: MarkupAdviceTrade[]
+  overall: string | null
+  history: MarkupAdviceHistoryRow[]
+  current: { tender_total: string; margin_on_sell_pct: string | null; required_role: string | null }
+  context?: Record<string, unknown>
+}
+
+export interface SettlementAiRun {
+  id: string
+  settlement_id: string
+  kind: SettlementAiRunKind
+  status: SettlementAiRunStatus
+  use_ai: boolean
+  progress_done: number
+  progress_total: number
+  counts: Partial<SettlementAiCostCounts> | null
+  result: MarkupAdviceResult | null
+  warnings: string[]
+  error: string | null
+  ai_calls: number
+  ai_cost_usd: number
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export type CostCandidateType = 'quote' | 'library' | 'historical'
+
+export interface CostCandidate {
+  ref: string
+  type: CostCandidateType
+  label: string
+  rate: number
+  currency: string
+  uom: string
+  vendor: string | null
+  as_of: string | null
+  samples: number
+  match_score: number
+  score: number
+  reason: string
+  selected: boolean
+  flags: string[]
+  detail: {
+    age_months?: number
+    deviation_pct?: number
+    components?: unknown
+    open_exclusions?: unknown
+    min?: number
+    max?: number
+    [key: string]: unknown
+  }
+}
+
+export type CostProposalStatus = 'proposed' | 'accepted' | 'overridden' | 'rejected'
+
+export interface CostProposal {
+  id: string
+  run_id: string
+  settlement_id: string
+  settlement_line_id: string
+  boq_line_item_id: string
+  item_no: string | null
+  description: string
+  uom: string | null
+  quantity: number
+  status: CostProposalStatus
+  source: 'ai' | 'rules' | 'none'
+  chosen: CostCandidate | null
+  candidates: CostCandidate[]
+  rationale: string | null
+  flags: string[]
+  blocked: boolean
+  bulk_acceptable: boolean
+  no_source: boolean
+  confidence: number
+  decided_by: string | null
+  decided_at: string | null
+  decision_note: string | null
+  created_at: string
+}
+
+export interface CostProposalPage {
+  items: CostProposal[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface CostProposalDecision {
+  action: 'accept' | 'choose' | 'manual' | 'reject'
+  candidate_ref?: string
+  manual_unit_cost?: number
+  manual_currency?: string
+  note?: string
+}
+
+export interface BulkAcceptResult {
+  accepted: number
+  skipped: number
 }

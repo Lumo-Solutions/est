@@ -28,6 +28,7 @@ class ProjectOut(ORMModel):
     area: str | None
     latitude: float | None
     longitude: float | None
+    external_ai_override: bool | None = None
     created_at: datetime
 
 

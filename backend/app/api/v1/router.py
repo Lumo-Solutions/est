@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.routes import (
+    ai,
+    ai_reading,
     approvals,
     audit,
     auth,
@@ -11,6 +13,7 @@ from app.api.v1.routes import (
     drawings,
     module_e,
     prequal,
+    pricing_ai,
     procurement,
     projects,
     quotation_ingestion,
@@ -21,10 +24,13 @@ from app.api.v1.routes import (
     typology,
     users,
     vendors,
+    verification,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(ai.router)
+api_router.include_router(ai_reading.router)
 api_router.include_router(vendors.router)
 api_router.include_router(taxonomy.router)
 api_router.include_router(tender_intake.router)
@@ -41,4 +47,6 @@ api_router.include_router(quotation_ingestion.router)
 api_router.include_router(semantic_matching.router)
 api_router.include_router(settlement.router)
 api_router.include_router(typology.router)
+api_router.include_router(pricing_ai.router)
 api_router.include_router(users.router)
+api_router.include_router(verification.router)
