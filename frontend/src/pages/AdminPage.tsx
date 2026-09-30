@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AiAdmin } from '../features/admin/AiAdmin'
 import { ApprovalPoliciesAdmin } from '../features/admin/ApprovalPoliciesAdmin'
 import { LayerTradeMappingAdmin } from '../features/admin/LayerTradeMappingAdmin'
 import { ReasonCodesAdmin } from '../features/admin/ReasonCodesAdmin'
@@ -17,6 +18,7 @@ const TABS = [
   { key: 'reason-codes', label: 'Reason codes', Component: ReasonCodesAdmin },
   { key: 'vendor-regions', label: 'Vendor regions', Component: VendorRegionsAdmin },
   { key: 'tender-classes', label: 'Tender classes', Component: TenderClassesAdmin },
+  { key: 'ai', label: 'AI', Component: AiAdmin },
 ] as const
 
 export function AdminPage() {

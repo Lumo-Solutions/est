@@ -13,6 +13,7 @@ export interface ProjectOut {
   area: string | null
   latitude: number | null
   longitude: number | null
+  external_ai_override?: boolean | null
   created_at: string
 }
 
@@ -1232,4 +1233,68 @@ export interface ChainVerifyResult {
   date_to: string
   ok: boolean
   detail?: string | null
+}
+
+// --- external AI governance ---
+
+export interface AiStatusOut {
+  provider: string
+  external: boolean
+  configured: boolean
+  external_ai_allowed: boolean
+  available: boolean
+  message: string | null
+}
+
+export interface AiSettingsOut {
+  external_ai_allowed: boolean
+  provider: string
+  external: boolean
+  configured: boolean
+}
+
+export type AiCallStatus = 'ok' | 'cached' | 'error' | 'blocked'
+
+export interface AiUsageRow {
+  task: string
+  provider: string
+  model: string
+  calls: number
+  cached: number
+  errors: number
+  blocked: number
+  tokens_in: number
+  tokens_out: number
+  cost_usd: number
+}
+
+export interface AiRecentCall {
+  id: string
+  created_at: string
+  task: string
+  provider: string
+  model: string
+  project_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  status: AiCallStatus
+  tokens_in: number
+  tokens_out: number
+  cost_usd: number
+  latency_ms: number
+  error: string | null
+  created_by: string | null
+}
+
+export interface AiUsageOut {
+  month_to_date_usd: number
+  monthly_budget_usd: number | null
+  project_budget_usd: number | null
+  rows: AiUsageRow[]
+  recent: AiRecentCall[]
+}
+
+export interface ProjectAiOverrideOut {
+  project_id: string
+  external_ai_override: boolean | null
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
@@ -8,6 +8,7 @@ import { ConfirmModal } from '../components/ConfirmModal'
 import { SelectField, TextField } from '../components/Field'
 import { SkeletonRows } from '../components/Skeleton'
 import { TabBar } from '../components/TabBar'
+import { useSetProjectAiOverride } from '../features/ai/api'
 import { DrawingUpload } from '../features/drawings/DrawingUpload'
 import { useDrawings } from '../features/drawings/api'
 import {
@@ -125,6 +126,43 @@ function LocationSection({ project }: { project: { id: string; emirate: string |
         </p>
       )}
     </form>
+  )
+}
+
+// The project payload does not carry external_ai_override yet, so this is
+// driven by local state (undefined on the payload is treated as null).
+function AiOverrideSection({ projectId, initial }: { projectId: string; initial: boolean | null }) {
+  const { hasRole } = useAuth()
+  const [override, setOverride] = useState<boolean | null>(initial)
+  const setAiOverride = useSetProjectAiOverride(projectId)
+  const checkboxId = useId()
+
+  if (!hasRole(...LOCATION_ROLES)) return null
+
+  return (
+    <div className="mt-2">
+      <label htmlFor={checkboxId} className="flex items-center gap-2 text-sm text-slate-600">
+        <input
+          id={checkboxId}
+          type="checkbox"
+          checked={override === false}
+          disabled={setAiOverride.isPending}
+          onChange={(e) => {
+            const next = e.target.checked ? false : null
+            const previous = override
+            setOverride(next)
+            setAiOverride.mutate(next, { onError: () => setOverride(previous) })
+          }}
+          className="h-4 w-4 rounded border-slate-300 text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        />
+        Keep this project off external AI
+      </label>
+      {setAiOverride.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {setAiOverride.error.message}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -297,6 +335,10 @@ export function ProjectDetailPage() {
       {tab === 'overview' && (
         <>
       <LocationSection project={project} />
+      <AiOverrideSection
+        projectId={project.id}
+        initial={project.external_ai_override ?? null}
+      />
       <MembersSection projectId={project.id} />
 
       <Card className="mt-6">
