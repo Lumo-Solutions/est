@@ -1298,3 +1298,78 @@ export interface ProjectAiOverrideOut {
   project_id: string
   external_ai_override: boolean | null
 }
+
+// --- PDF BOQ extraction (features/boq/pdf) ---
+
+export type BoqPdfExtractionStatus = 'queued' | 'running' | 'ready' | 'failed' | 'committed'
+
+export type BoqPdfPageStatus = 'table' | 'ai' | 'skipped_collection' | 'empty' | 'needs_ai' | 'ai_unavailable'
+
+export interface BoqPdfExtractionOut {
+  id: string
+  project_id: string
+  document_id: string | null
+  source_filename: string
+  status: BoqPdfExtractionStatus
+  use_ai: boolean
+  pages_total: number | null
+  pages_done: number | null
+  warnings: string[]
+  error: string | null
+  batch_id: string | null
+  committed_at: string | null
+  created_at: string
+}
+
+export interface BoqPdfPageInfo {
+  page: number
+  status: BoqPdfPageStatus
+  note?: string | null
+  rows?: number | null
+  quality?: number | null
+}
+
+export interface BoqPdfRow {
+  row_id: string
+  page: number
+  item_no: string | null
+  description: string | null
+  uom: string | null
+  quantity: number | null
+  bbox: number[] | null
+  page_size: number[] | null
+  source: 'table' | 'ai' | 'manual'
+  confidence: number | null
+  edited: boolean
+  ai_read: boolean
+  errors: string[]
+}
+
+export interface BoqPdfExtractionDetail extends BoqPdfExtractionOut {
+  pages: BoqPdfPageInfo[]
+  rows: BoqPdfRow[]
+  valid_count: number
+  error_count: number
+  ai_row_count: number
+  original_workbook_export_available: boolean
+}
+
+export interface BoqPdfRowIn {
+  row_id?: string
+  item_no: string
+  description: string
+  uom: string
+  quantity: number | null
+  page: number
+}
+
+export interface BoqPdfCommitOut {
+  created_count: number
+  batch_id: string
+  created_item_ids: string[]
+}
+
+export interface BoqPdfFileUrlOut {
+  url: string
+  filename: string
+}
