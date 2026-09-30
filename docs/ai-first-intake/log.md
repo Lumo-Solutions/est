@@ -13,15 +13,15 @@ Branch: feat/ai-first-intake (from master after feat/ai-provider). When resuming
 - Cache by sha256: identical content in a project copies the original's classification (no call); the gateway's own cache covers re-runs on external providers.
 
 ## Steps
-- [ ] 1 migration 0037 + models + constants
-- [ ] 2 schema/prompt v2, classifier, mock fixtures
-- [ ] 3 processing pipeline (AI first, fallback, auto-accept)
-- [ ] 4 service: settings, reclassify anywhere + unroute, bulk reclassify, tree/summary endpoints
-- [ ] 5 drawing archive + reader filters
-- [ ] 6 backend tests (unit, integration, api), each suite separately
-- [ ] 7 frontend: one project page, tree, needs-your-check, admin setting
-- [ ] 8 demo pack + real-backend walkthrough; update old specs/screenshots
-- [ ] 9 report, merge to master, MFA left off
+- [x] 1 migration 0037 + models + constants
+- [x] 2 schema/prompt v2, classifier, mock fixtures
+- [x] 3 processing pipeline (AI first, fallback, auto-accept)
+- [x] 4 service: settings, reclassify anywhere + unroute, bulk reclassify, tree/summary endpoints
+- [x] 5 drawing archive + reader filters
+- [x] 6 backend tests (unit, integration, api), each suite separately
+- [x] 7 frontend: one project page, tree, needs-your-check, admin setting
+- [x] 8 demo pack + real-backend walkthrough; update old specs/screenshots
+- [x] 9 report, merge to master, MFA left off
 
 ## Subagent verification (finish-brief rule A7)
 - agent intake-admin (c561709): commit exists on its branch; diff = 3 allow-listed files (AiAdmin.tsx, AiAdmin.test.tsx, admin/api.ts); diff read in full; merged --no-ff (9e6d8b1).
