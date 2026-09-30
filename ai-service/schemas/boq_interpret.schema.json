@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/boq_interpret.schema.json",
+  "title": "BoqInterpretation",
+  "description": "A structured reading of BOQ line descriptions: what work is described, in what material and size, measured in what unit, and which trade it belongs to. Pure data: no action fields, and no quantities (quantities come from the drawings, never from a model). Every value is a proposal used only to find candidate drawing evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lines"],
+  "properties": {
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "description": "The id of the BOQ line, copied exactly from the input."},
+          "work_type": {"type": ["string", "null"], "description": "Short noun phrase for the work: pipe laying, excavation, manhole, kerb, asphalt surfacing, landscaping, lighting column..."},
+          "material": {"type": ["string", "null"], "description": "Material as stated (uPVC, GRP, ductile iron, reinforced concrete, granite...). Null if not stated."},
+          "size_mm": {"type": ["number", "null"], "description": "Nominal size or diameter in millimetres if stated (300 for 300mm or DN300). Null otherwise."},
+          "unit": {"type": ["string", "null"], "description": "Unit of measure the item is measured in, as it would appear on a drawing (m, m2, m3, nr). Null if unclear."},
+          "trade": {"type": ["string", "null"], "description": "Trade: earthworks, drainage, roads, kerbs, landscaping, lighting, utilities, structures, or null."},
+          "keywords": {"type": "array", "items": {"type": "string"}, "description": "Up to 6 lower-case words most useful for finding this item on a drawing (layer names, block names, legend words)."}
+        }
+      }
+    }
+  }
+}

@@ -282,7 +282,11 @@ def compute_line(
             attached.append((c.ref, c.source))
             seen.add(c.ref)
     for ref in sorted(include):
-        if ref not in seen and ref in evidence_by_ref:
+        if ref not in evidence_by_ref:
+            continue
+        if ref in seen:  # already proposed: a person confirming it makes it theirs
+            attached = [(r, "user" if r == ref else by) for r, by in attached]
+        else:
             attached.append((ref, "user"))
             seen.add(ref)
     attached = attached[: MAX_ATTACHED + len(include)]

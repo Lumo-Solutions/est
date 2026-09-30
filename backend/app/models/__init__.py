@@ -22,6 +22,7 @@ from app.models import (  # noqa: F401
     tender_intake,
     typology,
     vendors,
+    verification,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "tender_intake",
     "typology",
     "vendors",
+    "verification",
 ]

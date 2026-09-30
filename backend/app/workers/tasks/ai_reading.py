@@ -99,3 +99,67 @@ async def _read_sheets(ctx: RequestContext, sheet_ids: list[str]) -> None:
 def read_sheet_annotations(self, sheet_ids: list[str], tenant_id: str, actor_user_id: str | None, actor_roles: list[str] | None = None) -> None:
     ctx = build_worker_context(tenant_id, actor_user_id, actor_roles)
     run_async(lambda: _read_sheets(ctx, sheet_ids))()
+
+
+# ---------------------------------------------------------------- drawing <-> BOQ verification
+
+async def _run_progress(ctx: RequestContext, run_id: UUID, phase: str, done: int, total: int) -> None:
+    from app.models.verification import VerificationRun
+
+    async def _w(session) -> None:
+        run = (await session.execute(select(VerificationRun).where(VerificationRun.id == run_id))).scalar_one()
+        run.phase, run.progress_done, run.progress_total = phase, done, total
+        await session.flush()
+
+    await with_worker_session(ctx, _w)
+
+
+async def _claim_run(ctx: RequestContext, run_id: UUID) -> None:
+    from datetime import datetime, timezone
+
+    from app.models.verification import VerificationRun
+
+    async def _w(session) -> None:
+        run = (await session.execute(select(VerificationRun).where(VerificationRun.id == run_id))).scalar_one()
+        if run.status in ("queued", "failed"):
+            run.status, run.error, run.started_at, run.phase = "running", None, datetime.now(timezone.utc), "loading"
+            await session.flush()
+
+    await with_worker_session(ctx, _w)
+
+
+async def _fail_run(ctx: RequestContext, run_id: UUID, message: str) -> None:
+    from app.models.verification import VerificationRun
+
+    async def _w(session) -> None:
+        run = (await session.execute(select(VerificationRun).where(VerificationRun.id == run_id))).scalar_one_or_none()
+        if run is not None and run.status != "ready":
+            run.status, run.error, run.phase = "failed", message[:500], None
+            await session.flush()
+
+    await with_worker_session(ctx, _w)
+
+
+async def _verify(ctx: RequestContext, run_id: str) -> None:
+    from app.services import verification as verification_service
+
+    rid = UUID(run_id)
+
+    async def progress(phase: str, done: int, total: int) -> None:
+        await _run_progress(ctx, rid, phase, done, total)
+
+    async def _body(session) -> None:
+        await verification_service.run_verification(session, ctx, rid, progress)
+
+    try:
+        await _claim_run(ctx, rid)
+        await with_worker_session(ctx, _body)
+    except Exception as exc:  # noqa: BLE001 -- recorded on the run from an independent session
+        logger.exception("verification: run %s failed", run_id)
+        await _fail_run(ctx, rid, f"{type(exc).__name__}: {exc}")
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.ai_reading.run_verification", soft_time_limit=3300)
+def run_verification(self, run_id: str, tenant_id: str, actor_user_id: str | None, actor_roles: list[str] | None = None) -> None:
+    ctx = build_worker_context(tenant_id, actor_user_id, actor_roles)
+    run_async(lambda: _verify(ctx, run_id))()

@@ -23,6 +23,7 @@ from app.api.v1.routes import (
     typology,
     users,
     vendors,
+    verification,
 )
 
 api_router = APIRouter()
@@ -46,3 +47,4 @@ api_router.include_router(semantic_matching.router)
 api_router.include_router(settlement.router)
 api_router.include_router(typology.router)
 api_router.include_router(users.router)
+api_router.include_router(verification.router)

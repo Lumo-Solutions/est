@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://installtec.internal/schemas/evidence_rank.schema.json",
+  "title": "EvidenceRank",
+  "description": "For each BOQ line, a ranking of the candidate drawing evidence supplied with it, each with a score, a reason, and whether it is selected as belonging to that line. The model may only refer to candidates it was given (by ref); it cannot introduce evidence, quantities or actions. Every choice is a proposal that an estimator accepts or overrides.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lines"],
+  "properties": {
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ranked"],
+        "properties": {
+          "id": {"type": "string", "description": "The id of the BOQ line, copied exactly from the input."},
+          "ranked": {
+            "type": "array",
+            "description": "Every supplied candidate for this line, best first.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ref", "score", "selected"],
+              "properties": {
+                "ref": {"type": "string", "description": "The candidate ref exactly as supplied."},
+                "score": {"type": "number", "minimum": 0, "maximum": 1, "description": "How well this evidence corresponds to the BOQ line (1 = certainly the same thing)."},
+                "selected": {"type": "boolean", "description": "True if this evidence should be counted toward the BOQ line's quantity."},
+                "reason": {"type": "string", "description": "One short sentence: why it matches or does not (layer, size, material, trade, legend)."}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
