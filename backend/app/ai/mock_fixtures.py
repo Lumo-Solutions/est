@@ -212,6 +212,9 @@ def intake_classify(req: AIRequest) -> dict[str, Any]:
 
             break
 
+    if cls == "other" and req.images:
+        cls, quote = "drawing", "scanned page image"   # an image-only page (no text layer) nothing else matched: a low-confidence scan of a drawing
+
     sub = None
 
     if cls == "drawing":

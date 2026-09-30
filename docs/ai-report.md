@@ -44,6 +44,7 @@ Tenant switch and project opt-out (blocked calls are audited and never leave), k
 - History and vendor eligibility are read under the caller's row-level security: a lead sees past projects they belong to; bd_director, procurement_head and managing_director see all.
 - The demo `clean-demo-data` cannot delete cost-library items (append-only); it deactivates them.
 - PDF BOQs cannot be written back into an original workbook (no workbook exists); the export says so and the generated export still works.
+- The vendors list shows the first 50 vendors by name and has no paging or search yet (existing behaviour). On a database with more than 50 vendors a new vendor can be off the first page; the `vendors-prequal` spec now opens the vendor by the id the create call returns. Worth adding paging.
 - Real-model behaviour (prompts, thresholds, cost) is unmeasured until a key is supplied: expect to tune `RULES_ATTACH_MIN_SCORE`, the bulk-accept threshold (0.85) and batch sizes against `make ai-eval`.
 
 ## 7. What the owner must do
@@ -67,7 +68,25 @@ Then: sign in as the managing director, Admin > AI, switch **External AI allowed
 
 ## 9. Verification record
 
-RESULTS_PLACEHOLDER
+Run on 2026-09-30 on the final commit of this branch (before the merge), each suite separately:
+
+| Check | Result |
+|---|---|
+| `make test-unit` | 631 passed |
+| `make test-integration` | 264 passed |
+| `make test-api` | 90 passed |
+| Frontend `npm run build` | OK |
+| Frontend `vitest run` | 27 files, 148 tests passed |
+| Frontend `npm run lint` / `oxlint e2e` | 0 errors (3 pre-existing warnings in files this work did not touch) |
+| `make check-ai-env` | OK: the backend service passes all 13 `AI_*` keys the workers get |
+| Real-backend specs (25 files; `step-up-freshness` is ignored by the config), each file alone with `--workers=1` | all pass, including the new `ai-walkthrough.spec.ts` (2 tests) |
+
+**Real-backend runs were not clean first time; what was found.**
+
+- The walkthrough found three genuine defects, all fixed with tests: a confirmed PDF BOQ was refused by the router; measured evidence could be cut by the verification attach cap when several annotations ranked first; and the verification report crashed (white screen) on a top risk with no BOQ line ("Missing in BOQ"). The mock classifier also needed to call an image-only scan a low-confidence drawing, as the older classification mock did (the `tender-intake` spec caught this).
+- Three older specs were stale against deliberate changes and were updated: `project-pages` (creating a project now lands on its Tender documents tab, per the brief) and `vendors-prequal` (see the known limit below). `tender-intake` was fixed in the mock, not the spec.
+- **Connection flakes in this dev environment.** Across the full pass, several specs failed once with `ECONNRESET` on an API call or a timeout on `/api/v1/auth/login`, at a different step each time, and passed when rerun alone (`login`, `home-dashboard`, `dwg-conversion`, `phase4-accessibility`, `quotation-settlement-overrides`, `ai-walkthrough`, `tender-intake`). `project-members-scenarios` failed three times the same way before passing (the last run used `--retries=2` and reported no flaky test). The backend showed no errors or restarts, 300 fresh connections through the proxy all succeeded, and the failures only appear on Playwright's reused keep-alive sockets, so I attribute them to the local Docker/Windows networking and test client rather than the application. A clean CI host should confirm this; if they recur there, look at keep-alive settings on the backend and proxy first.
+- A first attempt at `make test-all` was killed by the harness for low memory (not a test failure); the suites were then run separately as above.
 
 ## 10. Subagents (finish-brief rule A)
 

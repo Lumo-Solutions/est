@@ -9,8 +9,8 @@ When resuming, read this and continue from the first unchecked step.
 - [x] Phase 2 intake + reading (backend + UI: folder upload, PDF BOQ, annotations; real-backend e2e in Phase 5)
 - [x] Phase 3 drawing<->BOQ verification (engine, AI steps, API, exports, report UI; real-backend e2e in Phase 5)
 - [x] Phase 4 pricing assistant (backend + UI; real-backend e2e in Phase 5)
-- [ ] Phase 5 demo data, eval, tests
-- [ ] Phase 6 wrap-up + docs/ai-report.md
+- [x] Phase 5 demo data, eval, tests (dataset, mock fixtures, ai-eval baseline, ai-smoke, injection tests, scale test, real-backend walkthrough green)
+- [x] Phase 6 wrap-up + docs/ai-report.md (see section 9 of the report for the verification record)
 
 ## Subagent verification (finish-brief rule A7)
 - agent ai-admin-ui: commit 6951c4e existed on its worktree branch; diff read in full; only the 8 allow-listed frontend files changed. The harness based its worktree on an older commit (AdminPage/ProjectDetailPage had drifted), so the main session cherry-picked it (241316a), resolved 2 conflicts, added `useId` import + `external_ai_override` typing + backend `ProjectOut.external_ai_override`, and re-ran `tsc -b` (clean), `oxlint` (only 3 pre-existing warnings) and `vitest run` (17 files, 88 tests pass). Future agents: main session creates the worktree itself from the current branch head.
@@ -18,3 +18,5 @@ When resuming, read this and continue from the first unchecked step.
 - agent sheet-annotations-ui (2eea92c) and verification-ui (9f60931): commits verified to exist, diffs limited to allow-lists, merged --no-ff. Main session found and fixed one wrong assumption in the first (sheet extraction_status is 'succeeded', not 'ready'; fixed in 725e4ce/d35cc2d). After merging: tsc clean, oxlint 3 pre-existing warnings, vitest 23 files / 130 tests.
 - agent pricing-ui (58f7f73): commit verified, diff limited to allow-list (SettlementPage got 3 small edits incl. a key on the sliders so they re-read saved defaults), read the apply path (ConfirmModal -> existing defaults save), merged --no-ff. tsc clean, oxlint 3 pre-existing warnings, vitest 26 files / 146 tests.
 - Bugs found and fixed in EXISTING code while building (all with tests): (1) POST /projects/{id}/boq-items response raised MissingGreenlet (reconciliation not loaded); (2) bid_settlement_line_items.cost_source varchar(16) could not hold 'cost_library_rate' (17 chars), so the library-rate path of set_line_cost always failed (migration 0036); (3) sheet index counted extraction_status 'ready' but the backend writes 'succeeded'.
+
+- Found by the real-backend walkthrough and fixed with tests (4f22815): (4) confirming a PDF BOQ was refused by the router; (5) measured evidence could be cut by the attach cap when several annotations ranked first; (6) the verification report white-screened on a top risk with no BOQ line (missing in BOQ).
