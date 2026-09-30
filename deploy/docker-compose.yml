@@ -84,6 +84,13 @@ x-backend-env: &backend-env
   IMAP_DEV_ALLOWED_HOST: ${IMAP_DEV_ALLOWED_HOST:-greenmail}
   QUOTATION_MAX_ATTACHMENT_SIZE_BYTES: ${QUOTATION_MAX_ATTACHMENT_SIZE_BYTES:-15728640}
   QUOTATION_MAX_PDF_PAGES: ${QUOTATION_MAX_PDF_PAGES:-60}
+  # --- addition: DWG conversion (docs/deploy-deltas.md "DWG conversion").
+  # DWG_CONVERSION_ENABLED empty = auto (on while the converter container's
+  # heartbeat is present); true/false force it. ---
+  DWG_CONVERSION_ENABLED: ${DWG_CONVERSION_ENABLED:-}
+  DWG_SPOOL_DIR: /spool
+  DWG_CONVERT_TIMEOUT_S: ${DWG_CONVERT_TIMEOUT_S:-120}
+  DWG_TARGET_VERSION: ${DWG_TARGET_VERSION:-ACAD2018}
 
 services:
   postgres:
@@ -328,6 +335,7 @@ services:
       - IMAP_DEV_ALLOWED_HOST=${IMAP_DEV_ALLOWED_HOST:-greenmail}
       - QUOTATION_MAX_ATTACHMENT_SIZE_BYTES=${QUOTATION_MAX_ATTACHMENT_SIZE_BYTES:-15728640}
       - QUOTATION_MAX_PDF_PAGES=${QUOTATION_MAX_PDF_PAGES:-60}
+      - DWG_CONVERSION_ENABLED=${DWG_CONVERSION_ENABLED:-}
     ports:
       - "8001:8000"
     depends_on:
@@ -457,6 +465,70 @@ services:
       retries: 3
       start_period: 20s
 
+  # --- addition: DWG -> DXF conversion. `convert` is its own queue/worker so a
+  # slow or hostile DWG can only ever delay other conversions. This worker
+  # has network (Redis/Postgres/S3) but never opens a DWG itself: it moves
+  # bytes between S3 and the /spool volume, where the sandboxed
+  # dwg-converter below picks them up. -c 1 because the converter is
+  # serial and CPU-bound. Always started (even without the converter) so a
+  # DWG upload without one lands in needs_conversion with a clear reason
+  # instead of sitting in `queued`. ---
+  celery-worker-convert:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: installtec_celery_worker_convert
+    command: celery -A app.workers.celery_app worker -Q convert -c 1 -l info
+    environment: *backend-env
+    volumes:
+      - dwgspool:/spool
+    mem_limit: 512m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
+  # --- addition: the DWG converter sandbox (ODA File Converter from a LOCAL
+  # .deb in deploy/vendor/oda/, gitignored -- INTERNAL USE ONLY, see the
+  # licence note in dwg-converter/Dockerfile). DWG is untrusted input, so:
+  # no network at all, read-only root fs, tmpfs scratch, no capabilities,
+  # non-root, CPU/memory/pids limits. Its only channel is the /spool volume.
+  # Profile "dwg": `make up` enables it automatically when the .deb is
+  # present; without the profile the app simply reports DWG conversion as
+  # unavailable. ---
+  dwg-converter:
+    build:
+      context: ./dwg-converter
+      additional_contexts:
+        oda: ./vendor/oda
+    image: installtec-dwg-converter:dev
+    container_name: installtec_dwg_converter
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+    pids_limit: 256
+    volumes:
+      - dwgspool:/spool
+    restart: unless-stopped
+    profiles: ["dwg"]
+
   celery-beat:
     build:
       context: ..
@@ -527,6 +599,8 @@ volumes:
   swdata:
   hfcache:
   onnxmodels:
+  # Shared by celery-worker-convert and dwg-converter (file-protocol channel).
+  dwgspool:
 
 networks:
   installtec:

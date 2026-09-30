@@ -41,6 +41,9 @@ services:
   celery-worker-quotation:
     environment: *prod-app-env
 
+  celery-worker-convert:
+    environment: *prod-app-env
+
   celery-beat:
     environment: *prod-app-env
 

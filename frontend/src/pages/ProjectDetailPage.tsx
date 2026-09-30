@@ -28,6 +28,8 @@ const DRAWING_STATUS_TONE: Record<string, BadgeTone> = {
   ready: 'success',
   failed: 'danger',
   partial: 'warning',
+  needs_conversion: 'warning',
+  converting: 'info',
 }
 
 // Mirrors backend/app/api/v1/routes/projects.py's _LOCATION_ROLES (project
@@ -313,7 +315,8 @@ export function ProjectDetailPage() {
                 </Link>
                 <div className="flex items-center gap-3 text-sm text-muted">
                   <span>{d.sheet_count ?? '?'} sheet(s)</span>
-                  <Badge tone={DRAWING_STATUS_TONE[d.status] ?? 'neutral'}>{d.status}</Badge>
+                  {d.kind === 'dwg' && <Badge tone="neutral">DWG</Badge>}
+                  <Badge tone={DRAWING_STATUS_TONE[d.status] ?? 'neutral'}>{d.status.replace('_', ' ')}</Badge>
                 </div>
               </li>
             ))}

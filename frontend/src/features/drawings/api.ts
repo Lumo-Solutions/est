@@ -19,18 +19,42 @@ export function useDrawings(projectId: string | undefined) {
   })
 }
 
-export function useUploadDrawing(projectId: string | undefined) {
+export interface UploadOutcome {
+  filename: string
+  ok: boolean
+  error?: string
+}
+
+// One drawing per request (the API takes a single file), sequentially, so a
+// bad file never blocks the rest: every file reports its own outcome. A DWG
+// goes through the same two calls -- ingest is what starts its conversion.
+export function useUploadDrawings(projectId: string | undefined) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData()
-      formData.append('file', file)
-      const drawing = await api.post<DrawingOut>(`/projects/${projectId}/drawings`, formData)
-      await api.post(`/drawings/${drawing.id}/ingest`)
-      return drawing
+    mutationFn: async (files: File[]): Promise<UploadOutcome[]> => {
+      const outcomes: UploadOutcome[] = []
+      for (const file of files) {
+        try {
+          const formData = new FormData()
+          formData.append('file', file)
+          const drawing = await api.post<DrawingOut>(`/projects/${projectId}/drawings`, formData)
+          await api.post(`/drawings/${drawing.id}/ingest`)
+          outcomes.push({ filename: file.name, ok: true })
+        } catch (e) {
+          outcomes.push({ filename: file.name, ok: false, error: e instanceof Error ? e.message : 'Upload failed' })
+        }
+      }
+      return outcomes
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'drawings'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'drawings'] }),
   })
+}
+
+// GET /drawings/{id}/download redirects to a presigned S3 URL, so a plain
+// link works (same as quotation attachments). `derived` is the DXF a DWG was
+// converted to.
+export function drawingDownloadHref(drawingId: string, variant: 'original' | 'derived' = 'original'): string {
+  return `/api/v1/drawings/${drawingId}/download?variant=${variant}`
 }
 
 // "Retry extraction" is just re-triggering ingest -- every task in the
@@ -58,7 +82,7 @@ export function useDrawing(drawingId: string | undefined) {
     // "ready"/"failed" without a manual refresh.
     refetchInterval: (query) => {
       const status = query.state.data?.status
-      return status && ['queued', 'indexing', 'extracting', 'embedding'].includes(status) ? 3000 : false
+      return status && ['queued', 'converting', 'indexing', 'extracting', 'embedding'].includes(status) ? 3000 : false
     },
   })
 }

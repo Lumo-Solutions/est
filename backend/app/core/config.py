@@ -109,6 +109,23 @@ class Settings(BaseSettings):
     # soft_time_limit/max_retries; this is the drawing-level backstop.
     drawing_stuck_timeout_s: int = Field(default=7200, alias="DRAWING_STUCK_TIMEOUT_S")
 
+    # --- DWG conversion (ODA File Converter sandbox, docs/takeoff-pipeline.md) ---
+    # Tri-state: unset/empty = auto (on when the converter container's
+    # heartbeat is present), true = on (a missing converter still parks the
+    # drawing in needs_conversion with a reason, never a 500), false = off.
+    dwg_conversion_enabled: bool | None = Field(default=None, alias="DWG_CONVERSION_ENABLED")
+    dwg_spool_dir: str = Field(default="/spool", alias="DWG_SPOOL_DIR")
+    # Per-file wall-clock limit. Enforced inside the converter container
+    # (process-group kill); the worker waits this + a grace period.
+    dwg_convert_timeout_s: int = Field(default=120, alias="DWG_CONVERT_TIMEOUT_S")
+    dwg_target_version: str = Field(default="ACAD2018", alias="DWG_TARGET_VERSION")
+    dwg_heartbeat_max_age_s: int = Field(default=30, alias="DWG_HEARTBEAT_MAX_AGE_S")
+
+    @field_validator("dwg_conversion_enabled", mode="before")
+    @classmethod
+    def _blank_dwg_flag_is_auto(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
     # --- procurement (Module C1: RFQ generation & dispatch) ---
     s3_bucket_procurement: str = Field(default="installtec-procurement", alias="S3_BUCKET_PROCUREMENT")
     smtp_host: str = Field(default="localhost", alias="SMTP_HOST")

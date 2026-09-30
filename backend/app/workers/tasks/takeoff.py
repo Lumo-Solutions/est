@@ -258,10 +258,14 @@ async def _index_sheets_body(session: AsyncSession, drawing_id: str, task_id: st
     await session.flush()
 
     try:
-        data = await get_object_bytes(drawing.object_key)
+        # A converted DWG is measured through the DXF derived from it (see
+        # app/workers/tasks/dwg.py); everything below is then the ordinary DXF path.
+        if drawing.is_dwg and not drawing.derived_object_key:
+            raise RuntimeError("DWG drawing reached indexing without a converted DXF")
+        data = await get_object_bytes(drawing.measure_object_key)
         sheet_ids: list[str] = []
 
-        if drawing.kind == DrawingKind.DXF.value:
+        if drawing.measure_kind == DrawingKind.DXF.value:
             layouts = dxf_mod.index_dxf(data)
             settings = get_settings()
             geometry_by_layout = dxf_mod.index_dxf_geometry(data) if settings.takeoff_persist_geometry else {}
@@ -404,8 +408,8 @@ async def _extract_sheet_body(session: AsyncSession, sheet_id: str, task_id: str
         # call instead of attempting to render non-PDF bytes as one. Found
         # live: "Failed to load document (PDFium: Data format error)" on a
         # real DXF test fixture's sparse layout.
-        if drawing.kind != DrawingKind.DXF.value and (sheet.is_raster or not candidate_text.strip()):
-            data = await get_object_bytes(drawing.object_key)
+        if drawing.measure_kind != DrawingKind.DXF.value and (sheet.is_raster or not candidate_text.strip()):
+            data = await get_object_bytes(drawing.measure_object_key)
             page_png = pdf_mod.render_page_png(data, sheet.sheet_index)
             image_png = pdf_mod.crop_title_block_png(page_png)
 

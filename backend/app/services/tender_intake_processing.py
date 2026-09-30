@@ -183,7 +183,10 @@ async def persist_proposal(
     metadata = dict(proposal.metadata)
     if proposal.doc_class == DocClass.DRAWING.value:
         if doc.ext == "dwg":
-            flags += [f for f in (Flag.CONVERT_TO_DXF.value, Flag.NOT_MEASURABLE.value) if f not in flags]
+            # Measurable through the converter sandbox; only flag it for a
+            # manual conversion when that is switched off.
+            if get_settings().dwg_conversion_enabled is False:
+                flags += [f for f in (Flag.CONVERT_TO_DXF.value, Flag.NOT_MEASURABLE.value) if f not in flags]
         elif content.is_raster or doc.ext in _IMAGE_EXTS:
             if Flag.NOT_MEASURABLE.value not in flags:
                 flags.append(Flag.NOT_MEASURABLE.value)

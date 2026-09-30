@@ -77,10 +77,12 @@ def mock_model(monkeypatch, postgres_container):
 
 @pytest.fixture
 def celery_calls(monkeypatch, postgres_container):
+    from app.workers.tasks.dwg import convert_dwg
     from app.workers.tasks.takeoff import index_sheets
     from app.workers.tasks.tender_intake import rerun_document
 
-    calls: dict[str, list] = {"ingest": [], "rerun": []}
+    calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": []}
+    monkeypatch.setattr(convert_dwg, "apply_async", lambda args=None, countdown=0, **kw: calls["convert"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(index_sheets, "apply_async", lambda args=None, countdown=0, **kw: calls["ingest"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(rerun_document, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
     return calls
@@ -291,19 +293,46 @@ async def test_explicit_confirm_of_the_ones_bulk_skips_and_double_confirm_is_ref
             await svc.confirm_document(s, lead, docs[name].id)
 
 
-async def test_dwg_is_stored_and_flagged_not_routed_to_a_drawing(rls_session, fake_s3, mock_model, celery_calls):
+async def test_dwg_is_routed_to_a_drawing_and_sent_to_the_converter_not_the_dxf_pipeline(rls_session, fake_s3, mock_model, celery_calls):
     tenant_id, project_id = await _seed(rls_session)
     est = _ctx(frozenset({"estimator"}), tenant_id=tenant_id)
     await set_rls_context(rls_session, est)
     await svc.create_package(rls_session, est, project_id, [("Site_Plan.dwg", b"AC1027" + b"\x00" * 64)])
     await _process_all(rls_session, est)
     doc = (await _by_name(rls_session))["Site_Plan.dwg"]
-    assert doc.doc_class == "drawing" and {"convert_to_dxf", "not_measurable"} <= set(doc.flags)
+    # Convertible, so no manual-conversion flags (they only appear when DWG_CONVERSION_ENABLED=false).
+    assert doc.doc_class == "drawing" and not {"convert_to_dxf", "not_measurable"} & set(doc.flags)
     lead = _ctx(frozenset({"lead_estimator"}), tenant_id=tenant_id)
     await set_rls_context(rls_session, lead)
     routed = await svc.confirm_document(rls_session, lead, doc.id)
-    assert routed.routed_kind == "convert_dwg"
-    assert (await rls_session.execute(select(Drawing))).scalars().all() == [] and celery_calls["ingest"] == []
+    assert (routed.status, routed.routed_kind) == ("routed", "drawing")
+    assert routed.routed_ref["kind"] == "dwg" and routed.routed_ref["ingest_started"] is True
+    drawing = (await rls_session.execute(select(Drawing))).scalar_one()
+    assert (drawing.kind, drawing.original_filename, drawing.status) == ("dwg", "Site_Plan.dwg", "queued")
+    assert len(celery_calls["convert"]) == 1 and celery_calls["ingest"] == []
+    assert celery_calls["convert"][0][0][0] == str(drawing.id)
+
+
+async def test_dwg_with_conversion_switched_off_is_flagged_and_parked_needs_conversion(rls_session, fake_s3, mock_model, celery_calls, monkeypatch):
+    from app.core.config import get_settings
+
+    tenant_id, project_id = await _seed(rls_session)
+    real = get_settings()
+    off = real.model_copy(update={"dwg_conversion_enabled": False})
+    monkeypatch.setattr(processing, "get_settings", lambda: off)
+    monkeypatch.setattr("app.services.takeoff.get_settings", lambda: off)
+    est = _ctx(frozenset({"estimator"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, est)
+    await svc.create_package(rls_session, est, project_id, [("Site_Plan.dwg", b"AC1027" + b"\x00" * 64)])
+    await _process_all(rls_session, est)
+    doc = (await _by_name(rls_session))["Site_Plan.dwg"]
+    assert {"convert_to_dxf", "not_measurable"} <= set(doc.flags)
+    lead = _ctx(frozenset({"lead_estimator"}), tenant_id=tenant_id)
+    await set_rls_context(rls_session, lead)
+    await svc.confirm_document(rls_session, lead, doc.id)
+    drawing = (await rls_session.execute(select(Drawing))).scalar_one()
+    assert drawing.status == "needs_conversion" and drawing.conversion_reason == "disabled"
+    assert celery_calls["convert"] == [] and celery_calls["ingest"] == []
 
 
 async def test_reclassify_edit_exclude_rerun_and_disabled_class(ingested, celery_calls):
