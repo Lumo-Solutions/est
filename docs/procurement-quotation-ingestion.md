@@ -122,7 +122,7 @@ image via `app.takeoff.pdf.render_page_png`, reused from Module B), a
 photo/scan, a non-template spreadsheet (cell text dumped via
 `dump_workbook_text`), or CSV. Calls the same `extract_json` guided-JSON
 primitive Module B's title-block extraction uses
-(`app/integrations/vllm.py`), constrained to
+(`app/ai/`, via `app.ai.compat.extract_json`), constrained to
 `ai-service/schemas/quotation_extraction.schema.json`.
 
 That schema has **no field for a BOQ line item id, an action, or a

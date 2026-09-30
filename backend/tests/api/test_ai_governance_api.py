@@ -146,7 +146,6 @@ async def test_gateway_blocked_then_allowed_then_cached_and_visible_to_admin(aut
 
 async def test_estimator_writes_but_cannot_read_ai_calls_rls(authed_client, app_engine):
     import app.db.session as dbs
-    from app.db.rls import set_rls_context
 
     dbs.get_worker_engine.cache_clear()
     md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))

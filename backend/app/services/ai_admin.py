@@ -16,7 +16,14 @@ from app.core.enums import AuditAction
 from app.core.errors import NotFoundError
 from app.models.ai import AiCall, TenantAiSettings
 from app.models.tenancy import Project
-from app.schemas.ai import AiCallOut, AiSettingsOut, AiStatusOut, AiUsageOut, AiUsageRow, ProjectAiOverrideOut
+from app.schemas.ai import (
+    AiCallOut,
+    AiSettingsOut,
+    AiStatusOut,
+    AiUsageOut,
+    AiUsageRow,
+    ProjectAiOverrideOut,
+)
 from app.services import audit
 
 

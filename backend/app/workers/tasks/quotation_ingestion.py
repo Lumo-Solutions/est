@@ -37,7 +37,9 @@ from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.errors import AIError
 from app.core.config import Settings, get_settings
+from app.core.logging import get_logger
 from app.core.context import RequestContext
 from app.core.enums import (
     AttachmentSafetyStatus,
@@ -69,13 +71,15 @@ from app.procurement.pricing_sheet_parser import (
     looks_like_our_pricing_sheet,
     parse_pricing_sheet,
 )
-from app.procurement.quotation_extraction import extract_quotation
+from app.procurement.quotation_extraction import QuotationExtractionResult, extract_quotation
 from app.procurement.quotation_matching import MatchCandidate, match_line_item
 from app.services import audit
 from app.services.procurement import list_package_boq_items
 from app.takeoff.pdf import render_page_png
 from app.workers.base import build_worker_context, run_async, with_worker_session
 from app.workers.celery_app import celery_app
+
+logger = get_logger(__name__)
 
 _SYSTEM_TENANT_PLACEHOLDER = "00000000-0000-0000-0000-000000000000"
 
@@ -482,6 +486,20 @@ def process_inbound_email_task(self, inbound_email_id: str, tenant_id: str) -> N
 # ---------------------------------------------------------------------------
 
 
+async def _run_quotation_extraction(extraction_method: str, data: bytes, attachment) -> tuple[QuotationExtractionResult, str]:
+    if extraction_method == QuotationExtractionMethod.VLM_PDF.value:
+        page_png = render_page_png(data, 0)
+        return await extract_quotation(candidate_text="", image_bytes=page_png, image_mime="image/png", page_number=1, page_count=1), ""
+    if extraction_method == QuotationExtractionMethod.VLM_IMAGE.value:
+        mime = "image/png" if attachment.content_type_sniffed == "png" else "image/jpeg"
+        return await extract_quotation(candidate_text="", image_bytes=data, image_mime=mime), ""
+    if extraction_method == QuotationExtractionMethod.VLM_XLSX_OTHER.value:
+        text = dump_workbook_text(data)
+        return await extract_quotation(candidate_text=text, image_bytes=None), text
+    text = data.decode("utf-8", errors="replace")
+    return await extract_quotation(candidate_text=text, image_bytes=None), text
+
+
 async def _extract_quotation_body(session: AsyncSession, attachment_id: str, extraction_method: str) -> None:
     settings = get_settings()
     attachment = (await session.execute(select(QuotationAttachment).where(QuotationAttachment.id == UUID(attachment_id)))).scalar_one()
@@ -493,20 +511,13 @@ async def _extract_quotation_body(session: AsyncSession, attachment_id: str, ext
 
     data = await get_object_bytes(attachment.raw_object_key, bucket=settings.s3_bucket_procurement)
 
-    if extraction_method == QuotationExtractionMethod.VLM_PDF.value:
-        source_text = ""
-        page_png = render_page_png(data, 0)
-        result = await extract_quotation(candidate_text=source_text, image_bytes=page_png, image_mime="image/png", page_number=1, page_count=1)
-    elif extraction_method == QuotationExtractionMethod.VLM_IMAGE.value:
-        source_text = ""
-        mime = "image/png" if attachment.content_type_sniffed == "png" else "image/jpeg"
-        result = await extract_quotation(candidate_text=source_text, image_bytes=data, image_mime=mime)
-    elif extraction_method == QuotationExtractionMethod.VLM_XLSX_OTHER.value:
-        source_text = dump_workbook_text(data)
-        result = await extract_quotation(candidate_text=source_text, image_bytes=None)
-    else:
-        source_text = data.decode("utf-8", errors="replace")
-        result = await extract_quotation(candidate_text=source_text, image_bytes=None)
+    try:
+        result, source_text = await _run_quotation_extraction(extraction_method, data, attachment)
+    except AIError as exc:
+        # AI not configured / not allowed / over budget / provider down: the quotation
+        # lands as extraction_empty so an estimator enters it by hand -- never a crash.
+        logger.warning("quotation extraction: AI unavailable for attachment %s: %s", attachment.id, exc)
+        result, source_text = QuotationExtractionResult(), ""
 
     status = QuotationStatus.PROPOSED.value if result.line_items else QuotationStatus.EXTRACTION_EMPTY.value
     quotation = await _create_quotation_version(

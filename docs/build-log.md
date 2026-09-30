@@ -545,3 +545,12 @@ Both are Revit-exported architectural plans (layers `A-WALL`, `A-DOOR`, `I-FURN`
 - The converter is single-instance and serial; several large DWGs queue behind each other (concurrency is 1 by design).
 - Air-gapped hosts still need a one-time image transfer (or an apt mirror) for the Ubuntu runtime libraries; documented in deploy-deltas.
 - No re-conversion when the converter is upgraded (existing derived DXFs keep their recorded version).
+
+## External AI provider (feat/ai-provider)
+
+Brief: `docs/ai-provider-brief.md`; plan: `docs/ai-plan.md`; reference: `docs/ai-provider.md`; resume log: `docs/ai/log.md`.
+
+**Decision recorded:** the owner knowingly and temporarily reverses SRS §1.1 (no external AI APIs) until a GPU server runs the in-house model. Off by default, reversible by configuration.
+
+**Phase 1 (provider layer).** One `AIProvider` interface (`classify`, `extract_structured`, `vision_extract`, `match_rank`, `embed`) with `local_vllm` (default), `anthropic` (Messages API, forced tool call for schema output, image/PDF blocks), `openai_compatible` and `mock`. `AIGateway` is the only entry point: provider-configured check, tenant switch and project opt-out, cache, per-tenant rate limit, monthly/project budget hard stops, retry with backoff, and an append-only `ai_calls` row for every call (including blocked/cached/failed) written in its own transaction so it survives a caller's rollback. The four existing vLLM callers (intake classifier, title block, scale hint, C2 quotation extraction) were ported through `app.ai.compat.extract_json`, which keeps the old call shape; `app/integrations/vllm.py` is gone. Callers that had no fallback (title block, scale hint, quotation extraction) now degrade on any `AIError` instead of failing the job.
+Tests: 20 unit tests (`test_ai_gateway.py`: request shapes for both external providers via `httpx.MockTransport`, retries, schema enforcement, governance, cache, budgets, rate limit, injection) and 5 API/integration tests against Postgres (`test_ai_governance_api.py`: switch roles and audit, project override, RLS on `ai_calls`/`ai_cache`, blocked -> allowed -> cached, budget stop). Full unit suite: 527 passed.

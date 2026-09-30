@@ -5,7 +5,7 @@ When resuming, read this and continue from the first unchecked step.
 
 - [x] Brief committed (9fb673c); feat/dwg-conversion already merged
 - [x] docs/ai-plan.md written
-- [ ] Phase 1 provider layer
+- [x] Phase 1 provider layer (backend done: gateway, providers, governance, admin API, tests; admin UI pending)
 - [ ] Phase 2 intake + reading
 - [ ] Phase 3 drawing<->BOQ verification
 - [ ] Phase 4 pricing assistant
