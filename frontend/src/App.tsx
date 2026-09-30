@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
@@ -52,6 +52,11 @@ const queryClient = new QueryClient({
 // One placeholder route per screen listed in
 // docs/preconstruction-build-brief.md's Phase 8, wired up for real as each
 // sub-phase (8b-8f) lands.
+function DrawingsRedirect() {
+  const { projectId } = useParams()
+  return <Navigate to={`/projects/${projectId}`} replace />
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -70,6 +75,8 @@ function AppRoutes() {
             project-prefixed URL didn't reflect what it actually showed. */}
         <Route path="/inbox" element={<QuarantineQueuePage />} />
         <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+        {/* The Drawings nav link: the drawings now live in the project page's document tree. */}
+        <Route path="/projects/:projectId/drawings" element={<DrawingsRedirect />} />
         <Route path="/projects/:projectId/drawings/:drawingId" element={<SheetIndexPage />} />
         <Route
           path="/projects/:projectId/drawings/:drawingId/sheets/:sheetIndex"

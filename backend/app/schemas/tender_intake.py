@@ -65,6 +65,8 @@ class ProjectDocumentOut(ORMModel):
     supersedes_id: UUID | None
     routed_kind: str | None
     routed_ref: dict
+    classified_by: str | None = None
+    auto_accepted: bool = False
     confirmed_by: UUID | None
     confirmed_at: datetime | None
     created_at: datetime
@@ -84,7 +86,19 @@ class DocumentPage(BaseModel):
 class ReclassifyIn(BaseModel):
     doc_class: str
     sub_type: str | None = None
+    drawing_type: str | None = None
     note: str | None = None
+    # One-click "confirm or change": also routes the document under the new class (routed documents always re-route).
+    confirm: bool = False
+
+
+class BulkReclassifyIn(BaseModel):
+    document_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    doc_class: str
+    sub_type: str | None = None
+    drawing_type: str | None = None
+    note: str | None = None
+    confirm: bool = True
 
 
 class EditMetadataIn(BaseModel):
@@ -165,3 +179,69 @@ class TenderClassUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=128)
     enabled: bool | None = None
     sort_order: int | None = None
+
+
+# ------------------------------------------------------------------ the document tree (the project page)
+class TreeItem(BaseModel):
+    id: UUID
+    package_id: UUID
+    name: str
+    path: str | None
+    ext: str
+    size_bytes: int
+    doc_class: str | None
+    discipline: str | None
+    drawing_type: str | None
+    unit_type: str | None
+    document_number: str | None
+    title: str | None
+    revision: str | None
+    sheet_number: str | None
+    scale: str | None
+    confidence: float | None
+    status: str
+    # queued | reading | classified | extracting | ready | needs_check | failed | excluded
+    display_status: str
+    status_reason: str | None
+    classified_by: str | None
+    # Who decided the class: ai (auto-accepted), rules, or user (confirmed or changed by a person).
+    decided_by: str | None
+    auto_accepted: bool
+    flags: list[str]
+    routed_kind: str | None
+    drawing_id: UUID | None
+    evidence_quote: str | None
+    evidence_page: int | None
+    ai_note: str | None
+    supersedes: list[str] = []
+    created_at: datetime
+
+
+class TreeSummary(BaseModel):
+    total: int
+    by_display_status: dict[str, int]
+    by_class: dict[str, int]
+    needs_check: int
+    in_progress: int
+    drawings_total: int
+    drawings_ready: int
+    boq_documents: list[UUID]
+    addenda: int
+    packages_processing: int
+    auto_accept_min: float
+    ai_available: bool
+    ai_message: str | None = None
+
+
+class TreeOut(BaseModel):
+    items: list[TreeItem]
+    summary: TreeSummary
+
+
+class IntakeSettingsIn(BaseModel):
+    auto_accept_min: float = Field(ge=0.5, le=1.0)
+
+
+class IntakeSettingsOut(BaseModel):
+    auto_accept_min: float
+    default_auto_accept_min: float = 0.85

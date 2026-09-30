@@ -24,7 +24,7 @@ from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.models.ai import AiCall
 from app.models.boq import BoqLineItem, BoqTolerance
-from app.models.takeoff import DrawingAnnotation, DrawingMeasurement, DrawingSheet
+from app.models.takeoff import DrawingAnnotation, DrawingMeasurement, DrawingSheet, live_drawing_ids
 from app.models.taxonomy import TradeNode
 from app.models.verification import VerificationLine, VerificationMapping, VerificationRun
 from app.services import audit
@@ -103,10 +103,10 @@ def _interp_from_json(d: dict | None, line: LineInput) -> Interpretation:
 async def load_evidence(session: AsyncSession, project_id: UUID) -> list[Evidence]:
     trades = {t.id: t.name for t in (await session.execute(select(TradeNode))).scalars().all()}
     sheets = {
-        s.id: s for s in (await session.execute(select(DrawingSheet).where(DrawingSheet.project_id == project_id))).scalars().all()
+        s.id: s for s in (await session.execute(select(DrawingSheet).where(DrawingSheet.project_id == project_id, DrawingSheet.drawing_id.in_(live_drawing_ids(project_id))))).scalars().all()
     }
     out: list[Evidence] = []
-    ms = (await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.project_id == project_id))).scalars().all()
+    ms = (await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.project_id == project_id, DrawingMeasurement.drawing_id.in_(live_drawing_ids(project_id))))).scalars().all()
     groups: dict[tuple, list[DrawingMeasurement]] = {}
     for m in ms:
         layer = (m.extractor_metadata or {}).get("layer") if m.extractor_metadata else None
@@ -152,7 +152,7 @@ async def load_evidence(session: AsyncSession, project_id: UUID) -> list[Evidenc
                 member_values=tuple(float(m.effective_value) for m in members),
             )
         )
-    anns = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.project_id == project_id))).scalars().all()
+    anns = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.project_id == project_id, DrawingAnnotation.sheet_id.in_(select(DrawingSheet.id).where(DrawingSheet.drawing_id.in_(live_drawing_ids(project_id))))))).scalars().all()
     for a in anns:
         if a.value is None:
             continue
@@ -339,7 +339,7 @@ async def run_verification(
     await progress("computing", total, total)
     results, missing = compute_all(lines, interps, ranked, evidence, decisions, ai_ranked)
 
-    sheets = (await session.execute(select(DrawingSheet.annotations_status).where(DrawingSheet.project_id == project_id))).scalars().all()
+    sheets = (await session.execute(select(DrawingSheet.annotations_status).where(DrawingSheet.project_id == project_id, DrawingSheet.drawing_id.in_(live_drawing_ids(project_id))))).scalars().all()
     if sheets and not any(s == "done" for s in sheets):
         warnings.append("No drawing annotations have been read yet, so quantities can only come from measured geometry. Use 'Read annotations' on the drawings first for better coverage.")
     elif sheets and sum(1 for s in sheets if s != "done") > 0:

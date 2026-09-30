@@ -20,7 +20,7 @@ function Where() {
 }
 
 describe('ProjectsListPage', () => {
-  it('lands on the tender-documents tab of the new project after creating it', async () => {
+  it('lands on the new project page (the drop zone is right there) after creating it', async () => {
     createMutate.mockImplementation((_body: unknown, opts: { onSuccess: (p: { id: string }) => void }) => opts.onSuccess({ id: 'new-1' }))
     render(
       <MemoryRouter initialEntries={['/projects']}>
@@ -34,6 +34,6 @@ describe('ProjectsListPage', () => {
     fireEvent.change(screen.getByLabelText(/Code/), { target: { value: 'P-1' } })
     fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'Tower' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
-    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/projects/new-1?tab=tender-documents'))
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/projects/new-1'))
   })
 })

@@ -268,6 +268,14 @@ async def upload_drawing(
         select(Drawing).where(Drawing.project_id == project_id, Drawing.sha256 == sha256)
     )
     if (row := existing.scalar_one_or_none()) is not None:
+        if row.archived_at is not None:
+            # Uploaded again by hand after intake archived it: it is a drawing again.
+            row.archived_at, row.archived_reason = None, None
+            await session.flush()
+            await audit.record(
+                session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=row.id, project_id=project_id,
+                payload={"event": "restore_from_archive", "source": "upload"},
+            )
         return row
 
     drawing = Drawing(
@@ -351,7 +359,7 @@ async def get_drawing(session: AsyncSession, drawing_id: UUID) -> Drawing:
 
 async def list_drawings(session: AsyncSession, project_id: UUID) -> list[Drawing]:
     result = await session.execute(
-        select(Drawing).where(Drawing.project_id == project_id).order_by(Drawing.created_at)
+        select(Drawing).where(Drawing.project_id == project_id, Drawing.archived_at.is_(None)).order_by(Drawing.created_at)
     )
     return list(result.scalars().all())
 

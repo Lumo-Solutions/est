@@ -84,7 +84,7 @@ export function ProjectsListPage() {
         <NewProjectForm
           onDone={(id) => {
             setShowForm(false)
-            navigate(`/projects/${id}?tab=tender-documents`)
+            navigate(`/projects/${id}`)
           }}
         />
       )}

@@ -82,6 +82,51 @@ describe('UploadPanel resumable upload', () => {
   })
 })
 
+describe('UploadPanel hero variant', () => {
+  beforeEach(() => {
+    createAsync.mockReset()
+    addAsync.mockReset()
+  })
+
+  it('shows the big drop target with choose buttons and folds the detail fields away', () => {
+    render(<UploadPanel projectId="p1" onUploaded={vi.fn()} variant="hero" />)
+    expect(screen.getByRole('heading', { name: 'Drop your tender folder or zip here' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose folder' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose files' })).toBeInTheDocument()
+    const details = screen.getByText('Upload details').closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details).toContainElement(screen.getByLabelText('Label'))
+  })
+
+  it('the choose buttons open the drop zone inputs', () => {
+    render(<UploadPanel projectId="p1" onUploaded={vi.fn()} variant="hero" />)
+    const fileClick = vi.spyOn(screen.getByTestId('tender-file-input') as HTMLInputElement, 'click')
+    const folderClick = vi.spyOn(screen.getByTestId('tender-folder-input') as HTMLInputElement, 'click')
+    fireEvent.click(screen.getByRole('button', { name: 'Choose files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+    expect(fileClick).toHaveBeenCalledTimes(1)
+    expect(folderClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('uploads in batches exactly like the compact panel', async () => {
+    createAsync.mockResolvedValue({ package_id: 'pk1' })
+    addAsync.mockResolvedValue({ package_id: 'pk1' })
+    const onUploaded = vi.fn()
+    render(<UploadPanel projectId="p1" onUploaded={onUploaded} variant="hero" />)
+    chooseFiles(Array.from({ length: 25 }, (_, i) => pdf(`f${i}.pdf`)))
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 25 files' }))
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledWith('pk1'))
+    expect(createAsync.mock.calls[0][0].files).toHaveLength(20)
+    expect(addAsync.mock.calls[0][0].files).toHaveLength(5)
+  })
+
+  it('the compact variant keeps the fields visible', () => {
+    render(<UploadPanel projectId="p1" onUploaded={vi.fn()} />)
+    expect(screen.getByLabelText('Label')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Choose folder' })).not.toBeInTheDocument()
+  })
+})
+
 describe('tender upload FormData', () => {
   it('carries the relative path as the multipart filename, falling back to the file name', async () => {
     const post = vi.fn().mockResolvedValue({ package_id: 'pk1' })

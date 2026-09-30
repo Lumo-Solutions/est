@@ -1,5 +1,7 @@
 # Tender intake and approvals inbox: report
 
+> **Part 2 has since been reworked** (one project page, the AI reads every file first, confident answers are routed automatically, the rules are hints and the fallback): see `docs/ai-first-intake/report.md`. This report describes the first version (rules first, a "Tender documents" tab, confirm everything by hand).
+
 Brief: `docs/tender-intake-brief.md`. Plan: `docs/tender-intake-plan.md` (with an "as built" section). Log: `docs/tender-intake/log.md`.
 Branches: `fix/approvals-inbox` (Part 1, merged earlier) and `feat/tender-intake` (Part 2).
 

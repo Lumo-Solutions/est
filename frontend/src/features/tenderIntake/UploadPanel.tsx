@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card, SectionHeading } from '../../components/Card'
 import { DropZone, type PathedFile } from '../../components/DropZone'
@@ -8,7 +8,26 @@ import { MAX_FILE_BYTES, formatBytes, splitIntoBatches, todayIso } from './lib'
 
 // Upload in batches (<= 20 files / 200 MB per request, matching the backend
 // limits). The first batch creates the package; the rest are added to it.
-export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUploaded: (packageId: string) => void }) {
+//
+// `hero` is the empty-project look: one big drop target with Choose folder / Choose files buttons and
+// the label, ref and date fields folded away under "Upload details". `compact` is the plain card.
+export function UploadPanel({
+  projectId,
+  onUploaded,
+  onUploadStart,
+  variant = 'compact',
+}: {
+  projectId: string
+  onUploaded: (packageId: string) => void
+  /** Fired when an upload begins, so a parent can keep this panel on screen until `onUploaded` or until the user leaves. */
+  onUploadStart?: () => void
+  variant?: 'hero' | 'compact'
+}) {
+  const hero = variant === 'hero'
+  const dropRef = useRef<HTMLDivElement>(null)
+  // The hero buttons drive the DropZone's own (visually hidden) inputs, so its batching and folder
+  // handling are reused as they are.
+  const openInput = (testId: string) => dropRef.current?.querySelector<HTMLInputElement>(`[data-testid="${testId}"]`)?.click()
   const [label, setLabel] = useState(`Transmittal ${todayIso()}`)
   const [ref, setRef] = useState('')
   const [received, setReceived] = useState(todayIso())
@@ -34,6 +53,7 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
 
   const upload = async () => {
     setBusy(true)
+    onUploadStart?.()
     setError(null)
     const batches = splitIntoBatches(files)
     const total = files.length + uploadedSoFar
@@ -75,17 +95,16 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
     }
   }
 
-  return (
-    <Card className="mt-6">
-      <SectionHeading>Upload tender documents</SectionHeading>
-      <div className="grid gap-4 md:grid-cols-3">
-        <TextField label="Label" value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} />
-        <TextField label="Transmittal ref (optional)" value={ref} onChange={(e) => setRef(e.target.value)} disabled={busy} />
-        <TextField label="Received date" type="date" value={received} onChange={(e) => setReceived(e.target.value)} disabled={busy} />
-      </div>
-      <div className="mt-4">
-        <DropZone label="Tender files" onFiles={onFiles} disabled={busy} />
-      </div>
+  const fields = (
+    <div className="grid gap-4 md:grid-cols-3">
+      <TextField label="Label" value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} />
+      <TextField label="Transmittal ref (optional)" value={ref} onChange={(e) => setRef(e.target.value)} disabled={busy} />
+      <TextField label="Received date" type="date" value={received} onChange={(e) => setReceived(e.target.value)} disabled={busy} />
+    </div>
+  )
+
+  const queue = (
+    <>
       {rejected.length > 0 && (
         <ul role="alert" className="mt-3 space-y-1 text-sm text-danger">
           {rejected.map((m) => (
@@ -123,6 +142,56 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
           {error}
         </p>
       )}
+    </>
+  )
+
+  if (hero) {
+    return (
+      <div className="mt-6">
+        <div className="relative min-h-[16rem] rounded-card bg-brand-subtle">
+          {/* The DropZone fills the hero so a drop anywhere lands; its own inputs, labels and help text
+              stay in the DOM for keyboard and screen-reader users but are visually hidden. */}
+          <div
+            ref={dropRef}
+            className="absolute inset-0 [&>div]:h-full [&>div]:!border-brand [&>div]:!p-0 [&_input[type=file]]:sr-only [&_label]:sr-only [&_p[id]]:sr-only"
+          >
+            <DropZone label="Tender files" onFiles={onFiles} disabled={busy} />
+          </div>
+          <div className="pointer-events-none relative flex min-h-[16rem] flex-col items-center justify-center p-8 text-center">
+            <h2 className="text-xl font-semibold text-ink">Drop your tender folder or zip here</h2>
+            <p className="mx-auto mt-2 max-w-xl text-base text-ink-2">
+              Every file is read, classified and sorted for you. Anything uncertain is listed for a quick check.
+            </p>
+            <div className="pointer-events-auto mt-4 flex flex-wrap justify-center gap-3">
+              <Button disabled={busy} onClick={() => openInput('tender-folder-input')}>
+                Choose folder
+              </Button>
+              <Button variant="secondary" disabled={busy} onClick={() => openInput('tender-file-input')}>
+                Choose files
+              </Button>
+            </div>
+            <p className="mt-3 text-xs text-ink-2">PDF, DXF, DWG, XLSX, DOCX, images or a .zip; up to 60 MB per file</p>
+          </div>
+        </div>
+        <details className="mt-3">
+          <summary className="cursor-pointer rounded text-sm font-medium text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1">
+            Upload details
+          </summary>
+          <div className="mt-3">{fields}</div>
+        </details>
+        {queue}
+      </div>
+    )
+  }
+
+  return (
+    <Card className="mt-6">
+      <SectionHeading>Upload tender documents</SectionHeading>
+      {fields}
+      <div className="mt-4">
+        <DropZone label="Tender files" onFiles={onFiles} disabled={busy} />
+      </div>
+      {queue}
     </Card>
   )
 }

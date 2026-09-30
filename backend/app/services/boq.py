@@ -25,7 +25,7 @@ from app.models.boq import (
     BoqLineItemReconciliation,
     BoqTolerance,
 )
-from app.models.takeoff import DrawingMeasurement
+from app.models.takeoff import Drawing, DrawingMeasurement, live_drawing_ids
 from app.schemas.boq import BoqLineItemCreate
 from app.services import audit
 from app.services.projects import assert_can_see_project
@@ -125,6 +125,7 @@ async def _linked_measurements(session: AsyncSession, item_id: UUID) -> list[Dra
         select(DrawingMeasurement)
         .join(BoqLineItemMeasurement, BoqLineItemMeasurement.measurement_id == DrawingMeasurement.id)
         .where(BoqLineItemMeasurement.boq_line_item_id == item_id)
+        .where(DrawingMeasurement.drawing_id.not_in(select(Drawing.id).where(Drawing.archived_at.is_not(None))))
     )
     return list(result.scalars().all())
 
@@ -433,7 +434,8 @@ async def list_unlinked_measurements(
     """
     linked_ids = select(BoqLineItemMeasurement.measurement_id)
     stmt = select(DrawingMeasurement).where(
-        DrawingMeasurement.project_id == project_id, DrawingMeasurement.id.not_in(linked_ids)
+        DrawingMeasurement.project_id == project_id, DrawingMeasurement.id.not_in(linked_ids),
+        DrawingMeasurement.drawing_id.in_(live_drawing_ids(project_id)),
     )
     if drawing_id is not None:
         stmt = stmt.where(DrawingMeasurement.drawing_id == drawing_id)

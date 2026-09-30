@@ -369,6 +369,31 @@ def _pdf_landscape() -> bytes:
     return buf.getvalue()
 
 
+def _pdf_storm_profile() -> bytes:
+    """A stormwater plan-and-profile sheet that someone filed under the BOQ folder. It carries a title block and
+    linework but no printed quantities, so it adds a drawing to the takeoff without changing what the BOQ
+    verification finds."""
+    from reportlab.lib.pagesizes import A1, landscape
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=landscape(A1), invariant=1)
+    c.setFont("Helvetica", 14)
+    lines = [
+        "DRAWING NO: C-102", "REV: A", "SCALE 1:500", "TITLE: STORM WATER DRAINAGE PLAN AND PROFILE",
+        "DISCIPLINE: STORM WATER DRAINAGE", "SHEET 2 OF 6",
+    ]
+    y = 2200
+    for ln in lines:
+        c.drawString(120, y, ln)
+        y -= 40
+    for i in range(24):  # profile linework so the sheet reads as a drawing
+        c.line(120, 900 + i * 12, 2000, 900 + i * 12 + (i % 4) * 6)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def _boq_xlsx() -> bytes:
     from openpyxl import Workbook
 
@@ -419,12 +444,34 @@ def build_pack() -> dict[str, bytes]:
             ["ADDENDUM No. 1", "The following amends the tender documents:", "Drawing C-101 is reissued at Revision B."]),
         f"{PACK_ROOT}/05 Contract/Conditions of Contract.pdf": _text_pdf(
             ["CONDITIONS OF CONTRACT", "PARTICULAR CONDITIONS", "Sub-Clause 1.1 Definitions"] + ["Clause text."] * 20),
+        # A drawing in the BOQ folder: the content decides, not the folder.
+        f"{PACK_ROOT}/02 BOQ/C-102 Storm Drainage Plan and Profile Rev A.pdf": _pdf_storm_profile(),
+        # Says nothing about what it is: the one file the AI is unsure of, which a person confirms.
+        f"{PACK_ROOT}/06 Correspondence/Site visit notes.pdf": _text_pdf(
+            ["Notes from the site visit", "Access is from the north gate.", "The laydown area is still to be confirmed."]),
     }
     return files
 
 
+# The designed outcome of dropping the pack with the mock provider (docs/ai-first-intake, walkthrough spec):
+# path -> (class, discipline, drawing type). "needs_check" lists the files the AI is not sure enough about to route.
+EXPECTED_TREE = {
+    "01 Drawings/C-101 Road and Drainage Plan Rev B.dxf": ("drawing", "roads_civil", "general_arrangement"),
+    "01 Drawings/L-201 Landscape Plan Rev A.pdf": ("drawing", "landscape", "general_arrangement"),
+    "02 BOQ/C-102 Storm Drainage Plan and Profile Rev A.pdf": ("drawing", "stormwater", "plan_profile"),
+    "02 BOQ/BOQ Rev 0.xlsx": ("boq", None, None),
+    "02 BOQ/BOQ Rev 0 (print copy).pdf": ("boq", None, None),
+    "03 Specifications/Particular Specification.pdf": ("specification", None, None),
+    "04 Addenda/Addendum No 1.pdf": ("addendum", None, None),
+    "05 Contract/Conditions of Contract.pdf": ("contract", None, None),
+}
+EXPECTED_NEEDS_CHECK = {"06 Correspondence/Site visit notes.pdf": "correspondence"}  # the class the person gives it
+
+
 EXPECTED_CLASSIFICATION = {
     "C-101 Road and Drainage Plan Rev B.dxf": "drawing",
+    "C-102 Storm Drainage Plan and Profile Rev A.pdf": "drawing",
+    "Site visit notes.pdf": "other",  # the AI cannot tell (low confidence); a person files it as correspondence
     "L-201 Landscape Plan Rev A.pdf": "drawing",
     "BOQ Rev 0.xlsx": "boq",
     "BOQ Rev 0 (print copy).pdf": "boq",

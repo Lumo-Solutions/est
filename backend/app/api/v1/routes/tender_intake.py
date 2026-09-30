@@ -17,6 +17,10 @@ from app.schemas.tender_intake import (
     AddendumOut,
     BoqPrefillOut,
     BulkConfirmIn,
+    BulkReclassifyIn,
+    IntakeSettingsIn,
+    IntakeSettingsOut,
+    TreeOut,
     BulkConfirmOut,
     ClassificationOut,
     DocumentPage,
@@ -30,7 +34,9 @@ from app.schemas.tender_intake import (
     TenderPackageAccepted,
     TenderPackageOut,
 )
+from app.services import ai_admin
 from app.services import tender_intake as intake_service
+from app.services import tender_intake_tree
 
 router = APIRouter(tags=["tender-intake"])
 
@@ -210,7 +216,9 @@ async def reclassify_endpoint(
     document_id: UUID, data: ReclassifyIn,
     ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session),
 ) -> ProjectDocumentOut:
-    doc = await intake_service.reclassify(session, ctx, document_id, data.doc_class, data.sub_type, data.note)
+    doc = await intake_service.reclassify(
+        session, ctx, document_id, data.doc_class, data.sub_type, data.note, drawing_type=data.drawing_type, confirm=data.confirm
+    )
     return ProjectDocumentOut.model_validate(doc)
 
 
@@ -249,6 +257,41 @@ async def bulk_confirm_endpoint(
     return await intake_service.bulk_confirm(
         session, ctx, project_id, package_id=data.package_id, document_ids=data.document_ids, min_confidence=data.min_confidence
     )
+
+
+@router.post("/projects/{project_id}/tender-documents/bulk-reclassify", response_model=BulkConfirmOut)
+async def bulk_reclassify_endpoint(
+    project_id: UUID, data: BulkReclassifyIn,
+    ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session),
+) -> BulkConfirmOut:
+    return await intake_service.bulk_reclassify(
+        session, ctx, project_id, data.document_ids, data.doc_class, data.sub_type, data.drawing_type, data.note, data.confirm
+    )
+
+
+@router.get("/projects/{project_id}/tender-documents/tree", response_model=TreeOut)
+async def document_tree_endpoint(
+    project_id: UUID,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> TreeOut:
+    status = await ai_admin.get_status(session, ctx, settings)
+    return await tender_intake_tree.build_tree(session, project_id, ai_available=status.available, ai_message=status.message)
+
+
+@router.get("/tender-intake/settings", response_model=IntakeSettingsOut)
+async def intake_settings_endpoint(ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)) -> IntakeSettingsOut:
+    return IntakeSettingsOut(auto_accept_min=await intake_service.get_auto_accept_min(session))
+
+
+@router.put("/admin/intake-settings", response_model=IntakeSettingsOut)
+async def set_intake_settings_endpoint(
+    data: IntakeSettingsIn,
+    ctx: RequestContext = Depends(require_roles(*CLASS_ADMIN_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> IntakeSettingsOut:
+    return IntakeSettingsOut(auto_accept_min=await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min))
 
 
 @router.get("/tender-classes", response_model=list[TenderClassOut])

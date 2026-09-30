@@ -23,6 +23,8 @@ const EXPECTED_CLASSIFICATION: Record<string, string> = {
   'Particular Specification.pdf': 'specification',
   'Addendum No 1.pdf': 'addendum',
   'Conditions of Contract.pdf': 'contract',
+  'C-102 Storm Drainage Plan and Profile Rev A.pdf': 'drawing', // filed under the BOQ folder: the content decides
+  'Site visit notes.pdf': 'other', // the AI cannot tell; a person files it
 }
 // item_no -> the class the designed pack must produce (backend/app/demo/ai_demo.py::EXPECTED_CLASSES)
 const EXPECTED_CLASSES: Record<string, string> = {
@@ -113,30 +115,29 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     const status = (await (await lead.request.get('/api/v1/ai/status')).json()) as { provider: string; external: boolean; available: boolean }
     expect(status).toMatchObject({ provider: 'mock', external: false, available: true })
 
-    // ---- 1. create the project in the UI: it lands on the Tender documents tab with the empty state
+    // ---- 1. create the project in the UI: it lands on the one project page with the empty state
     state.code = `AI-DEMO-E2E-${Date.now().toString(36).toUpperCase()}`
     await lead.goto('/')
     await lead.getByRole('button', { name: 'New project' }).click()
     await lead.getByLabel('Code').fill(state.code)
     await lead.getByLabel('Name').fill('Al Reem Package 3 (AI walkthrough)')
     await lead.getByRole('button', { name: 'Create project' }).click()
-    await expect(lead).toHaveURL(/\/projects\/[0-9a-f-]+\?tab=tender-documents/)
+    await expect(lead).toHaveURL(/\/projects\/[0-9a-f-]+$/)
     state.projectId = /projects\/([0-9a-f-]+)/.exec(lead.url())![1]
-    await expect(lead.getByRole('heading', { name: 'Drop the tender package here' })).toBeVisible()
+    await expect(lead.getByRole('heading', { name: 'Drop your tender folder or zip here' })).toBeVisible()
 
     // ---- 2. drop the whole FOLDER (webkitdirectory keeps the relative paths)
     await lead.getByTestId('tender-folder-input').setInputFiles(join(pack, PACK_ROOT))
-    await expect(lead.getByRole('list', { name: 'Files to upload' }).getByRole('listitem')).toHaveCount(7)
+    await expect(lead.getByRole('list', { name: 'Files to upload' }).getByRole('listitem')).toHaveCount(9)
     await expect(lead.getByRole('list', { name: 'Files to upload' })).toContainText('01 Drawings')
-    await lead.getByRole('button', { name: 'Upload 7 files' }).click()
-    await expect(lead.getByRole('status').filter({ hasText: 'Uploaded 7 of 7 files' })).toBeVisible({ timeout: 60_000 })
+    await lead.getByRole('button', { name: 'Upload 9 files' }).click()
 
-    // ---- 3. classification: rules first, the (mock) AI only where needed; the folder is kept as a signal
+    // ---- 3. classification: the (mock) AI reads every file; the folder is only a hint
     let docs: Doc[] = []
     await expect
       .poll(async () => {
         docs = await listDocs(lead, state.projectId)
-        return docs.length === 7 && docs.every((d) => !['received', 'processing'].includes(d.status))
+        return docs.length === 9 && docs.every((d) => !['received', 'processing'].includes(d.status))
       }, { timeout: 180_000, intervals: [2_000] })
       .toBe(true)
     for (const d of docs) {
@@ -144,19 +145,15 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     }
     expect(docs.find((d) => d.original_filename.startsWith('C-101'))?.archive_path).toContain('01 Drawings')
 
-    // ---- 4. confirm: drawings are routed to the takeoff pipeline
+    // ---- 4. the AI's confident answers were accepted and routed on their own; the one it was unsure of is filed by a person
     await lead.reload()
-    await lead.getByRole('button', { name: 'Confirm high-confidence' }).click()
-    await lead.getByRole('button', { name: 'Confirm all' }).click()
-    await expect(lead.getByRole('status').filter({ hasText: /Confirmed \d+, skipped \d+, failed 0/ })).toBeVisible({ timeout: 60_000 })
-    // the low-confidence landscape sheet is deliberately not bulk-confirmed: the estimator confirms it by hand
-    await lead.getByRole('button', { name: /^Confirm .*L-201 Landscape Plan Rev A\.pdf$/ }).click()
-    await expect
-      .poll(async () => (await listDocs(lead, state.projectId)).filter((d) => d.routed_kind === 'drawing').length, { timeout: 30_000 })
-      .toBe(2)
+    await expect(lead.getByRole('heading', { name: 'Needs your check' })).toBeVisible()
+    await lead.getByRole('button', { name: 'Change class of Site visit notes.pdf' }).first().click()
+    await lead.locator('li').filter({ hasText: 'Site visit notes.pdf' }).first().getByLabel('Class', { exact: true }).selectOption({ label: 'Correspondence' })
+    await expect(lead.getByRole('button', { name: 'Confirm Site visit notes.pdf' })).toHaveCount(0, { timeout: 30_000 })
     docs = await listDocs(lead, state.projectId)
     const drawingDocs = docs.filter((d) => d.routed_kind === 'drawing')
-    expect(drawingDocs).toHaveLength(2)
+    expect(drawingDocs).toHaveLength(3)
     for (const d of drawingDocs) {
       const drawingId = String(d.routed_ref.drawing_id)
       state.drawings.push(drawingId)
@@ -164,10 +161,9 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     }
 
     // ---- 5. the Excel BOQ opens pre-filled in the wizard; preview (dry run) then commit
-    await lead.goto(`/projects/${state.projectId}?tab=tender-documents`)
-    await lead.getByLabel('Search documents').fill('BOQ Rev 0.xlsx')
-    const boqRow = lead.getByRole('row', { name: /BOQ Rev 0\.xlsx/ }).first()
-    await boqRow.getByRole('link', { name: /Open .*BOQ Rev 0\.xlsx in BOQ import wizard/ }).click()
+    await lead.goto(`/projects/${state.projectId}`)
+    await lead.getByLabel('BOQ document').selectOption({ label: 'BOQ Rev 0.xlsx' })
+    await lead.getByRole('link', { name: 'Import BOQ' }).click()
     await expect(lead.getByRole('status').filter({ hasText: /Pre-filled from tender document/ })).toBeVisible({ timeout: 30_000 })
     await lead.getByRole('button', { name: 'Preview' }).click()
     await expect(lead.getByRole('button', { name: 'Commit' })).toBeEnabled({ timeout: 30_000 })
@@ -177,14 +173,14 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     expect(items.map((i) => i.item_no)).toEqual(expect.arrayContaining(['1', '1.1', '2.1', '5.3', '6.2']))
 
     // ---- 6. read the drawing annotations with the AI (per-sheet progress, links into the takeoff viewer)
-    await lead.goto(`/projects/${state.projectId}/drawings/${state.drawings[0]}`)
-    await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
-    await lead.goto(`/projects/${state.projectId}/drawings/${state.drawings[1]}`)
-    await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
+    for (const drawingId of state.drawings) {
+      await lead.goto(`/projects/${state.projectId}/drawings/${drawingId}`)
+      await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
+    }
     const summary = await pollJson<{ sheets: number; queued: number; done: number; annotations: number }>(
       lead, `/api/v1/projects/${state.projectId}/drawing-annotations/summary`, (v) => v.sheets > 0 && v.queued === 0 && v.annotations > 0, 'annotations read',
     )
-    expect(summary.done).toBeGreaterThanOrEqual(2)
+    expect(summary.done).toBeGreaterThanOrEqual(3)
     expect(summary.annotations).toBeGreaterThanOrEqual(10) // 7 on C-101 + 3 on L-201, all AI-read
 
     // ---- 7. verify the BOQ against the drawings
@@ -242,10 +238,11 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
 
     // ---- 10. the admin usage view shows this run's AI calls (mock: no cost)
     const md = await login(browser, 'md1', 'Md1Pass!')
-    const usage = (await (await md.request.get('/api/v1/admin/ai-usage')).json()) as { rows: { task: string; calls: number; cost_usd: number }[] }
+    const usage = (await (await md.request.get('/api/v1/admin/ai-usage')).json()) as { rows: { task: string; provider: string; calls: number; cost_usd: number }[] }
     const tasks = new Set(usage.rows.map((r) => r.task))
     for (const t of ['boq_interpret', 'evidence_rank', 'drawing_annotations']) expect(tasks.has(t), `AI usage row for ${t}`).toBe(true)
-    expect(usage.rows.every((r) => r.cost_usd === 0)).toBe(true)
+    // The month-to-date view may also hold real-provider spend from before this run; the mock rows cost nothing.
+    expect(usage.rows.filter((r) => r.provider === 'mock').every((r) => r.cost_usd === 0)).toBe(true)
     await md.context().close()
     await lead.context().close()
   })

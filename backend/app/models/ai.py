@@ -18,6 +18,8 @@ class TenantAiSettings(TenantEntity):
     __table_args__ = (UniqueConstraint("tenant_id", name="uq_tenant_ai_settings_tenant"),)
 
     external_ai_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Tender intake: AI classifications at or above this confidence are accepted and routed without a person.
+    intake_auto_accept_min: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False, server_default="0.850")
 
 
 class AiCall(TenantEntity):

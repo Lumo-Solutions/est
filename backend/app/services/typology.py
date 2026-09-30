@@ -17,7 +17,7 @@ from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.models.boq import BoqLineItem, BoqLineItemMeasurement
-from app.models.takeoff import DrawingEntity, DrawingMeasurement, DrawingSheet
+from app.models.takeoff import DrawingEntity, DrawingMeasurement, DrawingSheet, live_drawing_ids
 from app.models.typology import TypologyCluster, TypologyClusterInstance, TypologyVariantDelta
 from app.services import audit
 from app.services.projects import assert_can_see_project
@@ -130,7 +130,7 @@ async def detect_clusters(session: AsyncSession, ctx: RequestContext, project_id
     region + normalised geometry hash matched across sheets."""
     await assert_can_see_project(session, ctx, project_id)
     sheets = (
-        await session.execute(select(DrawingSheet).where(DrawingSheet.project_id == project_id))
+        await session.execute(select(DrawingSheet).where(DrawingSheet.project_id == project_id, DrawingSheet.drawing_id.in_(live_drawing_ids(project_id))))
     ).scalars().all()
     if not sheets:
         return []

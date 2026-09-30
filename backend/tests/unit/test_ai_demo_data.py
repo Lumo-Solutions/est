@@ -23,7 +23,7 @@ def test_dataset_sizes_and_tagging():
 
 def test_pack_is_deterministic_and_foldered():
     a, b = demo.build_pack(), demo.build_pack()
-    assert set(a) == set(b) and len(a) == 7
+    assert set(a) == set(b) and len(a) == 9
     assert all(p.startswith(demo.PACK_ROOT + "/") for p in a)
     assert any("/01 Drawings/" in p for p in a) and any("/02 BOQ/" in p for p in a)
     assert a[next(p for p in a if p.endswith("BOQ Rev 0.xlsx"))][:2] == b[next(p for p in b if p.endswith("BOQ Rev 0.xlsx"))][:2]

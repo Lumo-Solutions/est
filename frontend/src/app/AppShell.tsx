@@ -37,7 +37,7 @@ export interface NavItem {
   icon?: LucideIcon
   requiresRoles?: string[]
   // Match only the exact path. Needed on any item whose path is a prefix of
-  // its siblings' (Projects '/', a project's Overview) or it stays highlighted
+  // its siblings' (Projects '/', a project's page) or it stays highlighted
   // alongside them on every sub-page.
   end?: boolean
 }
@@ -50,7 +50,7 @@ export function filterVisibleNavItems(items: NavItem[], hasRole: (...roles: stri
 // real enforcement (see docs/preconstruction-build-brief.md Phase 8).
 function projectNavItems(projectId: string): NavItem[] {
   return [
-    { label: 'Overview', icon: ClipboardList, to: `/projects/${projectId}`, end: true },
+    { label: 'Project', icon: ClipboardList, to: `/projects/${projectId}`, end: true },
     { label: 'Drawings', icon: PencilRuler, to: `/projects/${projectId}/drawings` },
     { label: 'Typology', icon: Shapes, to: `/projects/${projectId}/typology` },
     { label: 'BOQ', icon: Table2, to: `/projects/${projectId}/boq` },

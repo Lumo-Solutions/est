@@ -7,6 +7,7 @@ import { Role } from '../../lib/roles'
 import type { AiCallStatus } from '../../types/api'
 import { AiStatusNotice } from '../ai/AiStatusNotice'
 import { useAiStatus, useAiUsage, useSetExternalAi } from '../ai/api'
+import { useIntakeSettings, useSetIntakeSettings } from './api'
 
 // Mirrors the backend: only the managing director changes the switch;
 // bd_director may additionally read usage.
@@ -24,6 +25,92 @@ const usd = (n: number) => `$${n.toFixed(2)}`
 const th = 'px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-slate-500'
 const thNum = 'px-2 py-1.5 text-right text-xs font-medium uppercase tracking-wide text-slate-500'
 const num = 'px-2 py-1.5 text-right tabular-nums'
+
+function IntakeAutoAcceptCard({ canEdit }: { canEdit: boolean }) {
+  const { data, isLoading, isError, error } = useIntakeSettings()
+  const save = useSetIntakeSettings()
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const currentPct = data ? Math.round(data.auto_accept_min * 100) : null
+  const value = draft ?? (currentPct != null ? String(currentPct) : '')
+  const parsed = Number(value)
+  const valid = value.trim() !== '' && Number.isInteger(parsed) && parsed >= 50 && parsed <= 100
+  const invalid = draft !== null && !valid
+
+  return (
+    <section aria-labelledby="intake-auto-accept-title">
+      <h2 id="intake-auto-accept-title" className="text-sm font-semibold text-slate-800">
+        Tender intake: automatic acceptance
+      </h2>
+      <p className="mt-2 text-sm text-slate-600">
+        Files the AI classifies at or above this confidence are accepted and routed automatically: drawings go to
+        extraction, BOQ files to ready-to-import, addenda to the register, and everything else to the document
+        register. Anything below appears under &quot;Needs your check&quot; on the project page.
+      </p>
+      {isLoading && <SkeletonRows count={1} />}
+      {isError && (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {error.message}
+        </p>
+      )}
+      {data && currentPct != null && (
+        <>
+          <p className="mt-2 text-sm text-slate-600">
+            Current value: <span className="tabular-nums font-medium">{currentPct}%</span>
+          </p>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <div>
+              <label htmlFor="intake-auto-accept-min" className="block text-sm text-slate-700">
+                Auto-accept at or above (%)
+              </label>
+              <input
+                id="intake-auto-accept-min"
+                type="number"
+                min={50}
+                max={100}
+                step={1}
+                value={value}
+                disabled={!canEdit || save.isPending}
+                aria-invalid={invalid}
+                aria-describedby={invalid ? 'intake-auto-accept-error' : undefined}
+                onChange={(e) => setDraft(e.target.value)}
+                className="mt-1 w-28 rounded-control border border-outline px-3 py-1.5 text-sm tabular-nums text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand disabled:bg-canvas"
+              />
+            </div>
+            {canEdit && (
+              <button
+                type="button"
+                disabled={!valid || draft === null || save.isPending}
+                onClick={() =>
+                  save.mutate({ auto_accept_min: Math.round(parsed) / 100 }, { onSuccess: () => setDraft(null) })
+                }
+                className="rounded-control bg-brand px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+              >
+                Save
+              </button>
+            )}
+          </div>
+          {invalid && (
+            <p id="intake-auto-accept-error" className="mt-1 text-sm text-danger">
+              Enter a whole number from 50 to 100.
+            </p>
+          )}
+          {!canEdit && <p className="mt-1 text-xs text-slate-500">Only the managing director can change this</p>}
+          {save.isSuccess && draft === null && (
+            <p role="status" className="mt-1 text-sm text-success">
+              Saved
+            </p>
+          )}
+          {save.isError && (
+            <p role="alert" className="mt-1 text-sm text-danger">
+              {save.error.message}
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
 
 export function AiAdmin() {
   const { hasRole } = useAuth()
@@ -95,6 +182,8 @@ export function AiAdmin() {
           }}
         />
       </section>
+
+      <IntakeAutoAcceptCard canEdit={canSwitch} />
 
       {!canSeeUsage && <p className="text-xs text-slate-500">Your role cannot view AI usage.</p>}
       {canSeeUsage && usageLoading && <SkeletonRows count={3} />}

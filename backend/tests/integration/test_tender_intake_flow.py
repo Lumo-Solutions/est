@@ -6,7 +6,7 @@ settlement flags. Roles at the HTTP boundary are in tests/api/test_tender_intake
 from __future__ import annotations
 
 import hashlib
-import importlib.util
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +28,6 @@ from tests.fixtures.tender_pack import GROUND_TRUTH, build_pack
 
 pytestmark = pytest.mark.asyncio
 
-_MOCK = Path(__file__).resolve().parents[3] / "ai-service" / "mock-vllm" / "classification.py"
 MEMBER = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 
 
@@ -60,19 +59,29 @@ def fake_s3(monkeypatch, postgres_container):
     return {"store": store, "puts": puts}
 
 
+def _install_gateway(provider):
+    """Every AI call of the pipeline goes through `default_gateway`; tests swap in an in-memory gateway around a provider."""
+    from app.ai.factory import set_gateway_override
+    from app.ai.gateway import AIGateway
+    from app.ai.store import MemoryStore
+    from app.core.context import try_current_context
+
+    fallback = RequestContext(tenant_id=uuid.uuid4(), user_id=None, sub=None, roles=frozenset(), is_system=True)
+    store = MemoryStore()
+    set_gateway_override(lambda s: AIGateway(settings=s, store=store, provider=provider, ctx=try_current_context() or fallback))
+    return store
+
+
 @pytest.fixture
-def mock_model(monkeypatch, postgres_container):
-    spec = importlib.util.spec_from_file_location("mock_classification", _MOCK)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    calls: list[dict] = []
+def mock_model(postgres_container):
+    """The deterministic mock provider behind the gateway; yields the list of AI requests it received."""
+    from app.ai.factory import set_gateway_override
+    from app.ai.providers.mock import MockProvider
 
-    async def fake_extract_json(**kwargs):
-        calls.append(kwargs)
-        return module.classify_document(kwargs["user_prompt"], kwargs.get("image_data_url") is not None)
-
-    monkeypatch.setattr("app.intake.classifier.extract_json", fake_extract_json)
-    return calls
+    provider = MockProvider()
+    _install_gateway(provider)
+    yield provider.calls
+    set_gateway_override(None)
 
 
 @pytest.fixture
@@ -163,22 +172,33 @@ async def test_safety_rejections_archive_expansion_and_classification_match_grou
     wrong = {name: (docs[name].doc_class, want) for name, want in GROUND_TRUTH.items() if docs[name].doc_class != want}
     assert not wrong, wrong
     assert all(docs[name].status == "proposed" for name in GROUND_TRUTH)
-    assert docs["C-101 Rev A.dxf"].sub_type == "civil_infra" and docs["S-201 Rev B.pdf"].sub_type == "structural"
+    assert docs["C-101 Rev A.dxf"].sub_type == "roads_civil" and docs["S-201 Rev B.pdf"].sub_type == "structural"
+    assert docs["S-201 Rev B.pdf"].doc_metadata["drawing_type"] == "general_arrangement"
+    assert {d.classified_by for d in docs.values() if d.doc_class} == {"ai"}
 
 
 async def test_scanned_pdf_goes_to_the_model_with_an_image_and_is_flagged_not_measurable(ingested, mock_model):
     s = ingested["session"]
     scan = (await _by_name(s))["Scan_0042.pdf"]
     assert scan.doc_class == "drawing" and "not_measurable" in scan.flags and "low_confidence" in scan.flags
-    assert any(c.get("image_data_url", "").startswith("data:image/png;base64,") for c in mock_model)
+    assert any(req.images and req.kind == "vision_extract" for req in mock_model)  # no text layer: the vision model, with a page image
     history = (await s.execute(select(DocumentClassification).where(DocumentClassification.document_id == scan.id))).scalars().all()
     assert {h.source for h in history} == {"rules", "model"}
     assert [h.source for h in history if h.is_current] == ["model"]
 
 
-async def test_confident_documents_never_call_the_model(ingested, mock_model):
-    # Only the scan and Notes.csv are below the rules threshold in this pack.
-    assert len(mock_model) == 2
+async def test_every_readable_file_goes_to_the_ai_once_and_only_scans_get_images(ingested, mock_model):
+    s = ingested["session"]
+    docs = await _by_name(s)
+    asked = {re.search(r"^Filename: (.*)$", r.user, re.M).group(1) for r in mock_model}
+    readable = {d.original_filename for d in docs.values() if d.safety_status == "accepted" and d.status != "archive" and d.duplicate_of_id is None}
+    assert asked == readable
+    assert len(mock_model) == len(readable)  # one call per distinct readable file: the duplicate copy reuses its original's class
+    with_images = {re.search(r"^Filename: (.*)$", r.user, re.M).group(1) for r in mock_model if r.images}
+    assert "Scan_0042.pdf" in with_images and "ITT.pdf" not in with_images and "BOQ_Rev0.xlsx" not in with_images
+    assert all(r.kind == "classify" for r in mock_model if not r.images)  # text goes to the classify model
+    copy = docs["C-101 Rev A (copy).dxf"]
+    assert copy.doc_class == "drawing" and copy.doc_metadata["same_file_as"] == str(docs["C-101 Rev A.dxf"].id)
 
 
 async def test_revision_of_flag_and_paging_search(ingested):
@@ -230,7 +250,7 @@ async def test_bulk_confirm_routes_each_class_builds_lineage_and_flags_the_settl
     assert a.routed_kind == b.routed_kind == "drawing"
     drawings = {d.id: d for d in (await s.execute(select(Drawing))).scalars()}
     da, db = drawings[uuid.UUID(a.routed_ref["drawing_id"])], drawings[uuid.UUID(b.routed_ref["drawing_id"])]
-    assert (da.revision_label, db.revision_label, da.discipline_hint) == ("A", "B", "civil_infra")
+    assert (da.revision_label, db.revision_label, da.discipline_hint) == ("A", "B", "roads_civil")
     assert da.object_key == a.object_key and da.bucket == a.bucket  # content-addressed, no copy
     assert db.supersedes_id == da.id and b.supersedes_id == a.id and a.routed_ref["superseded_by"] == str(b.id)
     assert da.status == "queued" and len(celery_calls["ingest"]) == len([d for d in docs.values() if d.routed_kind == "drawing"])
@@ -275,6 +295,13 @@ async def test_bulk_confirm_routes_each_class_builds_lineage_and_flags_the_settl
     # Audit: confirm and route events for a routed document.
     events = (await s.execute(text("SELECT payload->>'event' FROM audit_events WHERE entity_type = 'project_document' AND entity_id = :e"), {"e": str(a.id)})).scalars().all()
     assert {"classify", "confirm", "route"} <= set(events)
+    decided = (
+        await s.execute(
+            text("SELECT payload->>'decided_by' FROM audit_events WHERE entity_type = 'project_document' AND entity_id = :e AND payload->>'event' IN ('classify', 'confirm')"),
+            {"e": str(a.id)},
+        )
+    ).scalars().all()
+    assert sorted(decided) == ["ai", "user"]  # the AI proposed, a person confirmed
 
 
 async def test_explicit_confirm_of_the_ones_bulk_skips_and_double_confirm_is_refused(ingested, celery_calls):
@@ -390,23 +417,26 @@ async def test_worker_glue_isolates_a_failing_document_and_finalises_the_package
     package, ids = await svc.create_package(rls_session, est, project_id, [(f.name, f.data) for f in files])
 
     async def fake_with_worker_session(ctx, body, *args):
+        await set_rls_context(rls_session, ctx)
         return await body(rls_session, *args)
 
     monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
     real = processing.process_document
 
-    async def flaky(session, ctx, document_id):
+    async def flaky(session, ctx, document_id, prepared=None, run=None):
         doc = await processing.get_document(session, document_id)
         if doc.original_filename == "ITT.pdf":
             raise RuntimeError("boom")
-        return await real(session, ctx, document_id)
+        return await real(session, ctx, document_id, prepared, run)
 
     monkeypatch.setattr(worker.processing, "process_document", flaky)
     await worker._process_package(est, str(package.id), None)
 
     docs = await _by_name(rls_session)
     assert docs["ITT.pdf"].status == "failed" and "boom" in docs["ITT.pdf"].error_message
-    assert docs["Conditions_of_Contract.pdf"].status == "proposed" and docs["Notes.csv"].status == "proposed"
+    # The contract is a confident AI classification: accepted and routed to the register without a person.
+    assert (docs["Conditions_of_Contract.pdf"].status, docs["Conditions_of_Contract.pdf"].auto_accepted) == ("routed", True)
+    assert docs["Notes.csv"].status == "proposed"  # nothing in it says what it is: waits for a person
     await rls_session.refresh(package)
     assert package.status == "ready"
 

@@ -68,6 +68,9 @@ class ProjectDocument(TenantEntity):
     )
     routed_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     routed_ref: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Who decided the current class: 'ai' | 'rules' | 'user'. auto_accepted: routed without a person.
+    classified_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    auto_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
@@ -107,6 +110,9 @@ class Addendum(TenantEntity):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     routed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
     flagged_settlement_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # Migration 0037: the document was reclassified away from "addendum". Never deleted; revived if routed again.
+    withdrawn_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    withdrawn_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class AddendumLink(TenantEntity):

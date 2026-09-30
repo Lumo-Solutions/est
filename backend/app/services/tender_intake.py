@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import Text, cast, func, or_, select
@@ -28,8 +29,10 @@ from app.intake.constants import (
     ALL_CLASSES,
     DEFAULT_CLASS_LABELS,
     DRAWING_SUB_TYPES,
+    DRAWING_TYPES,
     REGISTER_CLASSES,
     ClassificationSource,
+    Decider,
     DocClass,
     DocStatus,
     Flag,
@@ -38,6 +41,7 @@ from app.intake.constants import (
 from app.intake.metadata import normalise_doc_no, revision_sort_key
 from app.intake.rules import normalise_folder
 from app.intake.safety import extension_of
+from app.models.ai import TenantAiSettings
 from app.models.settlement import BidSettlement
 from app.models.tender_intake import (
     Addendum,
@@ -67,7 +71,16 @@ _ROUTE_PRIORITY = {DocClass.DRAWING.value: 0, DocClass.BOQ.value: 1, DocClass.AD
 _INGEST_COUNTDOWN_S = 5
 _BULK_BLOCKING_FLAGS = {
     Flag.CONFLICT.value, Flag.LOW_CONFIDENCE.value, Flag.DUPLICATE.value, Flag.MODEL_UNAVAILABLE.value,
+    Flag.INJECTION_SUSPECTED.value,
 }
+# Flags that keep an AI classification from being accepted without a person, whatever its confidence.
+_AUTO_ACCEPT_BLOCKING_FLAGS = {Flag.CONFLICT.value, Flag.INJECTION_SUSPECTED.value, Flag.MODEL_UNAVAILABLE.value}
+# Which file types each class can actually be routed from (routing raises for anything else).
+_ROUTABLE_EXTS = {
+    DocClass.DRAWING.value: {"dxf", "pdf", "dwg", "jpg", "jpeg", "png"},
+    DocClass.BOQ.value: {"xlsx", "csv", "xls", "pdf"},
+}
+DEFAULT_AUTO_ACCEPT_MIN = 0.85
 _REF = re.compile(r"^([A-Z]{1,4}-\d{2,5}(?:-\d{1,3})?)(?:\s+Rev\s+(\S+))?$", re.I)
 
 
@@ -242,36 +255,80 @@ async def _require_editable(doc: ProjectDocument, *, allowed: tuple[str, ...] = 
 
 
 async def reclassify(
-    session: AsyncSession, ctx: RequestContext, document_id: UUID, doc_class: str, sub_type: str | None, note: str | None
+    session: AsyncSession, ctx: RequestContext, document_id: UUID, doc_class: str, sub_type: str | None, note: str | None,
+    *, drawing_type: str | None = None, confirm: bool = False,
 ) -> ProjectDocument:
+    """Change a document's class at any time. A proposed or failed document just changes proposal (and is routed
+    at once when `confirm` is set); a routed one is un-routed first and routed again under the new class, so the
+    routing always follows the classification. Who decided is recorded as a person."""
     doc = await get_document(session, document_id)
-    await _require_editable(doc, allowed=(DocStatus.PROPOSED.value, DocStatus.FAILED.value))
+    await _require_editable(
+        doc, allowed=(DocStatus.PROPOSED.value, DocStatus.FAILED.value, DocStatus.CONFIRMED.value, DocStatus.ROUTED.value)
+    )
     if doc_class not in ALL_CLASSES:
         raise ValidationAppError(f"Unknown class {doc_class!r}")
     if doc_class not in await enabled_classes(session):
         raise ConflictError(f"Class {doc_class!r} is disabled for this tenant")
     if sub_type is not None and (doc_class != DocClass.DRAWING.value or sub_type not in DRAWING_SUB_TYPES):
         raise ValidationAppError("sub_type only applies to drawings and must be a known discipline")
-    before = {"doc_class": doc.doc_class, "sub_type": doc.sub_type, "confidence": float(doc.confidence) if doc.confidence is not None else None}
+    if drawing_type is not None and (doc_class != DocClass.DRAWING.value or drawing_type not in DRAWING_TYPES):
+        raise ValidationAppError("drawing_type only applies to drawings and must be a known drawing type")
+    before = {
+        "doc_class": doc.doc_class, "sub_type": doc.sub_type, "drawing_type": doc.doc_metadata.get("drawing_type"),
+        "confidence": float(doc.confidence) if doc.confidence is not None else None, "classified_by": doc.classified_by,
+        "status": doc.status, "routed_kind": doc.routed_kind,
+    }
+    was_routed = doc.status in (DocStatus.ROUTED.value, DocStatus.CONFIRMED.value)
+    class_changed = doc_class != doc.doc_class
+    if was_routed and class_changed:
+        await unroute_document(session, ctx, doc, reason=f"reclassified from {doc.doc_class} to {doc_class}")
     from sqlalchemy import update
 
     await session.execute(update(DocumentClassification).where(DocumentClassification.document_id == doc.id).values(is_current=False))
+    metadata = dict(doc.doc_metadata)
+    if doc_class == DocClass.DRAWING.value:
+        if drawing_type is not None:
+            metadata["drawing_type"] = drawing_type
+        elif class_changed:
+            metadata.pop("drawing_type", None)
+    else:
+        metadata.pop("drawing_type", None)
+        metadata.pop("unit_type", None)
     session.add(
         DocumentClassification(
             tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id, source=ClassificationSource.USER.value,
             doc_class=doc_class, sub_type=sub_type, confidence=1.0,
-            evidence=[{"rule": "user", "matched": note or "", "page": None}], doc_metadata=dict(doc.doc_metadata), is_current=True,
+            evidence=[{"rule": "user", "matched": note or "", "page": None}], doc_metadata=metadata, is_current=True,
         )
     )
     doc.doc_class, doc.sub_type, doc.confidence = doc_class, sub_type, 1.0
-    doc.flags = [f for f in doc.flags if f not in (Flag.CONFLICT.value, Flag.LOW_CONFIDENCE.value, Flag.MODEL_UNAVAILABLE.value)]
+    doc.doc_metadata = metadata
+    doc.classified_by, doc.auto_accepted = Decider.USER.value, False
+    doc.flags = [
+        f for f in doc.flags
+        if f not in (Flag.CONFLICT.value, Flag.LOW_CONFIDENCE.value, Flag.MODEL_UNAVAILABLE.value, Flag.INJECTION_SUSPECTED.value)
+    ]
     if doc.status == DocStatus.FAILED.value:
         doc.status, doc.error_message = DocStatus.PROPOSED.value, None
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
-        payload={"event": "reclassify", "from": before, "to": {"doc_class": doc_class, "sub_type": sub_type}, "note": note},
+        payload={
+            "event": "reclassify", "decided_by": Decider.USER.value, "from": before,
+            "to": {"doc_class": doc_class, "sub_type": sub_type, "drawing_type": metadata.get("drawing_type")}, "note": note,
+        },
     )
+    if was_routed and not class_changed:
+        # Same class, different details: the routed record keeps its place; only the discipline hint moves.
+        if doc.routed_kind == "drawing" and doc.routed_ref.get("drawing_id"):
+            from app.models.takeoff import Drawing
+
+            drawing = (await session.execute(select(Drawing).where(Drawing.id == UUID(doc.routed_ref["drawing_id"])))).scalar_one_or_none()
+            if drawing is not None:
+                drawing.discipline_hint = sub_type
+                await session.flush()
+    elif doc.status == DocStatus.PROPOSED.value and (was_routed or confirm):
+        await confirm_document(session, ctx, doc.id)
     return doc
 
 
@@ -484,10 +541,24 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
         object_key=doc.object_key, sha256=doc.sha256, size_bytes=doc.size_bytes, revision_label=doc.revision_label,
         discipline_hint=doc.sub_type,
     )
+    restored = False
+    if not created and drawing.archived_at is not None:
+        # Reclassified back to a drawing: it re-enters the takeoff with its sheets and measurements intact.
+        drawing.archived_at, drawing.archived_reason = None, None
+        drawing.discipline_hint = doc.sub_type
+        restored = True
+        await session.flush()
+        await _recompute_boq_for_drawing(session, ctx, drawing.id)
+        await audit.record(
+            session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id, project_id=doc.project_id,
+            payload={"event": "restore_from_archive", "source": "tender_intake", "document_id": str(doc.id)},
+        )
     if created:
         await takeoff_service.trigger_ingest(session, ctx, drawing.id, countdown=_INGEST_COUNTDOWN_S)
     doc.routed_kind = "drawing"
-    doc.routed_ref = {"drawing_id": str(drawing.id), "kind": kind, "ingest_started": created, "not_measurable": scanned}
+    doc.routed_ref = {
+        "drawing_id": str(drawing.id), "kind": kind, "ingest_started": created, "not_measurable": scanned, "restored": restored,
+    }
 
 
 async def _route_boq(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
@@ -505,32 +576,133 @@ async def _route_boq(session: AsyncSession, ctx: RequestContext, doc: ProjectDoc
 async def _route_addendum(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
     md = doc.doc_metadata
     supersedes, amends = list(md.get("supersedes", [])), list(md.get("amends", []))
-    addendum = Addendum(
-        tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id, package_id=doc.package_id,
+    fields = dict(
         addendum_no=str(md["addendum_number"]) if md.get("addendum_number") else None,
         issue_date=str(md["addendum_issue_date"]) if md.get("addendum_issue_date") else None,
         title=doc.title or doc.original_filename,
         summary="; ".join(filter(None, [f"Supersedes: {', '.join(supersedes)}" if supersedes else "", f"Amends: {', '.join(amends)}" if amends else ""])) or None,
         routed_at=datetime.now(timezone.utc),
     )
-    session.add(addendum)
+    # A document that was an addendum before, was reclassified away and is an addendum again gets its register row back.
+    addendum = (await session.execute(select(Addendum).where(Addendum.document_id == doc.id))).scalar_one_or_none()
+    if addendum is None:
+        addendum = Addendum(tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id, package_id=doc.package_id, **fields)
+        session.add(addendum)
+    else:
+        for key, value in fields.items():
+            setattr(addendum, key, value)
+        addendum.withdrawn_at = addendum.withdrawn_reason = None
     await session.flush()
+    existing_links = {
+        (l.reference_text, l.action): l
+        for l in (await session.execute(select(AddendumLink).where(AddendumLink.addendum_id == addendum.id))).scalars().all()
+    }
     for action, refs in (("supersedes", supersedes), ("amends", amends)):
         for ref in refs:
             target = await _resolve_target(session, doc.project_id, ref)
-            session.add(
-                AddendumLink(
-                    tenant_id=ctx.tenant_id, project_id=doc.project_id, addendum_id=addendum.id,
-                    target_document_id=target.id if target is not None else None, reference_text=ref[:255], action=action,
-                    resolved=target is not None,
+            link = existing_links.get((ref[:255], action))
+            if link is not None:
+                link.target_document_id, link.resolved = (target.id if target is not None else None), target is not None
+            else:
+                session.add(
+                    AddendumLink(
+                        tenant_id=ctx.tenant_id, project_id=doc.project_id, addendum_id=addendum.id,
+                        target_document_id=target.id if target is not None else None, reference_text=ref[:255], action=action,
+                        resolved=target is not None,
+                    )
                 )
-            )
             if target is not None and action == "supersedes":
                 target.routed_ref = {**target.routed_ref, "superseded_by_addendum": str(addendum.id)}
     addendum.flagged_settlement_ids = await _flag_settlements(session, doc.project_id)
     await session.flush()
     doc.routed_kind = "addendum"
     doc.routed_ref = {"addendum_id": str(addendum.id), "flagged_settlements": addendum.flagged_settlement_ids}
+
+
+async def _recompute_boq_for_drawing(session: AsyncSession, ctx: RequestContext, drawing_id: UUID) -> int:
+    """A drawing entering or leaving the takeoff changes what its linked measurements contribute: recompute the
+    reconciliation of every BOQ line that links one of them."""
+    from app.models.boq import BoqLineItem, BoqLineItemMeasurement
+    from app.models.takeoff import DrawingMeasurement
+    from app.services.boq import _apply_reconciliation
+
+    item_ids = (
+        await session.execute(
+            select(BoqLineItemMeasurement.boq_line_item_id)
+            .join(DrawingMeasurement, DrawingMeasurement.id == BoqLineItemMeasurement.measurement_id)
+            .where(DrawingMeasurement.drawing_id == drawing_id)
+            .distinct()
+        )
+    ).scalars().all()
+    for item in (await session.execute(select(BoqLineItem).where(BoqLineItem.id.in_(item_ids)))).scalars().all() if item_ids else []:
+        await _apply_reconciliation(session, ctx, item)
+    return len(item_ids)
+
+
+async def unroute_document(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument, *, reason: str) -> None:
+    """Undoes whatever routing created, so the document can be routed somewhere else. Nothing is deleted that
+    holds work: a drawing is archived (its sheets and measurements stay, and every takeoff reader skips it); an
+    addendum is withdrawn from the register (the row stays); BOQ pre-fill and register entries have nothing else behind them."""
+    undone: dict = {"routed_kind": doc.routed_kind}
+    if doc.routed_kind == "drawing" and doc.routed_ref.get("drawing_id"):
+        from app.models.takeoff import Drawing, DrawingMeasurement
+
+        drawing = (await session.execute(select(Drawing).where(Drawing.id == UUID(doc.routed_ref["drawing_id"])))).scalar_one_or_none()
+        if drawing is not None:
+            measurements = (
+                await session.execute(select(func.count()).select_from(DrawingMeasurement).where(DrawingMeasurement.drawing_id == drawing.id))
+            ).scalar_one()
+            drawing.archived_at, drawing.archived_reason = datetime.now(timezone.utc), reason[:255]
+            drawing.supersedes_id = None
+            for other in (await session.execute(select(Drawing).where(Drawing.supersedes_id == drawing.id))).scalars().all():
+                other.supersedes_id = None
+            await session.flush()
+            recomputed = await _recompute_boq_for_drawing(session, ctx, drawing.id)
+            undone.update({"drawing_id": str(drawing.id), "archived_measurements": int(measurements), "boq_lines_recomputed": recomputed})
+            await audit.record(
+                session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id, project_id=doc.project_id,
+                payload={"event": "archive", "source": "tender_intake", "reason": reason, "document_id": str(doc.id),
+                         "measurements_kept": int(measurements)},
+            )
+    elif doc.routed_kind == "addendum" and doc.routed_ref.get("addendum_id"):
+        addendum = (await session.execute(select(Addendum).where(Addendum.id == UUID(doc.routed_ref["addendum_id"])))).scalar_one_or_none()
+        if addendum is not None:
+            links = (await session.execute(select(AddendumLink).where(AddendumLink.addendum_id == addendum.id))).scalars().all()
+            undone.update({"addendum_no": addendum.addendum_no, "links": len(links)})
+            for target in (
+                await session.execute(select(ProjectDocument).where(ProjectDocument.project_id == doc.project_id))
+            ).scalars().all():
+                if target.routed_ref.get("superseded_by_addendum") == str(addendum.id):
+                    target.routed_ref = {k: v for k, v in target.routed_ref.items() if k != "superseded_by_addendum"}
+            # Withdrawn from the register, never deleted (and no settlement is flagged by it any more).
+            addendum.withdrawn_at, addendum.withdrawn_reason = datetime.now(timezone.utc), reason[:255]
+            await session.flush()
+    # Revision lineage: this document no longer takes part; everything else is re-derived from what is still routed.
+    neighbours = (
+        await session.execute(select(ProjectDocument).where(ProjectDocument.project_id == doc.project_id, ProjectDocument.supersedes_id == doc.id))
+    ).scalars().all()
+    for other in neighbours:
+        other.supersedes_id = None
+    for other in (
+        await session.execute(
+            select(ProjectDocument).where(
+                ProjectDocument.project_id == doc.project_id, ProjectDocument.routed_ref["superseded_by"].astext == str(doc.id)
+            )
+        )
+    ).scalars().all():
+        other.routed_ref = {k: v for k, v in other.routed_ref.items() if k != "superseded_by"}
+    doc.supersedes_id = None
+    previous_kind = doc.routed_kind
+    doc.routed_kind, doc.routed_ref = None, {}
+    doc.status = DocStatus.PROPOSED.value
+    doc.confirmed_by, doc.confirmed_at, doc.auto_accepted = None, None, False
+    await session.flush()
+    if previous_kind != "duplicate":
+        await _relink_lineage(session, doc.project_id, doc.document_number)
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+        payload={"event": "unroute", "reason": reason, "undone": undone},
+    )
 
 
 async def route_document(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
@@ -558,22 +730,87 @@ async def route_document(session: AsyncSession, ctx: RequestContext, doc: Projec
     )
 
 
-async def confirm_document(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> ProjectDocument:
+async def confirm_document(
+    session: AsyncSession, ctx: RequestContext, document_id: UUID, *, auto_accept_min: float | None = None
+) -> ProjectDocument:
+    """A person confirms the proposal (or, when `auto_accept_min` is given, the tenant threshold accepts it: the
+    caller is the worker acting for the system, nobody is recorded as the confirmer)."""
     doc = await get_document(session, document_id)
     await _require_editable(doc)
     if not doc.doc_class:
         raise ConflictError("Document has no class to confirm")
     if doc.doc_class not in await enabled_classes(session):
         raise ConflictError(f"Class {doc.doc_class!r} is disabled: reclassify first")
+    auto = auto_accept_min is not None
     doc.status = DocStatus.CONFIRMED.value
-    doc.confirmed_by, doc.confirmed_at = ctx.user_id, datetime.now(timezone.utc)
+    doc.confirmed_by, doc.confirmed_at = (None if auto else ctx.user_id), datetime.now(timezone.utc)
+    doc.auto_accepted = auto
     await session.flush()
+    payload = {
+        "event": "auto_accept" if auto else "confirm", "decided_by": Decider.AI.value if auto else Decider.USER.value,
+        "proposed_by": doc.classified_by, "doc_class": doc.doc_class, "sub_type": doc.sub_type,
+        "confidence": float(doc.confidence or 0),
+    }
+    if auto:
+        payload["threshold"] = auto_accept_min
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
-        payload={"event": "confirm", "doc_class": doc.doc_class, "sub_type": doc.sub_type, "confidence": float(doc.confidence or 0)},
+        payload=payload,
     )
     await route_document(session, ctx, doc)
     return doc
+
+
+def _blocked_reason(doc: ProjectDocument, threshold: float) -> str | None:
+    """Why an AI proposal may not be accepted without a person; None when it may."""
+    if doc.classified_by != Decider.AI.value:
+        return "not classified by the AI"
+    if doc.safety_status != "accepted":
+        return "did not pass the safety check"
+    if float(doc.confidence or 0) < threshold:
+        return "confidence below the threshold"
+    blocking = _AUTO_ACCEPT_BLOCKING_FLAGS & set(doc.flags or [])
+    if blocking:
+        return "flagged: " + ", ".join(sorted(blocking))
+    allowed = _ROUTABLE_EXTS.get(doc.doc_class or "")
+    if allowed is not None and doc.ext not in allowed:
+        return f"a .{doc.ext} file cannot be routed as {doc.doc_class}"
+    return None
+
+
+def would_auto_accept(doc: ProjectDocument, threshold: float) -> bool:
+    return doc.status == DocStatus.PROPOSED.value and _blocked_reason(doc, threshold) is None
+
+
+async def get_auto_accept_min(session: AsyncSession) -> float:
+    value = (await session.execute(select(TenantAiSettings.intake_auto_accept_min))).scalar_one_or_none()
+    return float(value) if value is not None else DEFAULT_AUTO_ACCEPT_MIN
+
+
+async def auto_accept_document(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> bool:
+    """Routes a proposal without a person when it was classified by the AI at or above the tenant's threshold.
+    Returns True when it was routed. A routing failure leaves the document proposed ("needs your check") with the
+    reason on it; it never raises."""
+    doc = await get_document(session, document_id)
+    if doc.status != DocStatus.PROPOSED.value:
+        return False
+    threshold = await get_auto_accept_min(session)
+    if _blocked_reason(doc, threshold) is not None:
+        return False
+    try:
+        async with session.begin_nested():
+            await confirm_document(session, ctx, document_id, auto_accept_min=threshold)
+    except Exception as exc:  # noqa: BLE001 -- reported on the document, which then waits for a person
+        await session.refresh(doc)
+        doc.flags = list(dict.fromkeys([*doc.flags, Flag.CONFLICT.value]))
+        doc.error_message = f"Could not be routed automatically: {str(exc)[:300]}"
+        await session.flush()
+        await audit.record(
+            session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+            payload={"event": "auto_accept_failed", "decided_by": Decider.AI.value, "error": str(exc)[:300]},
+        )
+        return False
+    return True
 
 
 async def bulk_confirm(
@@ -631,7 +868,7 @@ async def bulk_confirm(
 # ------------------------------------------------------------ registers / views
 async def list_addenda(session: AsyncSession, project_id: UUID) -> list[AddendumOut]:
     addenda = (
-        await session.execute(select(Addendum).where(Addendum.project_id == project_id).order_by(Addendum.routed_at.desc()))
+        await session.execute(select(Addendum).where(Addendum.project_id == project_id, Addendum.withdrawn_at.is_(None)).order_by(Addendum.routed_at.desc()))
     ).scalars().all()
     out: list[AddendumOut] = []
     for a in addenda:
@@ -706,3 +943,53 @@ async def update_class(session: AsyncSession, ctx: RequestContext, code: str, da
         payload={"code": code, "from": before, "to": {"label": row.label, "enabled": row.enabled, "sort_order": row.sort_order}},
     )
     return next(c for c in await list_classes(session) if c.code == code)
+
+
+# ------------------------------------------------------------------ bulk reclassify, intake settings
+async def bulk_reclassify(
+    session: AsyncSession, ctx: RequestContext, project_id: UUID, document_ids: list[UUID], doc_class: str,
+    sub_type: str | None, drawing_type: str | None, note: str | None, confirm: bool,
+) -> BulkConfirmOut:
+    """Change the class of several documents at once. Each runs in its own savepoint, so one that cannot be
+    routed under the new class does not undo the others."""
+    await assert_can_see_project(session, ctx, project_id)
+    docs = list(
+        (await session.execute(select(ProjectDocument).where(ProjectDocument.project_id == project_id, ProjectDocument.id.in_(document_ids)))).scalars().all()
+    )
+    results: list[ConfirmItemResult] = []
+    changed = failed = 0
+    for d in sorted(docs, key=lambda d: d.created_at):
+        try:
+            async with session.begin_nested():
+                await reclassify(session, ctx, d.id, doc_class, sub_type, note, drawing_type=drawing_type, confirm=confirm)
+            results.append(ConfirmItemResult(id=d.id, ok=True, status=d.status, routed_kind=d.routed_kind))
+            changed += 1
+        except Exception as exc:  # noqa: BLE001 -- reported per item
+            await session.refresh(d)
+            results.append(ConfirmItemResult(id=d.id, ok=False, status=d.status, error=str(exc)[:300]))
+            failed += 1
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tender_package", entity_id=None, project_id=project_id,
+        payload={"event": "bulk_reclassify", "doc_class": doc_class, "changed": changed, "failed": failed, "confirm": confirm},
+    )
+    return BulkConfirmOut(confirmed=changed, failed=failed, skipped=len(document_ids) - len(docs), results=results)
+
+
+async def set_auto_accept_min(session: AsyncSession, ctx: RequestContext, value: float) -> float:
+    if not 0.5 <= value <= 1.0:
+        raise ValidationAppError("The auto-accept threshold must be between 50% and 100%")
+    row = (await session.execute(select(TenantAiSettings).where(TenantAiSettings.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    before = float(row.intake_auto_accept_min) if row is not None else DEFAULT_AUTO_ACCEPT_MIN
+    if row is None:
+        session.add(
+            TenantAiSettings(tenant_id=ctx.tenant_id, intake_auto_accept_min=Decimal(str(value)), created_by=ctx.user_id, updated_by=ctx.user_id)
+        )
+    else:
+        row.intake_auto_accept_min = Decimal(str(value))
+        row.updated_by = ctx.user_id
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tenant_ai_settings", entity_id=str(ctx.tenant_id),
+        payload={"intake_auto_accept_min": {"before": before, "after": value}},
+    )
+    return value

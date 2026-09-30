@@ -40,7 +40,7 @@ SCALE_HINT_FIELDS = ["scale_ratio", "unit_system", "confidence", "reasoning"]
 
 QUOTATION_EXTRACTION_FIELDS = ["currency", "vat_inclusive", "line_items", "exclusions", "confidence"]
 
-DOCUMENT_CLASSIFICATION_FIELDS = ["doc_class", "sub_type", "confidence", "evidence_quote", "evidence_page", "metadata"]
+DOCUMENT_CLASSIFICATION_FIELDS = ["doc_class", "sub_type", "drawing_type", "confidence", "evidence_quote", "evidence_page", "metadata"]
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +194,7 @@ def test_schema_is_valid_json_object_schema(filename, expected_fields):
 
 def _render_document_classification(**overrides):
     template = _env.get_template("document_classification.j2")
-    context = dict(filename="x.pdf", document_text="", title_block_text="", has_image=False, candidates=[])
+    context = dict(filename="x.pdf", file_type="pdf", folder_path="", document_text="", title_block_text="", has_image=False, hints=[])
     context.update(overrides)
     rendered = template.render(**context)
     assert "{# system #}" not in rendered and "{# user #}" not in rendered
@@ -225,5 +225,22 @@ def test_document_classification_warns_against_prompt_injection_from_document_co
 
 def test_document_classification_marks_image_only_documents():
     assert "No text could be extracted" in _render_document_classification(has_image=True)
-    assert "image of page 1 is attached" in _render_document_classification(has_image=True)
-    assert "unsure between: boq, addendum" in _render_document_classification(candidates=["boq", "addendum"])
+    assert "Images are attached: page 1" in _render_document_classification(has_image=True)
+
+
+def test_document_classification_passes_folder_and_rule_matches_only_as_weak_hints():
+    rendered = _render_document_classification(
+        folder_path="02 BOQ", hints=[{"doc_class": "boq", "why": "folder_boq"}, {"doc_class": "drawing", "why": "title_block"}]
+    )
+    assert "Folder path (a weak hint; the content decides): 02 BOQ" in rendered
+    assert "Automatic-rule hints (unverified, may be wrong): boq (folder_boq); drawing (title_block)" in rendered
+    assert "File type: pdf" in rendered
+    assert "Folder path" not in _render_document_classification() and "Automatic-rule hints" not in _render_document_classification()
+
+
+def test_document_classification_asks_for_every_discipline_and_drawing_type_in_the_schema():
+    schema = json.loads((SCHEMAS_DIR / "document_classification.schema.json").read_text(encoding="utf-8"))
+    system = _render_document_classification().split("Filename:")[0]
+    for value in schema["properties"]["sub_type"]["enum"] + schema["properties"]["drawing_type"]["enum"]:
+        if value is not None:
+            assert value in system, f"prompt never mentions {value!r}"

@@ -1,37 +1,52 @@
-"""Tender intake: the worker-side pipeline for one document.
+"""Tender intake: the worker-side pipeline for one document (AI-first).
 
-safety check -> (zip: expand into child documents) -> extract -> stage 1 rules
--> stage 2 model when unsure/conflicted -> persist proposals. Nothing here
-routes anything: a document ends as ``proposed`` (or rejected/failed) and a
-lead_estimator+ confirms it later (services/tender_intake.py).
+safety check -> (zip: expand into child documents) -> extract -> rules (hints) -> AI reads the file
+-> persist the proposal. A document ends as ``proposed`` (or rejected/failed); whether it is then
+routed without a person is decided afterwards by ``tender_intake.auto_accept_document`` against the
+tenant's threshold (services/tender_intake.py).
 
-CPU-bound steps (parsing, archive expansion) run in a thread so the
-per-document deadline can be enforced with asyncio timeouts.
+The AI call is the slow step, so a group of documents is *prepared* concurrently (download, safety,
+extract, rules, AI call; no database writes) and then persisted one at a time. A hard AI failure (not
+configured, not allowed, over budget) or a run of soft failures trips a breaker for the rest of the
+run and every remaining file is classified by the rules, labelled as such.
+
+CPU-bound steps (parsing, archive expansion) run in a thread so the per-document deadline can be
+enforced with asyncio timeouts.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import logging
+from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.errors import AIBudgetExceeded, AIDisabledForTenant, AIError, AINotConfigured, AIRateLimited, describe_reason
+from app.ai.gateway import AIMeta
 from app.core.config import Settings, get_settings
-from app.core.context import RequestContext
+from app.core.context import RequestContext, reset_context, set_context
 from app.core.enums import AttachmentSafetyStatus, AuditAction
 from app.core.errors import NotFoundError
 from app.integrations.s3 import get_object_bytes, put_object_streaming
 from app.intake.archive import ArchiveLimits, expand_zip
-from app.ai.gateway import AIMeta
-from app.intake.classifier import Proposal, classify_with_model, combine
-from app.intake.constants import ClassificationSource, DocClass, DocStatus, Flag
+from app.intake.classifier import (
+    ModelClassification,
+    Proposal,
+    build_images,
+    classify_with_model,
+    combine,
+    looks_like_injection,
+    rule_hints,
+    text_is_sufficient,
+)
+from app.intake.constants import ClassificationSource, Decider, DocClass, DocStatus, Flag
 from app.intake.extract import DocContent, extract_content
 from app.intake.metadata import normalise_doc_no, revision_sort_key
-from app.intake.rules import RuleOutcome, classify_rules, needs_model, normalise_folder
+from app.intake.rules import RuleOutcome, classify_rules, normalise_folder
 from app.intake.safety import IntakeSafety, check_file, extension_of
 from app.models.tender_intake import DocumentClassification, ProjectDocument
 from app.services import audit
@@ -39,6 +54,8 @@ from app.services import audit
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = ("jpg", "jpeg", "png")
+_RATE_LIMIT_RETRIES = 3
+_RATE_LIMIT_WAIT_S = 5.0
 
 
 def object_key_for(tenant_id: UUID, sha256: str) -> str:
@@ -58,25 +75,159 @@ async def get_document(session: AsyncSession, document_id: UUID) -> ProjectDocum
     return doc
 
 
-def _page_image(ext: str, data: bytes) -> bytes | None:
-    """PNG of page 1 for the model, only used when there is no text layer."""
-    try:
-        if ext == "pdf":
-            from app.takeoff.pdf import render_page_png
+# ---------------------------------------------------------------- the AI run (breaker, concurrency)
+class AiRun:
+    """State shared by the documents of one worker run."""
 
-            return render_page_png(data, 0, dpi=100)
-        if ext in _IMAGE_EXTS:
-            from PIL import Image
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self.sem = asyncio.Semaphore(max(1, self.settings.intake_ai_concurrency))
+        self.stopped_reason: str | None = None
+        self.calls = 0
+        self._failures = 0
 
-            with Image.open(io.BytesIO(data)) as img:
-                out = io.BytesIO()
-                img.convert("RGB").save(out, format="PNG")
-                return out.getvalue()
-    except Exception:  # noqa: BLE001 -- no image just means the model works from the filename/text
-        logger.warning("tender_intake: could not render a page image", exc_info=True)
-    return None
+    def stop(self, reason: str) -> None:
+        if self.stopped_reason is None:
+            logger.warning("tender_intake: AI stopped for this run: %s", reason)
+            self.stopped_reason = reason
+
+    def succeeded(self) -> None:
+        self._failures = 0
+
+    def failed(self, reason: str) -> None:
+        self._failures += 1
+        if self._failures >= max(1, self.settings.intake_ai_max_consecutive_failures):
+            self.stop(reason)
 
 
+@dataclass(slots=True)
+class DocSnapshot:
+    """The few columns the AI step needs, read before the concurrent phase (no ORM objects cross tasks)."""
+
+    id: UUID
+    project_id: UUID
+    original_filename: str
+    ext: str
+    archive_path: str | None
+    bucket: str
+    object_key: str
+    is_duplicate: bool
+
+    @classmethod
+    def of(cls, doc: ProjectDocument) -> "DocSnapshot":
+        return cls(
+            doc.id, doc.project_id, doc.original_filename, doc.ext, doc.archive_path, doc.bucket, doc.object_key,
+            doc.duplicate_of_id is not None or Flag.DUPLICATE.value in (doc.flags or []),
+        )
+
+
+@dataclass(slots=True)
+class Prepared:
+    """Everything the persist step needs, computed without touching the database."""
+
+    safety: IntakeSafety
+    content: DocContent | None = None
+    rules: RuleOutcome | None = None
+    model: ModelClassification | None = None
+    ai_reason: str | None = None
+    injection: str | None = None
+    used_images: bool = False
+    ai_text_chars: int = 0
+    error: BaseException | None = None
+    extras: dict = field(default_factory=dict)
+
+
+async def _ai_read(
+    run: AiRun, snap: DocSnapshot, content: DocContent, rules: RuleOutcome, data: bytes, project_id: UUID
+) -> tuple[ModelClassification | None, str | None, bool]:
+    """(model answer, plain-language reason when there is none, whether images were sent)."""
+    if run.stopped_reason:
+        return None, run.stopped_reason, False
+    folder = normalise_folder(snap.archive_path)
+    used_images = False
+    async with run.sem:
+        if run.stopped_reason:
+            return None, run.stopped_reason, False
+        images: list[bytes] = []
+        if not text_is_sufficient(content):
+            images = await asyncio.to_thread(build_images, snap.ext, data, content)
+        used_images = bool(images)
+        for attempt in range(_RATE_LIMIT_RETRIES + 1):
+            try:
+                run.calls += 1
+                model = await asyncio.wait_for(
+                    classify_with_model(
+                        filename=snap.original_filename, content=content, images=images, folder_path=folder,
+                        hints=rule_hints(rules),
+                        meta=AIMeta(project_id=project_id, entity_type="project_document", entity_id=str(snap.id)),
+                    ),
+                    timeout=run.settings.intake_doc_timeout_s * 2,
+                )
+                run.succeeded()
+                return model, None, used_images
+            except AIRateLimited:
+                if attempt == _RATE_LIMIT_RETRIES:
+                    return None, describe_reason("ai_rate_limited"), used_images
+                await asyncio.sleep(_RATE_LIMIT_WAIT_S)
+            except (AINotConfigured, AIDisabledForTenant, AIBudgetExceeded) as exc:
+                reason = describe_reason(exc.code)
+                run.stop(reason)  # nothing will change during this run: stop asking, use the rules
+                return None, reason, used_images
+            except AIError as exc:
+                reason = describe_reason(exc.code)
+                run.failed(reason)
+                return None, reason, used_images
+            except asyncio.TimeoutError:
+                run.failed("the AI did not answer in time")
+                return None, "the AI did not answer in time", used_images
+            except Exception:  # noqa: BLE001 -- a model failure must never fail the document
+                logger.warning("tender_intake: AI step failed for %s", snap.id, exc_info=True)
+                run.failed("the AI step failed")
+                return None, "the AI step failed", used_images
+    return None, "the AI step failed", used_images  # pragma: no cover
+
+
+async def prepare_document(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -> Prepared:
+    """Download, safety check, extract, rules and the AI call for one file. Writes nothing to the database."""
+    settings = run.settings
+    data = await get_object_bytes(snap.object_key, bucket=snap.bucket)
+    safety: IntakeSafety = await asyncio.to_thread(check_file, filename=snap.original_filename, data=data, settings=settings)
+    if not safety.accepted or safety.is_archive:
+        return Prepared(safety=safety, extras={"data": data if safety.is_archive else None})
+    content = await asyncio.wait_for(
+        asyncio.to_thread(extract_content, filename=snap.original_filename, ext=snap.ext, sniffed=safety.sniffed, data=data),
+        timeout=settings.intake_doc_timeout_s,
+    )
+    rules = classify_rules(content, snap.original_filename, folder=normalise_folder(snap.archive_path))
+    injection = looks_like_injection(content.text, content.title_block_text, snap.original_filename)
+    model, reason, used_images = await _ai_read(run, snap, content, rules, data, snap.project_id)
+    return Prepared(
+        safety=safety, content=content, rules=rules, model=model, ai_reason=reason, injection=injection,
+        used_images=used_images, ai_text_chars=len(content.text or ""),
+    )
+
+
+async def prepare_batch(ctx: RequestContext, snaps: list[DocSnapshot], run: AiRun) -> dict[UUID, Prepared]:
+    """Concurrent `prepare_document` for a group. Duplicates are left out (they copy their original's class when
+    they are persisted, so no second AI call is made for the same bytes). A failure is carried in `Prepared.error`
+    and re-raised by `process_document`, so failure isolation stays per document."""
+
+    async def one(snap: DocSnapshot) -> tuple[UUID, Prepared]:
+        # No worker session is open in this phase, so bind the request context here (the AI gateway reads it).
+        token = set_context(ctx)
+        try:
+            return snap.id, await prepare_document(ctx, snap, run)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tender_intake: could not prepare %s", snap.id, exc_info=True)
+            return snap.id, Prepared(safety=IntakeSafety(status="pending", sniffed=None), error=exc)
+        finally:
+            reset_context(token)
+
+    results = await asyncio.gather(*(one(s) for s in snaps if not s.is_duplicate))
+    return dict(results)
+
+
+# ---------------------------------------------------------------- persistence
 async def _earliest_with_sha(session: AsyncSession, project_id: UUID, sha256: str, exclude_id: UUID | None) -> ProjectDocument | None:
     stmt = (
         select(ProjectDocument)
@@ -153,10 +304,11 @@ async def persist_proposal(
     rules: RuleOutcome,
     proposal: Proposal,
     model_result,
+    *,
+    injection: str | None = None,
+    used_images: bool = False,
 ) -> None:
     """Writes the classification history and the document's current proposal."""
-    from sqlalchemy import update
-
     await session.execute(
         update(DocumentClassification).where(DocumentClassification.document_id == doc.id).values(is_current=False)
     )
@@ -175,13 +327,18 @@ async def persist_proposal(
                 source=ClassificationSource.MODEL.value, doc_class=model_result.doc_class, sub_type=model_result.sub_type,
                 confidence=min(model_result.confidence, 1.0),
                 evidence=[{"rule": "model", "matched": model_result.evidence_quote or "", "page": model_result.evidence_page}],
-                doc_metadata=model_result.metadata.model_dump(),
+                doc_metadata={**model_result.metadata.model_dump(), "drawing_type": model_result.drawing_type},
                 is_current=proposal.source == ClassificationSource.MODEL.value,
             )
         )
 
     flags = list(dict.fromkeys([*doc.flags, *proposal.flags]))
     metadata = dict(proposal.metadata)
+    if injection:
+        if Flag.INJECTION_SUSPECTED.value not in flags:
+            flags.append(Flag.INJECTION_SUSPECTED.value)
+        metadata["injection_phrase"] = injection
+    metadata["ai_input"] = {"images_sent": used_images, "text_chars": len(content.text or "")}
     if proposal.doc_class == DocClass.DRAWING.value:
         if doc.ext == "dwg":
             # Measurable through the converter sandbox; only flag it for a
@@ -200,6 +357,8 @@ async def persist_proposal(
     doc.title = (metadata.get("title") or None) and str(metadata["title"])[:512]
     doc.document_number = normalise_doc_no(metadata.get("document_number"))
     doc.revision_label = (str(metadata["revision"])[:32] if metadata.get("revision") else None)
+    doc.classified_by = Decider.AI.value if proposal.source == ClassificationSource.MODEL.value else Decider.RULES.value
+    doc.auto_accepted = False
     await _flag_revision(session, doc, flags, metadata)
     doc.doc_metadata = metadata
     doc.evidence = proposal.evidence
@@ -211,13 +370,55 @@ async def persist_proposal(
         session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id,
         project_id=doc.project_id,
         payload={
-            "event": "classify", "source": proposal.source, "doc_class": proposal.doc_class,
-            "confidence": float(proposal.confidence), "model_called": model_result is not None, "flags": flags,
+            "event": "classify", "decided_by": doc.classified_by, "source": proposal.source, "doc_class": proposal.doc_class,
+            "sub_type": proposal.sub_type, "confidence": float(proposal.confidence), "ai_called": model_result is not None,
+            "images_sent": used_images, "flags": flags, "ai_unavailable_reason": metadata.get("ai_unavailable_reason"),
         },
     )
 
 
-async def process_document(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> list[UUID]:
+_COPY_FLAGS_SKIP = {Flag.DUPLICATE.value}
+
+
+async def _copy_from_original(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> bool:
+    """Same bytes as an earlier file of this project: reuse its classification instead of asking the AI again."""
+    if doc.duplicate_of_id is None:
+        return False
+    original = (await session.execute(select(ProjectDocument).where(ProjectDocument.id == doc.duplicate_of_id))).scalar_one_or_none()
+    if original is None or original.doc_class is None or original.status in (
+        DocStatus.RECEIVED.value, DocStatus.PROCESSING.value, DocStatus.FAILED.value, DocStatus.REJECTED.value, DocStatus.EXCLUDED.value,
+    ):
+        return False
+    doc.doc_class, doc.sub_type, doc.confidence = original.doc_class, original.sub_type, original.confidence
+    doc.title, doc.document_number, doc.revision_label = original.title, original.document_number, original.revision_label
+    doc.doc_metadata = {**original.doc_metadata, "same_file_as": str(original.id)}
+    doc.evidence = [{"rule": "same_file", "class": original.doc_class, "weight": 1.0, "matched": f"identical to {original.original_filename}", "page": None}, *original.evidence]
+    doc.flags = list(dict.fromkeys([*[f for f in original.flags if f not in (Flag.REVISION_OF.value,)], Flag.DUPLICATE.value]))
+    doc.classified_by = original.classified_by
+    doc.safety_status = original.safety_status
+    doc.content_type_sniffed = original.content_type_sniffed
+    doc.status = DocStatus.PROPOSED.value
+    doc.error_message = None
+    session.add(
+        DocumentClassification(
+            tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id,
+            source=ClassificationSource.MODEL.value if original.classified_by == Decider.AI.value else ClassificationSource.RULES.value,
+            doc_class=original.doc_class, sub_type=original.sub_type, confidence=original.confidence or 0,
+            evidence=doc.evidence, doc_metadata=doc.doc_metadata, is_current=True,
+        )
+    )
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+        payload={"event": "classify", "decided_by": doc.classified_by, "source": "same_file", "doc_class": doc.doc_class,
+                 "confidence": float(doc.confidence or 0), "ai_called": False, "copied_from": str(original.id)},
+    )
+    return True
+
+
+async def process_document(
+    session: AsyncSession, ctx: RequestContext, document_id: UUID, prepared: Prepared | None = None, run: AiRun | None = None
+) -> list[UUID]:
     """Runs one document through the pipeline. Returns child document ids (for a zip)."""
     settings = get_settings()
     doc = await get_document(session, document_id)
@@ -226,8 +427,13 @@ async def process_document(session: AsyncSession, ctx: RequestContext, document_
     doc.status = DocStatus.PROCESSING.value
     await session.flush()
 
-    data = await get_object_bytes(doc.object_key, bucket=doc.bucket)
-    safety: IntakeSafety = await asyncio.to_thread(check_file, filename=doc.original_filename, data=data, settings=settings)
+    if prepared is None and await _copy_from_original(session, ctx, doc):
+        return []
+    if prepared is None:
+        prepared = await prepare_document(ctx, DocSnapshot.of(doc), run or AiRun(settings))
+    if prepared.error is not None:
+        raise prepared.error
+    safety = prepared.safety
     doc.safety_status = safety.status
     doc.content_type_sniffed = safety.sniffed
     if not safety.accepted:
@@ -241,6 +447,7 @@ async def process_document(session: AsyncSession, ctx: RequestContext, document_
         return []
 
     if safety.is_archive:
+        data = prepared.extras.get("data") or await get_object_bytes(doc.object_key, bucket=doc.bucket)
         result = await asyncio.wait_for(
             asyncio.to_thread(expand_zip, data, ArchiveLimits.from_settings(settings)), timeout=settings.intake_doc_timeout_s
         )
@@ -262,29 +469,12 @@ async def process_document(session: AsyncSession, ctx: RequestContext, document_
         )
         return child_ids
 
-    content = await asyncio.wait_for(
-        asyncio.to_thread(extract_content, filename=doc.original_filename, ext=doc.ext, sniffed=safety.sniffed, data=data),
-        timeout=settings.intake_doc_timeout_s,
+    assert prepared.content is not None and prepared.rules is not None
+    proposal = combine(prepared.rules, prepared.model, settings=settings, reason=prepared.ai_reason)
+    await persist_proposal(
+        session, ctx, doc, prepared.content, prepared.rules, proposal, prepared.model,
+        injection=prepared.injection, used_images=prepared.used_images,
     )
-    folder = normalise_folder(doc.archive_path)
-    rules = classify_rules(content, doc.original_filename, folder=folder)
-    wanted = needs_model(rules, settings.intake_rules_confident)
-    model_result = None
-    if wanted:
-        image = await asyncio.to_thread(_page_image, doc.ext, data) if content.needs_image else None
-        try:
-            model_result = await asyncio.wait_for(
-                classify_with_model(
-                    filename=doc.original_filename, content=content, candidates=sorted(rules.candidates), image_png=image,
-                    folder_path=folder,
-                    meta=AIMeta(project_id=doc.project_id, entity_type="project_document", entity_id=str(doc.id)),
-                ),
-                timeout=settings.intake_doc_timeout_s,
-            )
-        except Exception:  # noqa: BLE001 -- a model failure must never fail the document
-            logger.warning("tender_intake: stage 2 unavailable for %s", document_id, exc_info=True)
-    proposal = combine(rules, model_result, model_wanted=wanted, settings=settings)
-    await persist_proposal(session, ctx, doc, content, rules, proposal, model_result)
     return []
 
 
@@ -303,11 +493,16 @@ async def mark_failed(session: AsyncSession, ctx: RequestContext, document_id: U
 
 
 __all__ = [
+    "AiRun",
     "AttachmentSafetyStatus",
+    "DocSnapshot",
+    "Prepared",
     "bucket_for",
     "get_document",
     "mark_failed",
     "object_key_for",
     "persist_proposal",
+    "prepare_batch",
+    "prepare_document",
     "process_document",
 ]
