@@ -123,7 +123,7 @@ describe('SheetIndexPage annotations', () => {
     ]) {
       expect(await screen.findByText(label)).toBeInTheDocument()
     }
-    expect(screen.getAllByText('Extraction: ready')).toHaveLength(6)
+    expect(screen.getAllByText('Extraction: succeeded')).toHaveLength(6)
     const link = screen.getByRole('link', { name: 'Open sheet 3 in takeoff viewer' })
     expect(link).toHaveAttribute('href', '/projects/p1/drawings/d1/sheets/2')
     expect(screen.getAllByRole('link', { name: /in takeoff viewer/ })).toHaveLength(6)
