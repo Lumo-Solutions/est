@@ -22,3 +22,7 @@ Branch: feat/ai-first-intake (from master after feat/ai-provider). When resuming
 - [ ] 7 frontend: one project page, tree, needs-your-check, admin setting
 - [ ] 8 demo pack + real-backend walkthrough; update old specs/screenshots
 - [ ] 9 report, merge to master, MFA left off
+
+## Subagent verification (finish-brief rule A7)
+- agent intake-admin (c561709): commit exists on its branch; diff = 3 allow-listed files (AiAdmin.tsx, AiAdmin.test.tsx, admin/api.ts); diff read in full; merged --no-ff (9e6d8b1).
+- agent intake-tree (d50743f): commit exists; `git diff --name-only` shows only `frontend/src/features/tenderIntake/**` (23 files); main session re-ran in the worktree: tsc clean, oxlint only the 3 pre-existing warnings, vitest 32 files / 208 tests pass; merged --no-ff. Worktrees were created by hand from the branch head (harness worktrees start from old commits) and removed after the merge.
