@@ -46,6 +46,7 @@ async def extract_json(
     user_prompt: str,
     json_schema: dict[str, Any],
     image_data_url: str | None = None,
+    image_data_urls: list[str] | None = None,
     max_tokens: int = 512,
     settings: Settings | None = None,
     task: str = "extract",
@@ -53,8 +54,11 @@ async def extract_json(
     prompt_version: str = "1",
 ) -> dict[str, Any]:
     settings = settings or get_settings()
-    images = [_image_from_data_url(image_data_url)] if image_data_url else []
+    urls = list(image_data_urls or ([image_data_url] if image_data_url else []))
+    images = [_image_from_data_url(u) for u in urls]
     kind = _KIND_FOR_TASK.get(task, VISION if images else EXTRACT)
+    if task == "intake_classify" and images:
+        kind = VISION  # text is the classify model's job; images (scans, drawing sheets) need the vision model
     result = await _gateway(settings).run(
         task=task,
         kind=kind,

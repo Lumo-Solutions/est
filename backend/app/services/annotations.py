@@ -17,7 +17,7 @@ from app.ai.gateway import AIGateway, AIMeta
 from app.core.context import RequestContext
 from app.core.enums import AuditAction, DrawingKind
 from app.integrations.s3 import get_object_bytes
-from app.models.takeoff import Drawing, DrawingAnnotation, DrawingSheet
+from app.models.takeoff import Drawing, DrawingAnnotation, DrawingSheet, live_drawing_ids
 from app.services import audit
 from app.services.projects import assert_can_see_project
 from app.takeoff import pdf as pdf_mod
@@ -34,7 +34,7 @@ async def queue_sheets(
     """Marks the project's (or one drawing's) sheets 'queued' and returns their ids. Sheets already
     read are skipped unless force=True."""
     await assert_can_see_project(session, ctx, project_id)
-    stmt = select(DrawingSheet).where(DrawingSheet.project_id == project_id)
+    stmt = select(DrawingSheet).where(DrawingSheet.project_id == project_id, DrawingSheet.drawing_id.in_(live_drawing_ids(project_id)))
     if drawing_id:
         stmt = stmt.where(DrawingSheet.drawing_id == drawing_id)
     sheets = (await session.execute(stmt.order_by(DrawingSheet.drawing_id, DrawingSheet.sheet_index))).scalars().all()
@@ -125,7 +125,7 @@ async def list_annotations(
 async def summary(session: AsyncSession, project_id: UUID) -> dict[str, int]:
     rows = (
         await session.execute(
-            select(DrawingSheet.annotations_status, func.count()).where(DrawingSheet.project_id == project_id).group_by(DrawingSheet.annotations_status)
+            select(DrawingSheet.annotations_status, func.count()).where(DrawingSheet.project_id == project_id, DrawingSheet.drawing_id.in_(live_drawing_ids(project_id))).group_by(DrawingSheet.annotations_status)
         )
     ).all()
     out = {"sheets": 0, "done": 0, "queued": 0, "unavailable": 0, "failed": 0, "skipped": 0, "unread": 0}

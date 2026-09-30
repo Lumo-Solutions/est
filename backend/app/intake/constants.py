@@ -37,7 +37,28 @@ DEFAULT_CLASS_LABELS: dict[str, str] = {
     DocClass.OTHER.value: "Other",
 }
 
-DRAWING_SUB_TYPES = ("civil_infra", "architectural", "structural", "mep", "landscape", "other")
+# Drawing discipline (stored in ``sub_type``). The first eleven are what the AI is asked for; ``civil_infra`` and
+# ``other`` are kept so documents classified before AI-first intake stay valid.
+DRAWING_DISCIPLINES = (
+    "roads_civil", "stormwater", "sewer", "water_supply", "irrigation", "electrical_lighting", "telecom",
+    "landscape", "architectural", "structural", "mep",
+)
+DRAWING_SUB_TYPES = (*DRAWING_DISCIPLINES, "civil_infra", "other")
+DISCIPLINE_LABELS: dict[str, str] = {
+    "roads_civil": "Roads / civil", "stormwater": "Stormwater drainage", "sewer": "Sewer", "water_supply": "Water supply",
+    "irrigation": "Irrigation", "electrical_lighting": "Electrical / street lighting", "telecom": "Telecom",
+    "landscape": "Landscape", "architectural": "Architectural", "structural": "Structural", "mep": "MEP",
+    "civil_infra": "Civil / infrastructure", "other": "Other discipline",
+}
+# What kind of sheet a drawing is (stored in ``metadata.drawing_type``).
+DRAWING_TYPES = (
+    "location_plan", "general_arrangement", "plan_profile", "cross_sections", "typical_details", "schedules", "setting_out",
+)
+DRAWING_TYPE_LABELS: dict[str, str] = {
+    "location_plan": "Location / key plan", "general_arrangement": "General arrangement / layout",
+    "plan_profile": "Plan & profile / longitudinal section", "cross_sections": "Cross sections",
+    "typical_details": "Typical details", "schedules": "Schedules", "setting_out": "Setting-out",
+}
 ALL_CLASSES = tuple(c.value for c in DocClass)
 
 
@@ -65,6 +86,14 @@ class ClassificationSource(StrEnum):
     USER = "user"
 
 
+class Decider(StrEnum):
+    """Who decided a document's class, as shown in the tree and written to the audit trail."""
+
+    AI = "ai"
+    RULES = "rules"
+    USER = "user"
+
+
 class Flag(StrEnum):
     DUPLICATE = "duplicate"
     NOT_MEASURABLE = "not_measurable"
@@ -73,6 +102,10 @@ class Flag(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     MODEL_UNAVAILABLE = "model_unavailable"
     REVISION_OF = "revision_of"
+    # The AI could not be used for this file (off, not configured, over budget, failed): rules decided.
+    RULES_FALLBACK = "rules_fallback"
+    # Text in the file tried to instruct the classifier; it was ignored and the file needs a person's check.
+    INJECTION_SUSPECTED = "injection_suspected"
 
 
 # "lead_estimator+" written out (no rank comparison exists in this codebase).

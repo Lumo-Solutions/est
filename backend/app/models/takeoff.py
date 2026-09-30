@@ -65,6 +65,10 @@ class Drawing(TenantEntity):
     converted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     conversion_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     conversion_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # Migration 0037: reclassified away from "drawing" at intake. Sheets and measurements stay attached (never
+    # deleted); every takeoff / verification reader excludes archived drawings.
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, index=True)
+    archived_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     @property
     def is_dwg(self) -> bool:
@@ -386,3 +390,11 @@ class DrawingAnnotation(TenantEntity):
     source: Mapped[str] = mapped_column(String(8), nullable=False, server_default="ai")
     confidence: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
     ai_call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
+def live_drawing_ids(project_id: uuid.UUID):  # noqa: ANN201 -- a SQLAlchemy select
+    """Drawings that still take part in the takeoff: not archived by a tender-intake reclassification.
+    Every project-wide reader of sheets, measurements and annotations filters by this."""
+    from sqlalchemy import select
+
+    return select(Drawing.id).where(Drawing.project_id == project_id, Drawing.archived_at.is_(None))

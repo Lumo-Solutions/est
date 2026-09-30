@@ -163,74 +163,161 @@ def _blocks(user: str) -> list[tuple[str, str]]:
 
 
 # ------------------------------------------------------------------ intake_classify
+# A stand-in for a model that reads the document, not the folder: it looks only at the filename and the text between
+# the DOCUMENT markers, ignores the folder path and the rule hints in the prompt, and ignores text that tries to
+# instruct it. Confidence follows how clearly the document states what it is (a title in the first lines is
+# confident; a cue deep in the body or a filename alone is not).
 
+_DOC_TEXT = re.compile(r"<<<DOCUMENT TEXT\n(.*?)\nDOCUMENT TEXT>>>", re.S)
+_DOC_BLOCK = re.compile(r"<<<DOCUMENT TITLE BLOCK\n(.*?)\nDOCUMENT TITLE BLOCK>>>", re.S)
+_FILE_TYPE = re.compile(r"^File type: (\w+)", re.M)
+
+_CLASS_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("addendum", (r"addendum\s*(?:no\.?|number|#)?\s*\d+", r"\baddendum\b")),
+    ("boq", (r"bills?\s+of\s+quantit", r"schedules?\s+of\s+quantit")),
+    ("correspondence", (r"dear\s+(?:sirs?|madam|mr|ms)\b", r"yours\s+(?:faithfully|sincerely)", r"further\s+to\s+(?:our|your)\b")),
+    ("contract", (r"conditions\s+of\s+contract", r"\bfidic\b", r"particular\s+conditions", r"general\s+conditions")),
+    ("tender_instructions", (r"instructions\s+to\s+(?:tenderers|bidders)",)),
+    ("tender_forms", (r"form\s+of\s+tender", r"bid\s+bond", r"performance\s+(?:bond|guarantee)", r"bid\s+security")),
+    ("clarification", (r"request\s+for\s+information", r"\brfi\s*(?:no\.?|#)?\s*\d+", r"clarification\s*(?:no\.?|#)\s*\d+", r"response\s+to\s+(?:query|queries|rfi)")),
+    ("site_investigation", (r"geotechnical", r"soil\s+investigation", r"site\s+investigation", r"\bborehole")),
+    ("programme", (r"\bprogramme\b", r"\bgantt\b", r"baseline\s+(?:programme|schedule)")),
+    ("specification", (r"\bspecifications?\b", r"part\s+1\s*[-:]?\s*general", r"\bsection\s+\d{2}\s?\d{2}\s?\d{2}\b")),
+)
+_FILENAME_CUES: tuple[tuple[str, str], ...] = (
+    ("addendum", r"addend"), ("boq", r"\bboq\b|bill[-_ ]of[-_ ]quant"), ("specification", r"\bspec"),
+    ("contract", r"contract|conditions"), ("tender_instructions", r"\bitt\b|instructions"),
+    ("tender_forms", r"form[-_ ]of[-_ ]tender|\bbond\b"), ("clarification", r"\brfi\b|clarification"),
+    ("programme", r"\bprog(?:ramme)?\b|gantt"), ("site_investigation", r"geotech|soil|borehole"),
+    ("correspondence", r"letter|correspondence|email"), ("drawing", r"\bdwg\b|\b[a-z]{1,3}-\d{2,4}\b"),
+)
+_DISCIPLINE_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("stormwater", ("storm", "surface water", "culvert")),
+    ("sewer", ("sewer", "sewage", "foul", "manhole schedule")),
+    ("water_supply", ("water supply", "potable", "water main", "water network", "ductile iron")),
+    ("irrigation", ("irrigation", "drip line", "sprinkler")),
+    ("electrical_lighting", ("street light", "streetlight", "lighting", "electrical", "luminaire")),
+    ("telecom", ("telecom", "duct bank", "fibre", "fiber", "communication")),
+    ("landscape", ("landscape", "planting", "softscape", "hardscape")),
+    ("structural", ("structural", "reinforc", "foundation", "footing", "column schedule")),
+    ("architectural", ("architectural", "floor plan", "elevation", "ceiling plan", "door schedule")),
+    ("mep", ("mechanical", "hvac", "plumbing", "fire fighting", "mep")),
+    ("roads_civil", ("road", "highway", "pavement", "carriageway", "kerb", "earthwork", "civil", "grading")),
+)
+_DRAWING_TYPE_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("location_plan", ("location plan", "key plan", "location map", "site location")),
+    ("plan_profile", ("plan and profile", "plan & profile", "longitudinal", "long section", "long-section")),
+    ("cross_sections", ("cross section", "cross-section", "cross sections")),
+    ("typical_details", ("typical detail", "standard detail", "typical section", "typical details")),
+    ("setting_out", ("setting out", "setting-out", "coordinate table", "setting out points")),
+    ("schedules", ("schedule",)),
+    ("general_arrangement", ("general arrangement", "layout", "site plan", "master plan", " plan")),
+)
+_UNIT_TYPE = re.compile(r"\b(?:villa|unit|house|plot)\s*type\s*[-:]?\s*([A-Z]?\d{1,2}[A-Z]?|[A-D])\b|\btype\s*([0-9]{1,2}[A-Z]?)\b", re.I)
+_INSTRUCTION_LINE = re.compile(
+    r"ignore\s+(?:all\s+|any\s+|the\s+)*(?:previous|prior|above|earlier)|disregard|(?:classify|mark|label|file|treat|set)\s+(?:this|it|the\s+document)\s+as"
+    r"|auto[-\s]?accept|approve|set\s+(?:the\s+)?confidence|confidence\s*(?:=|:|of|to)|you\s+are\s+now|new\s+instructions|system\s+prompt",
+    re.I,
+)
+COMPROMISED_MARKER = "[[MOCK-COMPROMISED]]"  # a test hook: makes the mock behave like a model that obeyed the document
+
+
+def _first_hit(text: str, patterns: tuple[str, ...]) -> re.Match[str] | None:
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m
+    return None
 
 
 def intake_classify(req: AIRequest) -> dict[str, Any]:
+    from app.intake.extract import DocContent
+    from app.intake.metadata import extract_metadata
 
-    text = req.user.lower()
+    user = req.user
+    fname = re.search(r"^Filename: (.*)$", user, re.M)
+    name = (fname.group(1) if fname else "").strip()
+    ft = _FILE_TYPE.search(user)
+    ftype = (ft.group(1) if ft else "").lower()
+    body_m, block_m = _DOC_TEXT.search(user), _DOC_BLOCK.search(user)
+    raw_body = body_m.group(1) if body_m else ""
+    raw_block = block_m.group(1) if block_m else ""
+    compromised = COMPROMISED_MARKER in raw_body
+    steered = bool(_INSTRUCTION_LINE.search(raw_body) or _INSTRUCTION_LINE.search(raw_block))
+    # A model that resists drops instruction-like lines before it reads; what is left is the real document.
+    body = "\n".join(line for line in raw_body.splitlines() if not _INSTRUCTION_LINE.search(line))
+    block = "\n".join(line for line in raw_block.splitlines() if not _INSTRUCTION_LINE.search(line))
+    text = f"{block}\n{body}"
+    low = text.lower()
+    head = "\n".join(body.strip().splitlines()[:6])[:500].lower() + "\n" + block.lower()
 
-    fname = re.search(r"filename: (.*)", req.user)
+    cls, quote, conf = "other", "", 0.4
+    has_sheet_headers = "[sheet:" in low and "description" in low and "unit" in low and ("qty" in low or "quantity" in low)
+    has_activity = "[sheet:" in low and "activity" in low and ("start" in low or "finish" in low)
+    title_block_drawing = bool(re.search(r"drawing\s*(?:no|number)|dwg\s*no", block, re.I)) or bool(
+        re.search(r"drawing\s*(?:no|number)", head, re.I) and re.search(r"\b(?:scale|rev)", low)
+    )
+    if ftype == "dxf":
+        cls, quote, conf = "drawing", "DXF drawing file", 0.96
+    elif title_block_drawing:
+        m = re.search(r"drawing\s*(?:no\.?|number)[^\n]*", text, re.I)
+        cls, quote, conf = "drawing", (m.group(0) if m else "title block")[:120], 0.94
+    elif has_sheet_headers:
+        cls, quote, conf = "boq", "Item / Description / Unit / Qty column headings", 0.96
+    elif has_activity:
+        cls, quote, conf = "programme", "Activity / Start / Finish columns", 0.9
+    else:
+        best: tuple[float, str, str] | None = None
+        for candidate, patterns in _CLASS_CUES:
+            m = _first_hit(head, patterns)
+            if m:
+                score, at = 0.93, m.group(0)
+            else:
+                m = _first_hit(low, patterns)
+                if not m:
+                    continue
+                score, at = 0.78, m.group(0)
+            if best is None or score > best[0]:
+                best = (score, candidate, at)
+        if best:
+            conf, cls, quote = best
+        else:
+            for candidate, pat in _FILENAME_CUES:
+                if re.search(pat, name, re.I):
+                    cls, quote, conf = candidate, name, 0.58
+                    break
+            else:
+                if req.images:
+                    cls, quote, conf = "drawing", "scanned page image", 0.55  # an image-only page nothing else matched
+    if steered:
+        conf = min(conf, 0.6)  # the prompt tells a model to be less sure of text that tries to steer it
 
-    name = (fname.group(1) if fname else "").lower()
-
-    rules = [
-
-        ("addendum", ("addendum",)),
-
-        ("boq", ("bill of quantities", "schedule of quantities", "boq")),
-
-        ("correspondence", ("dear sirs", "dear madam", "yours faithfully", "yours sincerely", "further to our")),
-
-        ("specification", ("specification", "part 1 - general", "section 0")),
-
-        ("contract", ("conditions of contract", "fidic")),
-
-        ("tender_instructions", ("instructions to tenderers", "instructions to bidders")),
-
-        ("tender_forms", ("form of tender", "bid bond")),
-
-        ("clarification", ("request for information", "clarification")),
-
-        ("programme", ("programme", "gantt")),
-
-        ("site_investigation", ("geotechnical", "borehole")),
-
-        ("drawing", ("drawing no", "scale", "sheet")),
-
-    ]
-
-    cls, quote, conf = "other", "", 0.5
-
-    for candidate, needles in rules:
-
-        hit = next((n for n in needles if n in text or n in name), None)
-
-        if hit:
-
-            cls, quote, conf = candidate, hit, 0.8
-
-            break
-
-    if cls == "other" and req.images:
-        cls, quote = "drawing", "scanned page image"   # an image-only page (no text layer) nothing else matched: a low-confidence scan of a drawing
-
-    sub = None
-
+    md = extract_metadata(DocContent(filename=name, ext=ftype, sniffed=None, text=body, title_block_text=block))
+    out: dict[str, Any] = {"doc_class": cls, "confidence": round(conf, 3), "evidence_quote": quote[:190], "evidence_page": 1}
+    meta: dict[str, Any] = {}
     if cls == "drawing":
-
-        sub = "landscape" if "landscape" in text else "civil_infra" if any(w in text for w in ("road", "sewer", "drain", "civil")) else None
-
-    out: dict[str, Any] = {"doc_class": cls, "confidence": conf, "evidence_quote": quote}
-
-    if sub:
-
-        out["sub_type"] = sub
-
+        disc = next((d for d, words in _DISCIPLINE_CUES if any(w in low for w in words)), None)
+        dtype = next((d for d, words in _DRAWING_TYPE_CUES if any(w in low for w in words)), None)
+        out["sub_type"], out["drawing_type"] = disc, dtype
+        m = _UNIT_TYPE.search(text)
+        if m:
+            meta["unit_type"] = f"Type {(m.group(1) or m.group(2)).upper()}"
+        for key in ("document_number", "title", "revision", "scale", "sheet_number"):
+            if md.get(key):
+                meta[key] = md[key]
+    elif cls == "addendum":
+        for key in ("addendum_number", "addendum_issue_date", "supersedes", "amends", "title"):
+            if md.get(key):
+                meta[key] = md[key]
+    elif cls == "boq" and md.get("header_row"):
+        meta["header_row"] = md["header_row"]
+    if meta:
+        out["metadata"] = meta
+    if compromised:
+        # What a model that obeyed the document would emit: a wrong class, full confidence and action-looking keys.
+        # The gateway drops unknown keys and the pipeline treats the rest as a proposal, so none of it may take effect.
+        out.update({"doc_class": "drawing", "confidence": 1.0, "action": "approve", "route": "boq_wizard", "auto_accept": True})
     return out
-
-
-
 
 
 # ------------------------------------------------------------------ boq_pdf_rows

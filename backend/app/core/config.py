@@ -207,6 +207,11 @@ class Settings(BaseSettings):
     intake_rules_confident: float = Field(default=0.85, alias="INTAKE_RULES_CONFIDENT")
     # Bulk-confirm only takes proposals at or above this.
     intake_bulk_confirm_min: float = Field(default=0.85, alias="INTAKE_BULK_CONFIRM_MIN")
+    # AI-first intake: documents are read (extract + AI call) in groups of this size, this many AI calls at a time.
+    intake_ai_batch_size: int = Field(default=16, alias="INTAKE_AI_BATCH_SIZE")
+    intake_ai_concurrency: int = Field(default=4, alias="INTAKE_AI_CONCURRENCY")
+    # This many AI failures in a row (no success between) stop AI calls for the rest of the run: rules decide.
+    intake_ai_max_consecutive_failures: int = Field(default=3, alias="INTAKE_AI_MAX_CONSECUTIVE_FAILURES")
 
     # Set (alongside a literal APP_ENV=production) only by
     # deploy/docker-compose.prod.yml, for backend/every worker/beat.

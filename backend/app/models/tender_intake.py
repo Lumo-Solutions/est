@@ -68,6 +68,9 @@ class ProjectDocument(TenantEntity):
     )
     routed_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     routed_ref: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Who decided the current class: 'ai' | 'rules' | 'user'. auto_accepted: routed without a person.
+    classified_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    auto_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 

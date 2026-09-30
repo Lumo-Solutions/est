@@ -33,6 +33,13 @@ _BOQ_MENTION = re.compile(r"\b(?:bill of quantities|schedule of quantities|BOQ)\
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z])|\n+")
 
 _DISCIPLINE_WORDS = (
+    # Specific disciplines first, so "storm drainage" is not swallowed by the generic civil words below.
+    ("stormwater", ("storm", "surface water")),
+    ("sewer", ("sewer", "sewage", "foul")),
+    ("water_supply", ("water supply", "potable", "water main", "water network")),
+    ("irrigation", ("irrigation",)),
+    ("telecom", ("telecom", "communication", "fibre", "fiber")),
+    ("electrical_lighting", ("street light", "lighting")),
     ("civil_infra", ("civil", "infra", "road", "drainage", "earthwork", "highway")),
     ("architectural", ("architect",)),
     ("structural", ("structur",)),
