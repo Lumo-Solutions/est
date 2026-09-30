@@ -1,0 +1,70 @@
+"""`extract_json`: the drop-in replacement for the old
+app.integrations.vllm.extract_json, so the existing callers (intake
+classifier, title block, scale hint, C2 quote extraction) keep their call
+shape and their tests keep monkeypatching the same name. Everything now goes
+through the AIGateway."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.ai.errors import AIError
+from app.ai.gateway import AIGateway, AIMeta, RedisRateLimiter
+from app.ai.provider import CLASSIFY, EXTRACT, VISION, ImageInput
+from app.core.config import Settings, get_settings
+
+
+class AIExtractionError(AIError):
+    """Kept for callers that catch a single failure type."""
+
+
+_KIND_FOR_TASK = {
+    "intake_classify": CLASSIFY,
+    "scale_hint": CLASSIFY,
+    "title_block": VISION,
+    "quotation_extract": VISION,
+}
+
+
+def _gateway(settings: Settings) -> AIGateway:
+    limiter = None
+    if settings.ai_provider not in ("local_vllm", "mock"):
+        limiter = RedisRateLimiter(settings.redis_url, settings.ai_rate_limit_per_min)
+    return AIGateway(settings=settings, rate_limiter=limiter)
+
+
+def _image_from_data_url(url: str) -> ImageInput:
+    import base64
+
+    header, _, b64 = url.partition(",")
+    mime = header.split(":", 1)[1].split(";", 1)[0] if ":" in header else "image/png"
+    return ImageInput(base64.b64decode(b64), mime)
+
+
+async def extract_json(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    json_schema: dict[str, Any],
+    image_data_url: str | None = None,
+    max_tokens: int = 512,
+    settings: Settings | None = None,
+    task: str = "extract",
+    meta: AIMeta | None = None,
+    prompt_version: str = "1",
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    images = [_image_from_data_url(image_data_url)] if image_data_url else []
+    kind = _KIND_FOR_TASK.get(task, VISION if images else EXTRACT)
+    result = await _gateway(settings).run(
+        task=task,
+        kind=kind,
+        system=system_prompt,
+        user=user_prompt,
+        schema=json_schema,
+        images=images,
+        max_tokens=max_tokens,
+        prompt_version=prompt_version,
+        meta=meta,
+    )
+    return result.data

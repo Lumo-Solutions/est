@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
 from app.core.config import Settings
-from app.integrations.vllm import extract_json
+from app.ai.compat import extract_json
 from app.intake.constants import ALL_CLASSES, DRAWING_SUB_TYPES, ClassificationSource, Flag
 from app.intake.extract import DocContent
 from app.intake.rules import RuleOutcome
@@ -91,6 +91,7 @@ async def classify_with_model(
         json_schema=load_schema("document_classification.schema.json"),
         image_data_url=image_data_url,
         max_tokens=MODEL_MAX_TOKENS,
+        task="intake_classify",
     )
     return parse_model_output(raw)
 

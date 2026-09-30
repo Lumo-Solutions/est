@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +47,22 @@ class Settings(BaseSettings):
     vllm_model: str = Field(default="Qwen/Qwen2.5-VL-7B-Instruct", alias="VLLM_MODEL")
     vllm_api_key: str = Field(default="not-needed", alias="VLLM_API_KEY")
     vllm_timeout_s: float = Field(default=120, alias="VLLM_TIMEOUT_S")
+    # External AI provider layer (docs/ai-plan.md). TEMPORARY, knowing
+    # reversal of SRS §1.1: unset AI_PROVIDER keeps the self-hosted vLLM
+    # path above exactly as before. Switching back is config only.
+    ai_provider: str = Field(default="local_vllm", alias="AI_PROVIDER")
+    ai_model: str = Field(default="", alias="AI_MODEL")
+    ai_model_classify: str = Field(default="", alias="AI_MODEL_CLASSIFY")
+    ai_model_vision: str = Field(default="", alias="AI_MODEL_VISION")
+    ai_model_reasoning: str = Field(default="", alias="AI_MODEL_REASONING")
+    ai_api_key: SecretStr = Field(default=SecretStr(""), alias="AI_API_KEY")
+    ai_base_url: str = Field(default="", alias="AI_BASE_URL")
+    ai_timeout_s: float = Field(default=120, alias="AI_TIMEOUT_S")
+    ai_max_retries: int = Field(default=3, alias="AI_MAX_RETRIES")
+    ai_monthly_budget_usd: float | None = Field(default=None, alias="AI_MONTHLY_BUDGET_USD")
+    ai_project_budget_usd: float | None = Field(default=None, alias="AI_PROJECT_BUDGET_USD")
+    ai_rate_limit_per_min: int = Field(default=120, alias="AI_RATE_LIMIT_PER_MIN")
+    ai_stale_rate_months: int = Field(default=12, alias="AI_STALE_RATE_MONTHS")
     embedding_backend: str = Field(default="onnx", alias="EMBEDDING_BACKEND")
     embedding_model: str = Field(default="BAAI/bge-small-en-v1.5", alias="EMBEDDING_MODEL")
     embedding_dim: int = Field(default=384, alias="EMBEDDING_DIM")
@@ -237,6 +253,42 @@ class Settings(BaseSettings):
                 "refusing to start with MFA disabled."
             )
         return self
+
+    @field_validator("ai_monthly_budget_usd", "ai_project_budget_usd", mode="before")
+    @classmethod
+    def _blank_budget_is_unlimited(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("ai_provider", mode="before")
+    @classmethod
+    def _blank_provider_is_local(cls, v: object) -> object:
+        return "local_vllm" if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("ai_provider")
+    @classmethod
+    def _assert_known_ai_provider(cls, v: str) -> str:
+        v = (v or "local_vllm").strip().lower()
+        if v not in ("local_vllm", "anthropic", "openai_compatible", "mock"):
+            raise ValueError(
+                f"AI_PROVIDER={v!r} is not one of local_vllm, anthropic, openai_compatible, mock"
+            )
+        return v
+
+    @field_validator("ai_base_url")
+    @classmethod
+    def _assert_ai_base_url_is_https(cls, v: str) -> str:
+        """An external AI endpoint carries tenant data: refuse plain http
+        except to a loopback/compose-internal host (mock servers in tests)."""
+        v = (v or "").strip()
+        if not v:
+            return v
+        parsed = urlparse(v)
+        internal = (parsed.hostname or "") in ("localhost", "127.0.0.1", "host.docker.internal") or "." not in (
+            parsed.hostname or ""
+        )
+        if parsed.scheme != "https" and not internal:
+            raise ValueError("AI_BASE_URL must be https:// for a non-internal host")
+        return v
 
     @field_validator("vllm_api_base")
     @classmethod

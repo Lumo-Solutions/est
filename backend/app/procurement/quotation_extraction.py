@@ -13,7 +13,7 @@ import base64
 
 from pydantic import BaseModel, Field
 
-from app.integrations.vllm import extract_json
+from app.ai.compat import extract_json
 from app.procurement.prompts import load_schema, render_prompt
 
 
@@ -71,6 +71,10 @@ async def extract_quotation(
         image_data_url = f"data:{image_mime};base64,{b64}"
 
     raw = await extract_json(
-        system_prompt=system_prompt, user_prompt=user_prompt, json_schema=schema, image_data_url=image_data_url
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        json_schema=schema,
+        image_data_url=image_data_url,
+        task="quotation_extract",
     )
     return QuotationExtractionResult.model_validate(raw)

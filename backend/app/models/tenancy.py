@@ -59,6 +59,9 @@ class Project(TenantEntity):
     area: Mapped[str | None] = mapped_column(String(128), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
+    # AI governance (docs/ai-plan.md): NULL inherits the tenant switch, FALSE
+    # keeps this (confidential) project off any external AI provider.
+    external_ai_override: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class ProjectMember(Base):
