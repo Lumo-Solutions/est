@@ -14,10 +14,13 @@ import { MAX_FILE_BYTES, formatBytes, splitIntoBatches, todayIso } from './lib'
 export function UploadPanel({
   projectId,
   onUploaded,
+  onUploadStart,
   variant = 'compact',
 }: {
   projectId: string
   onUploaded: (packageId: string) => void
+  /** Fired when an upload begins, so a parent can keep this panel on screen until `onUploaded` or until the user leaves. */
+  onUploadStart?: () => void
   variant?: 'hero' | 'compact'
 }) {
   const hero = variant === 'hero'
@@ -50,6 +53,7 @@ export function UploadPanel({
 
   const upload = async () => {
     setBusy(true)
+    onUploadStart?.()
     setError(null)
     const batches = splitIntoBatches(files)
     const total = files.length + uploadedSoFar

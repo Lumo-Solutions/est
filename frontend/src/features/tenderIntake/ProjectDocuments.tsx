@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useAuth } from '../../auth/AuthContext'
 import { Card } from '../../components/Card'
 import { SkeletonRows } from '../../components/Skeleton'
@@ -23,6 +24,9 @@ export function ProjectDocuments({ projectId }: { projectId: string }) {
   const canUpload = hasRole(...UPLOAD_ROLES)
   const canConfirm = hasRole(...CONFIRM_ROLES)
   const tree = useTenderTree(projectId)
+  // The drop zone of an empty project stays up until its upload has finished: the first batch creates the package
+  // (so the project stops being "empty"), but the remaining batches and the upload status live in the zone.
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   if (tree.isLoading) {
     return (
@@ -45,9 +49,9 @@ export function ProjectDocuments({ projectId }: { projectId: string }) {
   return (
     <div>
       <AiStatusNotice summary={summary} />
-      {empty &&
+      {(empty || uploadOpen) &&
         (canUpload ? (
-          <UploadPanel projectId={projectId} onUploaded={noop} variant="hero" />
+          <UploadPanel projectId={projectId} onUploaded={() => setUploadOpen(false)} onUploadStart={() => setUploadOpen(true)} variant="hero" />
         ) : (
           <Card className="mt-6">
             <p className="text-base text-ink-2">No tender documents have been uploaded yet. An estimator or above can upload them.</p>

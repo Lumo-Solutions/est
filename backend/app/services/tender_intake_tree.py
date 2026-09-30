@@ -140,7 +140,7 @@ async def build_tree(session: AsyncSession, project_id: UUID, *, ai_available: b
         if doc.routed_kind == "drawing":
             drawings_total += 1
             drawings_ready += display == "ready"
-    addenda = len((await session.execute(select(Addendum.id).where(Addendum.project_id == project_id))).scalars().all())
+    addenda = len((await session.execute(select(Addendum.id).where(Addendum.project_id == project_id, Addendum.withdrawn_at.is_(None)))).scalars().all())
     processing = len(
         (
             await session.execute(

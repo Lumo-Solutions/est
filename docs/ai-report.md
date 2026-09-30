@@ -64,7 +64,7 @@ Then: sign in as the managing director, Admin > AI, switch **External AI allowed
 
 ## 8. How to run the demo
 
-`make up && make migrate && make seed`, set `AI_PROVIDER=mock` and `TAKEOFF_PERSIST_GEOMETRY=true` in `deploy/.env`, then `make dev-seed-ai-demo` (cost library, vendors, 15 past tenders) and `make dev-ai-demo-pack` (writes `./.ai-demo-pack/`). Create a project (the UI lands on Tender documents), drop the `Al Reem Package 3` folder, confirm, import the Excel BOQ, read annotations, **Verify BOQ against drawings**, then `make dev-seed-ai-demo-quotes` before building the settlement. `make dev-clean-demo-data` removes it all. The designed outcome is in `backend/app/demo/ai_demo.py` (`EXPECTED_CLASSES`).
+`make up && make migrate && make seed`, set `AI_PROVIDER=mock` and `TAKEOFF_PERSIST_GEOMETRY=true` in `deploy/.env`, then `make dev-seed-ai-demo` (cost library, vendors, 15 past tenders) and `make dev-ai-demo-pack` (writes `./.ai-demo-pack/`). Create a project (the UI lands on the project page with its drop zone), drop the `Al Reem Package 3` folder (the AI sorts it and routes what it is sure of; file the one it is unsure of under "Needs your check"), import the Excel BOQ from Next steps, read annotations, **Verify BOQ against drawings**, then `make dev-seed-ai-demo-quotes` before building the settlement. `make dev-clean-demo-data` removes it all. The designed outcome is in `backend/app/demo/ai_demo.py` (`EXPECTED_CLASSES`).
 
 ## 9. Verification record
 

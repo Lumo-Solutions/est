@@ -62,7 +62,7 @@ Only when `AI_PROVIDER` is external **and** the tenant switch is on **and** the 
 
 | Task | Sent to the provider | Never sent |
 |---|---|---|
-| `intake_classify` | file name, folder path, the first ~6,000 characters of text, title-block text (~2,000), a page-1 image only when there is no text layer | the file itself, other pages |
+| `intake_classify` | **every** uploaded file (AI-first intake, prompt v2; a byte-identical copy in the same project reuses its original's answer): file name, folder path, file type, page count, the text of the first two pages (up to ~6,000 characters) or a workbook's sheet names with their first rows, title-block text (~2,000), what the automatic rules suspect (as an unverified hint), and, **only when the text is not enough** (scans, sheets that are all linework, images), a page-1 image plus a higher-resolution crop of the title block, sent to the vision model | the file itself, pages after the second, the rest of a workbook |
 | `title_block` | title-block text and the cropped title-block image of a sheet | the rest of the sheet |
 | `scale_hint` | the printed scale text | anything else |
 | `quotation_extract` | the vendor quotation's text, or its page image | tenant BOQ, other quotes |

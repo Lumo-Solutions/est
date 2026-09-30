@@ -57,3 +57,7 @@ build/
 # Third-party vendor binaries and user samples (ODA File Converter) -- never commit
 deploy/vendor/
 backend/tests/fixtures/dwg/
+
+# Written by `make dev-ai-demo-pack` and the real-backend walkthrough specs
+.ai-demo-pack/
+backend/.last-test.log

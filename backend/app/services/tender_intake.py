@@ -576,26 +576,41 @@ async def _route_boq(session: AsyncSession, ctx: RequestContext, doc: ProjectDoc
 async def _route_addendum(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
     md = doc.doc_metadata
     supersedes, amends = list(md.get("supersedes", [])), list(md.get("amends", []))
-    addendum = Addendum(
-        tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id, package_id=doc.package_id,
+    fields = dict(
         addendum_no=str(md["addendum_number"]) if md.get("addendum_number") else None,
         issue_date=str(md["addendum_issue_date"]) if md.get("addendum_issue_date") else None,
         title=doc.title or doc.original_filename,
         summary="; ".join(filter(None, [f"Supersedes: {', '.join(supersedes)}" if supersedes else "", f"Amends: {', '.join(amends)}" if amends else ""])) or None,
         routed_at=datetime.now(timezone.utc),
     )
-    session.add(addendum)
+    # A document that was an addendum before, was reclassified away and is an addendum again gets its register row back.
+    addendum = (await session.execute(select(Addendum).where(Addendum.document_id == doc.id))).scalar_one_or_none()
+    if addendum is None:
+        addendum = Addendum(tenant_id=ctx.tenant_id, project_id=doc.project_id, document_id=doc.id, package_id=doc.package_id, **fields)
+        session.add(addendum)
+    else:
+        for key, value in fields.items():
+            setattr(addendum, key, value)
+        addendum.withdrawn_at = addendum.withdrawn_reason = None
     await session.flush()
+    existing_links = {
+        (l.reference_text, l.action): l
+        for l in (await session.execute(select(AddendumLink).where(AddendumLink.addendum_id == addendum.id))).scalars().all()
+    }
     for action, refs in (("supersedes", supersedes), ("amends", amends)):
         for ref in refs:
             target = await _resolve_target(session, doc.project_id, ref)
-            session.add(
-                AddendumLink(
-                    tenant_id=ctx.tenant_id, project_id=doc.project_id, addendum_id=addendum.id,
-                    target_document_id=target.id if target is not None else None, reference_text=ref[:255], action=action,
-                    resolved=target is not None,
+            link = existing_links.get((ref[:255], action))
+            if link is not None:
+                link.target_document_id, link.resolved = (target.id if target is not None else None), target is not None
+            else:
+                session.add(
+                    AddendumLink(
+                        tenant_id=ctx.tenant_id, project_id=doc.project_id, addendum_id=addendum.id,
+                        target_document_id=target.id if target is not None else None, reference_text=ref[:255], action=action,
+                        resolved=target is not None,
+                    )
                 )
-            )
             if target is not None and action == "supersedes":
                 target.routed_ref = {**target.routed_ref, "superseded_by_addendum": str(addendum.id)}
     addendum.flagged_settlement_ids = await _flag_settlements(session, doc.project_id)
@@ -627,7 +642,7 @@ async def _recompute_boq_for_drawing(session: AsyncSession, ctx: RequestContext,
 async def unroute_document(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument, *, reason: str) -> None:
     """Undoes whatever routing created, so the document can be routed somewhere else. Nothing is deleted that
     holds work: a drawing is archived (its sheets and measurements stay, and every takeoff reader skips it); an
-    addendum record is removed (the document stays); BOQ pre-fill and register entries have nothing else behind them."""
+    addendum is withdrawn from the register (the row stays); BOQ pre-fill and register entries have nothing else behind them."""
     undone: dict = {"routed_kind": doc.routed_kind}
     if doc.routed_kind == "drawing" and doc.routed_ref.get("drawing_id"):
         from app.models.takeoff import Drawing, DrawingMeasurement
@@ -659,9 +674,8 @@ async def unroute_document(session: AsyncSession, ctx: RequestContext, doc: Proj
             ).scalars().all():
                 if target.routed_ref.get("superseded_by_addendum") == str(addendum.id):
                     target.routed_ref = {k: v for k, v in target.routed_ref.items() if k != "superseded_by_addendum"}
-            for link in links:
-                await session.delete(link)
-            await session.delete(addendum)
+            # Withdrawn from the register, never deleted (and no settlement is flagged by it any more).
+            addendum.withdrawn_at, addendum.withdrawn_reason = datetime.now(timezone.utc), reason[:255]
             await session.flush()
     # Revision lineage: this document no longer takes part; everything else is re-derived from what is still routed.
     neighbours = (
@@ -854,7 +868,7 @@ async def bulk_confirm(
 # ------------------------------------------------------------ registers / views
 async def list_addenda(session: AsyncSession, project_id: UUID) -> list[AddendumOut]:
     addenda = (
-        await session.execute(select(Addendum).where(Addendum.project_id == project_id).order_by(Addendum.routed_at.desc()))
+        await session.execute(select(Addendum).where(Addendum.project_id == project_id, Addendum.withdrawn_at.is_(None)).order_by(Addendum.routed_at.desc()))
     ).scalars().all()
     out: list[AddendumOut] = []
     for a in addenda:

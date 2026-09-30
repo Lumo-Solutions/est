@@ -110,6 +110,9 @@ class Addendum(TenantEntity):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     routed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
     flagged_settlement_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # Migration 0037: the document was reclassified away from "addendum". Never deleted; revived if routed again.
+    withdrawn_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    withdrawn_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class AddendumLink(TenantEntity):

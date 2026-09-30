@@ -20,6 +20,7 @@ import base64
 import io
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -49,7 +50,11 @@ MODEL_MAX_TOKENS = 700
 # Below this much readable text a PDF is sent as an image too; at or above it the text model is enough.
 TEXT_SUFFICIENT_CHARS = 150
 TITLE_BLOCK_SUFFICIENT_CHARS = 40
+MIN_READABLE_CHARS = 20
 IMAGE_MAX_SIDE_PX = 1_800
+# PDFium (behind pypdfium2) is not thread-safe, and pages are rendered from worker threads while AI calls overlap:
+# concurrent renders crash the interpreter. One render at a time, process-wide.
+_PDFIUM_LOCK = threading.Lock()
 
 # Text in a document that tries to steer the classifier. It is never obeyed (the prompt fences the content and the
 # schema has no action fields); seeing it only withholds auto-accept so a person looks at the file.
@@ -148,9 +153,16 @@ def text_is_sufficient(content: DocContent) -> bool:
         return False
     if content.ext != "pdf":
         return True  # xlsx/csv/docx/dxf: what there is to read is text; dwg/xls have no parser and no image
-    if len((content.text or "").strip()) >= TEXT_SUFFICIENT_CHARS:
+    text_len = len((content.text or "").strip())
+    if text_len >= TEXT_SUFFICIENT_CHARS:
         return True
-    return len((content.title_block_text or "").strip()) >= TITLE_BLOCK_SUFFICIENT_CHARS
+    if len((content.title_block_text or "").strip()) >= TITLE_BLOCK_SUFFICIENT_CHARS:
+        return True
+    if text_len < MIN_READABLE_CHARS:
+        return False  # next to nothing to read: a blank sheet, a stamp, a scan with a few stray characters
+    # A short text-only page (a cover note, a letter, an RFI) says what it is. A short text on a sheet full of
+    # linework is a drawing whose words are all in an image-like title block: look at it.
+    return content.vector_density < DENSE_VECTOR_PRIMITIVES // 2
 
 
 def rule_hints(rules: RuleOutcome, limit: int = 3) -> list[dict]:
@@ -187,9 +199,10 @@ def build_images(ext: str, data: bytes, content: DocContent) -> list[bytes]:
         if ext == "pdf":
             from app.takeoff.pdf import crop_title_block_png, render_page_png
 
-            images = [_shrink(render_page_png(data, 0, dpi=100))]
-            if content.vector_density >= DENSE_VECTOR_PRIMITIVES // 2 or content.title_block_text:
-                images.append(crop_title_block_png(render_page_png(data, 0, dpi=170)))
+            with _PDFIUM_LOCK:
+                images = [_shrink(render_page_png(data, 0, dpi=100))]
+                if content.vector_density >= DENSE_VECTOR_PRIMITIVES // 2 or content.title_block_text:
+                    images.append(crop_title_block_png(render_page_png(data, 0, dpi=170)))
             return images
         if ext in ("jpg", "jpeg", "png"):
             from PIL import Image

@@ -296,8 +296,17 @@ def intake_classify(req: AIRequest) -> dict[str, Any]:
     out: dict[str, Any] = {"doc_class": cls, "confidence": round(conf, 3), "evidence_quote": quote[:190], "evidence_page": 1}
     meta: dict[str, Any] = {}
     if cls == "drawing":
-        disc = next((d for d, words in _DISCIPLINE_CUES if any(w in low for w in words)), None)
-        dtype = next((d for d, words in _DRAWING_TYPE_CUES if any(w in low for w in words)), None)
+        # What the sheet is called (its TITLE line and first lines) decides; the rest of the text only fills in when the title is silent.
+        title_low = "\n".join(
+            [ln for ln in text.splitlines() if re.match(r"\s*(?:sheet\s+)?title\s*[:\-]", ln, re.I)]
+            + [ln for ln in body.splitlines() if ln.strip() and not ln.startswith("[Page")][:2]
+        ).lower()
+        disc = next((d for d, words in _DISCIPLINE_CUES if any(w in title_low for w in words)), None) or next(
+            (d for d, words in _DISCIPLINE_CUES if any(w in low for w in words)), None
+        )
+        dtype = next((d for d, words in _DRAWING_TYPE_CUES if any(w in title_low for w in words)), None) or next(
+            (d for d, words in _DRAWING_TYPE_CUES if any(w in low for w in words)), None
+        )
         out["sub_type"], out["drawing_type"] = disc, dtype
         m = _UNIT_TYPE.search(text)
         if m:
