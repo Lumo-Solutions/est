@@ -20,6 +20,7 @@ from app.core.config import Settings
 from app.core.context import RequestContext
 from app.core.enums import Role
 from app.models.takeoff import Drawing, DrawingAnnotation, DrawingMeasurement, DrawingSheet
+from app.services.verification import group_ref
 
 pytestmark = pytest.mark.asyncio
 
@@ -84,7 +85,7 @@ async def _seed_project(authed_client, app_engine) -> dict:
         sh = DrawingSheet(tenant_id=TENANT, drawing_id=d.id, project_id=d.project_id, sheet_index=0, units="m")
         s.add(sh)
         await s.flush()
-        ms = {}
+        ms, members = {}, {}
         for key, (cap, kind, layer, val) in {
             "p300": ("pipe_network_topology", "pipe_length_m", "SEWER-300", 246.0),
             "p150": ("pipe_network_topology", "pipe_length_m", "SEWER-150", 150.0),
@@ -95,13 +96,18 @@ async def _seed_project(authed_client, app_engine) -> dict:
                                    bbox_min_x=0, bbox_min_y=0, bbox_max_x=10, bbox_max_y=10)
             s.add(m)
             await s.flush()
-            ms[key] = str(m.id)
+            if cap == "pipe_network_topology":   # pipe runs are grouped per (sheet, kind, layer) into one evidence item
+                ms[key] = group_ref(sh.id, cap, kind, layer)
+                members[key] = [str(m.id)]
+            else:
+                ms[key] = f"m:{m.id}"
         a = DrawingAnnotation(tenant_id=TENANT, project_id=d.project_id, drawing_id=d.id, sheet_id=sh.id, page=1, text="12 nos precast manhole",
                               kind="count", value=12, unit="nos", bbox=[0.1, 0.2, 0.2, 0.25], source="ai", confidence=0.85)
         s.add(a)
         await s.flush()
-        ms["ann"] = str(a.id)
-    return {"pid": pid, "items": items, "ev": ms, "head": head}
+        ms["ann"] = f"a:{a.id}"
+        sheet_id = str(sh.id)
+    return {"pid": pid, "items": items, "ev": ms, "head": head, "members": members, "sheet": sheet_id}
 
 
 async def _member(authed_client, app_engine, pid: str, role: str):
@@ -145,7 +151,7 @@ async def test_run_classes_quantities_provenance_and_usage(authed_client, app_en
     l11 = by["1.1"]
     assert (l11["vclass"], l11["method"], l11["mapped_by"]) == ("match", "measured", "ai")
     assert float(l11["drawing_quantity"]) == 246.0 and abs(float(l11["delta_pct"]) - 0.408) < 0.01
-    assert l11["evidence"][0]["ref"] == f"m:{seed['ev']['p300']}" and l11["evidence"][0]["page"] == 1 and l11["evidence"][0]["bbox"] is not None
+    assert l11["evidence"][0]["ref"] == seed['ev']['p300'] and l11["evidence"][0]["page"] == 1 and l11["evidence"][0]["bbox"] is not None
     assert l11["candidates"] and l11["candidates"][0]["source"] == "ai" and l11["candidates"][0]["selected"] is True
     l12 = by["1.2"]
     assert (l12["vclass"], float(l12["delta"])) == ("variance", 50.0) and float(l12["delta_pct"]) == 50.0
@@ -156,7 +162,7 @@ async def test_run_classes_quantities_provenance_and_usage(authed_client, app_en
     assert by["1"]["vclass"] == "not_verifiable"
     missing = [l for l in lines["items"] if l["vclass"] == "missing_in_boq"]
     assert len(missing) == 1 and missing[0]["boq_line_item_id"] is None and float(missing[0]["drawing_quantity"]) == 520.0
-    assert missing[0]["evidence"][0]["ref"] == f"m:{seed['ev']['road']}"
+    assert missing[0]["evidence"][0]["ref"] == seed['ev']['road']
 
     # filters and summary
     only_var = (await lead.get(f"/api/v1/verification-runs/{run['id']}/lines", params={"vclass": "variance"})).json()
@@ -171,7 +177,7 @@ async def test_reject_accept_recalculate_and_feed_reconciliation(authed_client, 
     run = await _run(lead, seed["pid"])
     lines = (await lead.get(f"/api/v1/verification-runs/{run['id']}/lines")).json()["items"]
     l12 = _by_item(lines)["1.2"]
-    ref = f"m:{seed['ev']['p150']}"
+    ref = seed['ev']['p150']
 
     # reject: the line loses its evidence and that geometry now shows as possible missed scope
     r = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l12['id']}/mapping", json={"action": "reject", "evidence_ref": ref})
@@ -186,7 +192,7 @@ async def test_reject_accept_recalculate_and_feed_reconciliation(authed_client, 
     assert body["line"]["vclass"] == "variance" and body["line"]["mapped_by"] == "user" and float(body["line"]["confidence"]) >= 0.94
     assert body["run"]["counts"]["missing_in_boq"] == 1
     links = (await lead.get(f"/api/v1/boq-items/{seed['items']['1.2']}/measurements")).json()
-    assert [m["id"] for m in links] == [seed["ev"]["p150"]]
+    assert [m["id"] for m in links] == seed["members"]["p150"]
     recon = (await lead.get(f"/api/v1/boq-items/{seed['items']['1.2']}")).json()
     assert recon["discrepancy_class"] == "variance"  # verification and reconciliation agree: one system
 
@@ -201,7 +207,7 @@ async def test_decisions_survive_a_new_run_and_are_audited(authed_client, app_en
     lead = await _member(authed_client, app_engine, seed["pid"], Role.LEAD_ESTIMATOR.value)
     run1 = await _run(lead, seed["pid"])
     l11 = _by_item((await lead.get(f"/api/v1/verification-runs/{run1['id']}/lines")).json()["items"])["1.1"]
-    ref = f"m:{seed['ev']['p300']}"
+    ref = seed['ev']['p300']
     await lead.post(f"/api/v1/verification-runs/{run1['id']}/lines/{l11['id']}/mapping", json={"action": "reject", "evidence_ref": ref})
     run2 = await _run(lead, seed["pid"])
     assert _by_item((await lead.get(f"/api/v1/verification-runs/{run2['id']}/lines")).json()["items"])["1.1"]["vclass"] == "missing_in_drawings"
@@ -218,10 +224,10 @@ async def test_include_arbitrary_evidence_and_dimension_guard(authed_client, app
     run = await _run(lead, seed["pid"])
     l14 = _by_item((await lead.get(f"/api/v1/verification-runs/{run['id']}/lines")).json()["items"])["1.4"]
     # a length cannot be counted toward a count line
-    bad = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l14['id']}/mapping", json={"action": "include", "evidence_ref": f"m:{seed['ev']['road']}"})
+    bad = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l14['id']}/mapping", json={"action": "include", "evidence_ref": seed['ev']['road']})
     assert bad.status_code == 422
     # the manhole annotation (12 nos) included on the lighting line: a person may, and it is 'user'-mapped
-    ok = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l14['id']}/mapping", json={"action": "include", "evidence_ref": f"a:{seed['ev']['ann']}"})
+    ok = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l14['id']}/mapping", json={"action": "include", "evidence_ref": seed['ev']['ann']})
     assert ok.status_code == 200 and ok.json()["line"]["mapped_by"] == "user" and ok.json()["line"]["vclass"] == "variance"
     unknown = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l14['id']}/mapping", json={"action": "include", "evidence_ref": f"m:{uuid.uuid4()}"})
     assert unknown.status_code == 404
@@ -262,7 +268,7 @@ async def test_roles(authed_client, app_engine):
     lead = await _member(authed_client, app_engine, pid, Role.LEAD_ESTIMATOR.value)
     run = await _run(lead, pid)
     line = _by_item((await lead.get(f"/api/v1/verification-runs/{run['id']}/lines")).json()["items"])["1.2"]
-    ref = f"m:{seed['ev']['p150']}"
+    ref = seed['ev']['p150']
     # working the report is estimator-level: a non-member is refused, a non-app role is refused
     outsider = authed_client(frozenset({Role.ESTIMATOR.value}))
     assert (await outsider.get(f"/api/v1/verification-runs/{run['id']}")).status_code == 404
@@ -275,3 +281,45 @@ async def test_roles(authed_client, app_engine):
     assert ok.status_code == 200
     assert (await est2.post(f"/api/v1/verification-runs/{run['id']}/lines/{line['id']}/mapping", json={"action": "bogus", "evidence_ref": ref})).status_code == 422
     assert (await est2.get(f"/api/v1/verification-runs/{uuid.uuid4()}")).status_code == 404
+
+
+async def test_pipe_runs_are_one_evidence_item_the_network_total_is_skipped_and_accept_links_every_run(authed_client, app_engine):
+    """The pipe extractor emits one measurement per run plus a network total. A BOQ line is the SUM of the runs
+    of one size, so they form one evidence item and the total is not evidence (selecting both would double count)."""
+    seed = await _seed_project(authed_client, app_engine)
+    pid = seed["pid"]
+    runs = []
+    async with AsyncSession(app_engine) as s, s.begin():
+        await s.execute(text("SELECT set_config('app.tenant_id', :t, false), set_config('app.is_system', 'on', false)"), {"t": str(TENANT)})
+        sheet = (await s.execute(text("SELECT id, drawing_id FROM drawing_sheets WHERE project_id=:p"), {"p": pid})).one()
+        # three more runs on the 300 layer: 246 (seeded) -> the group totals 246 + 100 + 90 + 56 = 492
+        for v in (100.0, 90.0, 56.0):
+            m = DrawingMeasurement(tenant_id=TENANT, drawing_id=sheet.drawing_id, sheet_id=sheet.id, project_id=uuid.UUID(pid),
+                                   capability="pipe_network_topology", kind="pipe_run_length_m", value=v, unit="m", confidence=0.9,
+                                   extractor_metadata={"layer": "SEWER-300"})
+            s.add(m)
+            await s.flush()
+            runs.append(str(m.id))
+        # the extractor's network total: must never become evidence
+        s.add(DrawingMeasurement(tenant_id=TENANT, drawing_id=sheet.drawing_id, sheet_id=sheet.id, project_id=uuid.UUID(pid),
+                                 capability="pipe_network_topology", kind="pipe_network_total_length_m", value=9999.0, unit="m", confidence=0.9))
+        # make the seeded run the same kind so all four share one group
+        await s.execute(text("UPDATE drawing_measurements SET kind='pipe_run_length_m' WHERE id=:i"), {"i": seed["members"]["p300"][0]})
+    lead = await _member(authed_client, app_engine, pid, Role.LEAD_ESTIMATOR.value)
+    found = (await lead.get(f"/api/v1/projects/{pid}/verification-evidence", params={"q": "SEWER-300", "kind": "measurement"})).json()["items"]
+    assert len(found) == 1 and found[0]["ref"].startswith("g:") and abs(found[0]["value"] - 492.0) < 1e-6
+    assert "4 runs summed" in found[0]["label"] and all(e["value"] != 9999.0 for e in found)
+    everything = (await lead.get(f"/api/v1/projects/{pid}/verification-evidence", params={"kind": "measurement", "limit": 200})).json()["items"]
+    assert all(e["value"] != 9999.0 for e in everything)
+
+    run = await _run(lead, pid)
+    l11 = _by_item((await lead.get(f"/api/v1/verification-runs/{run['id']}/lines")).json()["items"])["1.1"]
+    ref = l11["evidence"][0]["ref"]
+    assert ref.startswith("g:") and float(l11["drawing_quantity"]) == 492.0 and l11["vclass"] == "variance"   # 245 tendered vs 492 drawn
+    # accepting the group links EVERY member run into the existing reconciliation
+    r = await lead.post(f"/api/v1/verification-runs/{run['id']}/lines/{l11['id']}/mapping", json={"action": "accept", "evidence_ref": ref})
+    assert r.status_code == 200
+    linked = {m["id"] for m in (await lead.get(f"/api/v1/boq-items/{seed['items']['1.1']}/measurements")).json()}
+    assert linked == set(seed["members"]["p300"]) | set(runs)
+    # the group ref is stable across re-runs, so the decision persists
+    assert ref == group_ref(sheet.id, "pipe_network_topology", "pipe_run_length_m", "SEWER-300")

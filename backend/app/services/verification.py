@@ -47,6 +47,15 @@ from app.verification.engine import (
 )
 
 DEFAULT_TOLERANCE = 2.0
+GROUPED_CAPABILITY = "pipe_network_topology"
+
+
+def group_ref(sheet_id, capability: str, kind: str, layer: str | None) -> str:
+    """Stable id of a group of measurements: it depends on WHAT the group is (sheet, kind, layer), not on
+    which runs are in it, so a person's decision about it survives a re-extraction."""
+    import hashlib
+
+    return "g:" + hashlib.sha1(f"{sheet_id}|{capability}|{kind}|{layer or ''}".encode()).hexdigest()[:20]
 
 
 # ------------------------------------------------------------------ serialisation
@@ -55,7 +64,7 @@ def _ev_json(e: Evidence) -> dict:
     return {
         "ref": e.ref, "kind": e.kind, "value": e.value, "unit": e.unit, "label": e.label, "drawing_id": e.drawing_id,
         "sheet_id": e.sheet_id, "page": e.page, "bbox": e.bbox, "layer": e.layer, "confidence": e.confidence,
-        "material": e.material, "ann_kind": e.ann_kind,
+        "material": e.material, "ann_kind": e.ann_kind, "members": list(e.members),
     }
 
 
@@ -64,7 +73,7 @@ def _ev_from_json(d: dict) -> Evidence:
         ref=d["ref"], kind=d["kind"], value=float(d["value"]), unit=d.get("unit"), label=d.get("label", ""),
         drawing_id=d.get("drawing_id"), sheet_id=d.get("sheet_id"), page=d.get("page"), bbox=d.get("bbox"),
         layer=d.get("layer"), confidence=float(d.get("confidence", 1.0)), material=d.get("material"),
-        ann_kind=d.get("ann_kind"),
+        ann_kind=d.get("ann_kind"), members=tuple(d.get("members") or ()),
     )
 
 
@@ -99,10 +108,19 @@ async def load_evidence(session: AsyncSession, project_id: UUID) -> list[Evidenc
     }
     out: list[Evidence] = []
     ms = (await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.project_id == project_id))).scalars().all()
+    groups: dict[tuple, list[DrawingMeasurement]] = {}
     for m in ms:
         layer = (m.extractor_metadata or {}).get("layer") if m.extractor_metadata else None
         trade_name = trades.get(m.trade_node_id) if m.trade_node_id else None
         sheet = sheets.get(m.sheet_id)
+        if m.capability == GROUPED_CAPABILITY:
+            # The pipe extractor emits one measurement per run PLUS a network total. A BOQ line is the sum of
+            # the runs of one size, so runs are grouped per (sheet, kind, layer) into one piece of evidence,
+            # and the redundant total is skipped (selecting both would double count).
+            if m.kind.endswith("_total_length_m"):
+                continue
+            groups.setdefault((m.drawing_id, m.sheet_id, m.capability, m.kind, layer or ""), []).append(m)
+            continue
         bbox = None
         if None not in (m.bbox_min_x, m.bbox_min_y, m.bbox_max_x, m.bbox_max_y):
             bbox = [float(m.bbox_min_x), float(m.bbox_min_y), float(m.bbox_max_x), float(m.bbox_max_y)]
@@ -113,6 +131,25 @@ async def load_evidence(session: AsyncSession, project_id: UUID) -> list[Evidenc
                 drawing_id=str(m.drawing_id), sheet_id=str(m.sheet_id), page=(sheet.sheet_index + 1) if sheet else None,
                 bbox=bbox, layer=layer, trade_id=str(m.trade_node_id) if m.trade_node_id else None, trade_name=trade_name,
                 confidence=float(m.confidence),
+            )
+        )
+    for (drawing_id, sheet_id, capability, kind, layer), members in groups.items():
+        sheet = sheets.get(sheet_id)
+        trade_id = next((m.trade_node_id for m in members if m.trade_node_id), None)
+        trade_name = trades.get(trade_id) if trade_id else None
+        boxes = [(m.bbox_min_x, m.bbox_min_y, m.bbox_max_x, m.bbox_max_y) for m in members]
+        bbox = None
+        if all(None not in b for b in boxes):
+            bbox = [min(float(b[0]) for b in boxes), min(float(b[1]) for b in boxes), max(float(b[2]) for b in boxes), max(float(b[3]) for b in boxes)]
+        label = build_measurement_descriptor(capability=capability, kind=kind, layer=layer or None, trade_name=trade_name)
+        out.append(
+            Evidence(
+                ref=group_ref(sheet_id, capability, kind, layer), kind="measurement",
+                value=sum(float(m.effective_value) for m in members), unit=members[0].unit,
+                label=f"{label} ({len(members)} run{'s' if len(members) != 1 else ''} summed)",
+                drawing_id=str(drawing_id), sheet_id=str(sheet_id), page=(sheet.sheet_index + 1) if sheet else None,
+                bbox=bbox, layer=layer or None, trade_id=str(trade_id) if trade_id else None, trade_name=trade_name,
+                confidence=min(float(m.confidence) for m in members), members=tuple(sorted(str(m.id) for m in members)),
             )
         )
     anns = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.project_id == project_id))).scalars().all()
@@ -458,22 +495,30 @@ async def set_mapping(
         raise ConflictError(f"The report is {run.status}; wait until it is ready")
     await assert_can_see_project(session, ctx, run.project_id)
     kind_prefix, _, raw_id = evidence_ref.partition(":")
-    if kind_prefix not in ("m", "a"):
+    if kind_prefix not in ("m", "a", "g"):
         raise ValidationAppError("Unknown evidence reference")
-    try:
-        evidence_id = UUID(raw_id)
-    except ValueError as exc:
-        raise ValidationAppError("Unknown evidence reference") from exc
     boq = (await session.execute(select(BoqLineItem).where(BoqLineItem.id == row.boq_line_item_id))).scalar_one()
 
-    target: DrawingMeasurement | DrawingAnnotation | None
-    if kind_prefix == "m":
-        target = (await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.id == evidence_id, DrawingMeasurement.project_id == run.project_id))).scalar_one_or_none()
+    measurement_ids: list[UUID] = []  # the measurements behind this evidence (linked into reconciliation on accept)
+    if kind_prefix == "g":  # a group of measurements (e.g. all 300mm sewer runs on one sheet)
+        group = next((e for e in await load_evidence(session, run.project_id) if e.ref == evidence_ref), None)
+        if group is None:
+            raise NotFoundError("That drawing evidence was not found in this project")
+        unit, measurement_ids = group.unit, [UUID(m) for m in group.members]
     else:
-        target = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.id == evidence_id, DrawingAnnotation.project_id == run.project_id))).scalar_one_or_none()
-    if target is None:
-        raise NotFoundError("That drawing evidence was not found in this project")
-    unit = target.unit
+        try:
+            evidence_id = UUID(raw_id)
+        except ValueError as exc:
+            raise ValidationAppError("Unknown evidence reference") from exc
+        target: DrawingMeasurement | DrawingAnnotation | None
+        if kind_prefix == "m":
+            target = (await session.execute(select(DrawingMeasurement).where(DrawingMeasurement.id == evidence_id, DrawingMeasurement.project_id == run.project_id))).scalar_one_or_none()
+            measurement_ids = [evidence_id]
+        else:
+            target = (await session.execute(select(DrawingAnnotation).where(DrawingAnnotation.id == evidence_id, DrawingAnnotation.project_id == run.project_id))).scalar_one_or_none()
+        if target is None:
+            raise NotFoundError("That drawing evidence was not found in this project")
+        unit = target.unit
     if action in ("accept", "include") and boq.uom and unit and not unit_conversion.convertible(unit, boq.uom):
         raise ValidationAppError(f"Cannot count {unit!r} evidence toward a BOQ line measured in {boq.uom!r}: different dimensions")
 
@@ -497,19 +542,21 @@ async def set_mapping(
     await session.flush()
 
     # Feed the existing reconciliation and the continuous-learning store (measurements only).
-    if kind_prefix == "m" and action in ("accept", "include"):
+    if measurement_ids and action in ("accept", "include"):
         from app.services import boq as boq_service
 
-        try:
-            await boq_service.add_measurement_link(session, ctx, boq.id, evidence_id)
-        except ValidationAppError as exc:  # unit incompatibility etc.: the decision stands, the link does not
-            link_note = str(exc)
-    if kind_prefix == "m" and action in ("accept", "reject"):
-        await record_feedback(
-            session, ctx, project_id=run.project_id, match_type=MATCH_TYPE_BOQ_MEASUREMENT,
-            query_embedding=list(boq.description_embedding) if boq.description_embedding is not None else None,
-            target_id=evidence_id, outcome="accepted" if action == "accept" else "rejected",
-        )
+        for mid in measurement_ids:
+            try:
+                await boq_service.add_measurement_link(session, ctx, boq.id, mid)
+            except ValidationAppError as exc:  # unit incompatibility etc.: the decision stands, the link does not
+                link_note = str(exc)
+    if measurement_ids and action in ("accept", "reject"):
+        for mid in measurement_ids:
+            await record_feedback(
+                session, ctx, project_id=run.project_id, match_type=MATCH_TYPE_BOQ_MEASUREMENT,
+                query_embedding=list(boq.description_embedding) if boq.description_embedding is not None else None,
+                target_id=mid, outcome="accepted" if action == "accept" else "rejected",
+            )
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="verification_mapping", entity_id=boq.id, project_id=run.project_id,
         payload={"run_id": str(run.id), "action": action, "evidence_ref": evidence_ref, "before": before, "after": after,

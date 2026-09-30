@@ -108,6 +108,8 @@ class Evidence:
     confidence: float = 1.0
     material: str | None = None
     ann_kind: str | None = None  # annotation kind: length/area/volume/count/diameter/level/other
+    # For a grouped measurement (all pipe runs on one layer of one sheet): the member measurement ids.
+    members: tuple[str, ...] = ()
 
     def dimension(self) -> unit_conversion.Dimension | None:
         return unit_conversion.unit_dimension(self.unit) if self.unit else None
