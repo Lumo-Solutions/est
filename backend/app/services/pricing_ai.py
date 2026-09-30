@@ -32,7 +32,7 @@ from app.models.quotation_ingestion import Quotation, QuotationExclusionFlag, Qu
 from app.models.settlement import BidSettlement, BidSettlementLineItem
 from app.models.taxonomy import TradeNode
 from app.models.tenancy import Project
-from app.models.vendors import Vendor
+from app.models.vendors import Vendor, VendorTrade
 from app.pricing import ai as pai
 from app.pricing import engine as pe
 from app.schemas.settlement import LineCostUpdate, SimulateRequest
@@ -167,14 +167,23 @@ async def _gather(
         open_flags = {(qid, lid): n for qid, lid, n in flag_rows}
     from app.services.procurement import _vendor_eligibility  # noqa: PLC0415 -- the one definition of vendor eligibility
 
+    vendor_primary_trade: dict[UUID, UUID] = {}
+    if quote_rows:
+        for vt in (
+            await session.execute(select(VendorTrade).where(VendorTrade.vendor_id.in_({v.id for _l, _q, v in quote_rows})).order_by(VendorTrade.is_primary.desc()))
+        ).scalars().all():
+            vendor_primary_trade.setdefault(vt.vendor_id, vt.trade_node_id)
+
     for qli, quotation, vendor in quote_rows:
         item = items.get(qli.boq_line_item_id)
         if item is None or qli.unit_price is None:
             continue
         excl = open_flags.get((quotation.id, qli.id), 0) + open_flags.get((quotation.id, None), 0)
         eligible: bool | None = None
-        if item.trade_node_id is not None:
-            eligible, _why = await _vendor_eligibility(session, vendor, item.trade_node_id, project.id)
+        # An imported BOQ line usually has no trade classification yet: judge the vendor against its own primary trade.
+        trade_for_check = item.trade_node_id or vendor_primary_trade.get(vendor.id)
+        if trade_for_check is not None:
+            eligible, _why = await _vendor_eligibility(session, vendor, trade_for_check, project.id)
         cand = pe.CostCandidate(
             ref=f"q:{qli.id}", ctype=pe.CandType.QUOTE.value,
             label=f"{vendor.trading_name or vendor.legal_name}: {(qli.vendor_description_text or item.description)[:140]}",

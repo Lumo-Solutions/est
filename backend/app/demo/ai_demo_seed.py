@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -48,6 +48,8 @@ async def seed_library_vendors_history(session: AsyncSession, ctx: RequestContex
     # ---- cost library: each item gets an older closed rate and a current one (stale ones only an old rate)
     today = date.today()
     existing = set((await session.execute(select(CostItem.code).where(CostItem.tenant_id == tenant_id, CostItem.code.like(f"{demo.COST_CODE_PREFIX}%")))).scalars().all())
+    if existing:  # a previous clean only deactivated them: bring them back
+        await session.execute(update(CostItem).where(CostItem.tenant_id == tenant_id, CostItem.code.like(f"{demo.COST_CODE_PREFIX}%")).values(is_active=True))
     for it in demo.COST_LIBRARY:
         if it.code in existing:
             continue
@@ -91,6 +93,7 @@ async def seed_library_vendors_history(session: AsyncSession, ctx: RequestContex
         for j, code in enumerate(spec.trades):
             if code in trades:
                 session.add(VendorTrade(tenant_id=tenant_id, vendor_id=vendor.id, trade_node_id=trades[code], is_primary=(j == 0)))
+        await session.flush()
         await vendors_service.replace_service_regions(session, ctx, vendor.id, list(spec.regions))
         status = {"approved": "approved", "expiring": "approved", "lapsed": "suspended", "pending": "pending"}[spec.prequal]
         await prequal_service.decide_prequalification(
@@ -216,6 +219,10 @@ async def clean(session: AsyncSession, tenant_id: UUID) -> dict[str, int]:
         await session.delete(v)
         out["vendors"] += 1
     await session.flush()
-    res = await session.execute(delete(CostItem).where(CostItem.tenant_id == tenant_id, CostItem.code.like(f"{demo.COST_CODE_PREFIX}%")))
+    # The cost library is append-only by design (bi-temporal; no DELETE policy for anyone), so demo items are
+    # DEACTIVATED, not deleted: they disappear from lists and from the pricing assistant, and a re-seed reactivates them.
+    res = await session.execute(
+        update(CostItem).where(CostItem.tenant_id == tenant_id, CostItem.code.like(f"{demo.COST_CODE_PREFIX}%"), CostItem.is_active.is_(True)).values(is_active=False)
+    )
     out["cost_items"] = res.rowcount or 0
     return out

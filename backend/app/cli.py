@@ -2069,7 +2069,10 @@ async def clean_demo_data() -> None:
         from app.demo import ai_demo_seed
 
         ai_counts = await ai_demo_seed.clean(session, tenant_id)
-        print(f"AI demo: deleted {ai_counts['projects']} project(s), {ai_counts['vendors']} vendor(s), {ai_counts['cost_items']} cost item(s).")
+        print(
+            f"AI demo: deleted {ai_counts['projects']} project(s) and {ai_counts['vendors']} vendor(s); deactivated "
+            f"{ai_counts['cost_items']} cost item(s) (the cost library is append-only by design, so they are hidden, not deleted)."
+        )
 
 
 async def seed_ai_demo() -> None:

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.ai.errors import AIOutputInvalid
-from app.ai.schema_util import strip_unknown, validate
+from app.ai.schema_util import clamp_numbers, strip_unknown, validate
 
 # Operation kinds (they differ in labelling / default model tier, not wire path).
 CLASSIFY = "classify"
@@ -91,7 +91,7 @@ class AIProvider:
         """Runs the provider and enforces the schema: unknown keys are
         dropped (AI output has no back door), structural problems raise."""
         result = await self._complete(req)
-        cleaned = strip_unknown(result.data, req.schema)
+        cleaned = clamp_numbers(strip_unknown(result.data, req.schema), req.schema)
         problems = validate(cleaned, req.schema)
         if problems:
             raise AIOutputInvalid("; ".join(problems[:5]))

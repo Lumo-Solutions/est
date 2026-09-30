@@ -91,3 +91,24 @@ def strip_unknown(value: Any, schema: dict[str, Any]) -> Any:
     if isinstance(value, list) and "items" in schema:
         return [strip_unknown(v, schema["items"]) for v in value]
     return value
+
+
+def clamp_numbers(value: Any, schema: dict[str, Any]) -> Any:
+    """Clamps numeric values into the schema's declared minimum/maximum. A model that returns markup_pct 400 or a
+    confidence of 7.5 gets a value inside the allowed range rather than one that could flow on; enum and type
+    violations are still rejected by `validate`."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        lo, hi = schema.get("minimum"), schema.get("maximum")
+        if isinstance(lo, (int, float)) and value < lo:
+            return type(value)(lo)
+        if isinstance(hi, (int, float)) and value > hi:
+            return type(value)(hi)
+        return value
+    if isinstance(value, dict) and "properties" in schema:
+        props = schema["properties"]
+        return {k: clamp_numbers(v, props[k]) if k in props else v for k, v in value.items()}
+    if isinstance(value, list) and "items" in schema:
+        return [clamp_numbers(v, schema["items"]) for v in value]
+    return value

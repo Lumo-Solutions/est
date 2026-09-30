@@ -312,3 +312,13 @@ async def test_prompt_injection_cannot_change_output_shape():
             await g.run(task="t", system="sys", user="x", schema=SCHEMA)
     finally:
         clear_mock_handlers()
+
+
+def test_numbers_are_clamped_into_the_schema_range():
+    from app.ai.schema_util import clamp_numbers
+
+    schema = {"type": "object", "properties": {"score": {"type": "number", "minimum": 0, "maximum": 1},
+                                                 "items": {"type": "array", "items": {"type": "object", "properties": {"n": {"type": "integer", "maximum": 5}}}}}}
+    out = clamp_numbers({"score": 7.5, "items": [{"n": 9}, {"n": 2}], "other": 99}, schema)
+    assert out == {"score": 1, "items": [{"n": 5}, {"n": 2}], "other": 99}
+    assert clamp_numbers({"score": -3}, schema) == {"score": 0}
