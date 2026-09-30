@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type {
+  DrawingAnnotationPage,
+  DrawingAnnotationSummaryOut,
   DrawingEntityOut,
   DrawingMeasurementOut,
   DrawingOut,
@@ -8,6 +10,8 @@ import type {
   ManualScaleCalibrationIn,
   MeasurementOverrideIn,
   MeasurementOverrideOut,
+  ReadAnnotationsIn,
+  ReadAnnotationsOut,
   SheetScaleCalibrationOut,
 } from '../../types/api'
 
@@ -87,11 +91,64 @@ export function useDrawing(drawingId: string | undefined) {
   })
 }
 
-export function useSheets(drawingId: string | undefined) {
+const EXTRACTING = ['queued', 'converting', 'indexing', 'extracting', 'embedding']
+
+// True while any sheet is still extracting or has annotations queued.
+export function sheetsInProgress(sheets: DrawingSheetOut[] | undefined): boolean {
+  return Boolean(
+    sheets?.some(
+      (s) =>
+        (s.extraction_status != null && EXTRACTING.includes(s.extraction_status)) ||
+        s.annotations_status === 'queued',
+    ),
+  )
+}
+
+export const SHEETS_POLL_MS = 2000
+
+// `poll` opts a page into refetching while sheets are in progress.
+export function useSheets(drawingId: string | undefined, poll = false) {
   return useQuery({
     queryKey: ['drawings', drawingId, 'sheets'],
     queryFn: ({ signal }) => api.get<DrawingSheetOut[]>(`/drawings/${drawingId}/sheets`, signal),
     enabled: Boolean(drawingId),
+    refetchInterval: poll ? (query) => (sheetsInProgress(query.state.data) ? SHEETS_POLL_MS : false) : false,
+  })
+}
+
+export function useAnnotations(projectId: string | undefined, drawingId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'drawing-annotations', drawingId],
+    queryFn: ({ signal }) =>
+      api.get<DrawingAnnotationPage>(
+        `/projects/${projectId}/drawing-annotations?drawing_id=${drawingId}&limit=1000`,
+        signal,
+      ),
+    enabled: Boolean(projectId) && Boolean(drawingId),
+  })
+}
+
+export function useAnnotationSummary(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'drawing-annotations', 'summary'],
+    queryFn: ({ signal }) =>
+      api.get<DrawingAnnotationSummaryOut>(`/projects/${projectId}/drawing-annotations/summary`, signal),
+    enabled: Boolean(projectId),
+  })
+}
+
+export function useReadAnnotations(projectId: string | undefined, drawingId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (force: boolean) =>
+      api.post<ReadAnnotationsOut>(`/projects/${projectId}/drawing-annotations:read`, {
+        drawing_id: drawingId,
+        force,
+      } as ReadAnnotationsIn),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['drawings', drawingId, 'sheets'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'drawing-annotations'] })
+    },
   })
 }
 

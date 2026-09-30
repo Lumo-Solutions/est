@@ -107,6 +107,48 @@ export interface DrawingSheetOut {
   scale_confidence: number | null
   scale_disagreement: boolean
   extraction_status: string | null
+  annotations_status: string | null
+}
+
+export interface DrawingAnnotationOut {
+  id: string
+  sheet_id: string
+  page: number | null
+  text: string
+  kind: string | null
+  value: number | null
+  unit: string | null
+  material: string | null
+  bbox: number[] | null
+  source: string | null
+  confidence: number | null
+}
+
+export interface DrawingAnnotationPage {
+  items: DrawingAnnotationOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface DrawingAnnotationSummaryOut {
+  sheets: number
+  done: number
+  queued: number
+  unavailable: number
+  failed: number
+  skipped: number
+  unread: number
+  annotations: number
+}
+
+export interface ReadAnnotationsIn {
+  drawing_id: string
+  force: boolean
+}
+
+export interface ReadAnnotationsOut {
+  queued_sheets: number
 }
 
 export interface ManualScaleCalibrationIn {
