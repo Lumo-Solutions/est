@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { PathedFile } from '../../components/DropZone'
 import { api } from '../../lib/api'
 import type {
   Addendum,
@@ -122,7 +123,7 @@ export function useCreateTenderPackage(projectId: string | undefined) {
   return useMutation({
     mutationFn: (input: CreatePackageInput) => {
       const fd = new FormData()
-      for (const f of input.files) fd.append('files', f)
+      for (const f of input.files) fd.append('files', f, (f as PathedFile).relativePath ?? f.name)
       if (input.label) fd.append('label', input.label)
       if (input.transmittal_ref) fd.append('transmittal_ref', input.transmittal_ref)
       if (input.received_date) fd.append('received_date', input.received_date)
@@ -139,7 +140,7 @@ export function useAddTenderFiles(packageId: string | undefined, projectId?: str
     // learns the package id mid-flow (the upload panel) can bind the hook once.
     mutationFn: ({ files, packageId: override }: { files: File[]; packageId?: string }) => {
       const fd = new FormData()
-      for (const f of files) fd.append('files', f)
+      for (const f of files) fd.append('files', f, (f as PathedFile).relativePath ?? f.name)
       return api.post<TenderPackageAccepted>(`/tender-packages/${override ?? packageId}/files`, fd)
     },
     onSuccess: invalidate,

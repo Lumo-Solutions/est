@@ -68,4 +68,36 @@ describe('UploadPanel resumable upload', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('huge.pdf')
     expect(screen.getByRole('button', { name: 'Upload 1 file' })).toBeInTheDocument()
   })
+
+  it('shows the relative path next to the file and passes the pathed file on', async () => {
+    createAsync.mockResolvedValue({ package_id: 'pk1' })
+    render(<UploadPanel projectId="p1" onUploaded={vi.fn()} />)
+    const f = Object.assign(pdf('C-101.pdf'), { relativePath: 'Tender Package/Drawings/C-101.pdf' })
+    chooseFiles([f, pdf('plain.pdf')])
+    expect(screen.getByText('Tender Package/Drawings/C-101.pdf')).toBeInTheDocument()
+    expect(screen.getByText('plain.pdf')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 2 files' }))
+    await waitFor(() => expect(createAsync).toHaveBeenCalled())
+    expect((createAsync.mock.calls[0][0].files[0] as { relativePath?: string }).relativePath).toBe('Tender Package/Drawings/C-101.pdf')
+  })
+})
+
+describe('tender upload FormData', () => {
+  it('carries the relative path as the multipart filename, falling back to the file name', async () => {
+    const post = vi.fn().mockResolvedValue({ package_id: 'pk1' })
+    vi.resetModules()
+    vi.doMock('../../lib/api', () => ({ api: { post } }))
+    const real = await vi.importActual<typeof import('./api')>('./api')
+    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+    const { renderHook } = await import('@testing-library/react')
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
+    )
+    const pathed = Object.assign(pdf('C-101.pdf'), { relativePath: 'Tender Package/Drawings/C-101.pdf' })
+    const { result } = renderHook(() => real.useCreateTenderPackage('p1'), { wrapper })
+    await result.current.mutateAsync({ files: [pathed, pdf('plain.pdf')] })
+    const fd = post.mock.calls[0][1] as FormData
+    const sent = fd.getAll('files') as File[]
+    expect(sent.map((x) => x.name)).toEqual(['Tender Package/Drawings/C-101.pdf', 'plain.pdf'])
+  })
 })

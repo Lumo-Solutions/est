@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card, SectionHeading } from '../../components/Card'
-import { DropZone } from '../../components/DropZone'
+import { DropZone, type PathedFile } from '../../components/DropZone'
 import { TextField } from '../../components/Field'
 import { useAddTenderFiles, useCreateTenderPackage } from './api'
 import { MAX_FILE_BYTES, formatBytes, splitIntoBatches, todayIso } from './lib'
@@ -98,7 +98,7 @@ export function UploadPanel({ projectId, onUploaded }: { projectId: string; onUp
           <ul aria-label="Files to upload" className="max-h-48 divide-y divide-row-rule overflow-y-auto text-sm text-ink">
             {files.map((f, i) => (
               <li key={`${f.name}-${i}`} className="flex justify-between gap-4 py-1.5">
-                <span className="truncate">{f.name}</span>
+                <span className="truncate">{(f as PathedFile).relativePath ?? f.name}</span>
                 <span className="shrink-0 tabular-nums text-ink-2">{formatBytes(f.size)}</span>
               </li>
             ))}

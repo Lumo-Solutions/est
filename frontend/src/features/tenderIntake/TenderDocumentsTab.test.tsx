@@ -9,6 +9,8 @@ vi.mock('../../auth/AuthContext', () => ({
 }))
 
 const bulkMutate = vi.fn()
+let empty = false
+const pkgs = [{ id: 'pk1', project_id: 'p1', label: 'Transmittal 1', transmittal_ref: null, received_date: '2026-01-01', status: 'processed', file_count: 2, created_at: '' }]
 const docs: TenderDocument[] = [
   doc({ id: 'd1', original_filename: 'plan-a.pdf', doc_class: 'drawing', confidence: 0.92, flags: ['duplicate'], status: 'proposed' }),
   doc({ id: 'd2', original_filename: 'boq.xlsx', doc_class: 'boq', confidence: 0.4, flags: ['low_confidence', 'conflict'], status: 'proposed' }),
@@ -27,12 +29,12 @@ function doc(over: Partial<TenderDocument>): TenderDocument {
 const idle = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false })
 
 vi.mock('./api', () => ({
-  useTenderPackages: () => ({ data: [{ id: 'pk1', project_id: 'p1', label: 'Transmittal 1', transmittal_ref: null, received_date: '2026-01-01', status: 'processed', file_count: 2, created_at: '' }] }),
+  useTenderPackages: () => ({ data: empty ? [] : pkgs }),
   useTenderClasses: () => ({ data: [
     { code: 'drawing', label: 'Drawing', default_label: 'Drawing', enabled: true, sort_order: 1 },
     { code: 'boq', label: 'Bill of quantities', default_label: 'BOQ', enabled: true, sort_order: 2 },
   ] }),
-  useTenderDocuments: () => ({ data: { items: docs, total: 2, limit: 100, offset: 0 }, isLoading: false, isError: false }),
+  useTenderDocuments: () => ({ data: { items: empty ? [] : docs, total: empty ? 0 : 2, limit: 100, offset: 0 }, isLoading: false, isError: false }),
   useTenderDocument: () => ({ data: undefined, isLoading: false, isError: false }),
   useProjectAddenda: () => ({ data: [], isLoading: false, isError: false }),
   useDocumentRegister: () => ({ data: { items: [], total: 0, limit: 50, offset: 0 }, isLoading: false, isError: false }),
@@ -59,6 +61,24 @@ function renderTab() {
 describe('TenderDocumentsTab', () => {
   beforeEach(() => {
     bulkMutate.mockReset()
+    empty = false
+  })
+
+  it('shows the drop-the-package empty state above the upload panel when nothing is uploaded yet', () => {
+    roles = ['lead_estimator']
+    empty = true
+    renderTab()
+    const heading = screen.getByRole('heading', { name: 'Drop the tender package here' })
+    expect(screen.getByText(/folder, several files or a \.zip/)).toBeInTheDocument()
+    const input = screen.getByTestId('tender-file-input')
+    expect(heading.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('does not show the empty state once documents exist', () => {
+    roles = ['lead_estimator']
+    renderTab()
+    expect(screen.queryByRole('heading', { name: 'Drop the tender package here' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('tender-file-input')).toBeInTheDocument()
   })
 
   it('renders rows with class label, confidence and flags', async () => {
