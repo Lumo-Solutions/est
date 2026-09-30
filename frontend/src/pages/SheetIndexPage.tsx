@@ -24,6 +24,7 @@ import { PageTitle } from '../components/PageTitle'
 // vocabulary (backend/app/core/enums.py's DrawingStatus/extraction phases).
 const STATUS_TONE: Record<string, BadgeTone> = {
   ready: 'success',
+  succeeded: 'success',
   failed: 'danger',
   partial: 'warning',
   needs_conversion: 'warning',
@@ -84,7 +85,7 @@ export function SheetIndexPage() {
   }, [annotationPage])
 
   const total = sheets?.length ?? 0
-  const extracted = sheets?.filter((s) => s.extraction_status === 'ready').length ?? 0
+  const extracted = sheets?.filter((s) => s.extraction_status === 'succeeded').length ?? 0
   const annotationsRead = sheets?.filter((s) => s.annotations_status === 'done').length ?? 0
   const aiUnavailable = aiStatus != null && !aiStatus.available
 

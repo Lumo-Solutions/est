@@ -31,7 +31,7 @@ function sheet(i: number, over: Partial<DrawingSheetOut> = {}): DrawingSheetOut 
     scale_source: null,
     scale_confidence: null,
     scale_disagreement: false,
-    extraction_status: 'ready',
+    extraction_status: 'succeeded',
     annotations_status: null,
     ...over,
   }
