@@ -18,39 +18,50 @@ ROLES_BELOW_MD = (Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Ro
 
 
 async def test_only_the_managing_director_changes_the_threshold_and_everyone_can_read_it(authed_client, app_engine):
-    md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))
-    assert (await md.get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85}
+    # authed_client hands back ONE shared client whose identity is whichever role was set last: set it before each call.
+    def as_(role: Role):
+        return authed_client(frozenset({role.value}))
+
+    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85}
     for role in ROLES_BELOW_MD:
-        client = authed_client(frozenset({role.value}))
-        assert (await client.put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.9})).status_code == 403, role
-        assert (await client.get("/api/v1/tender-intake/settings")).status_code == 200, role
-    ok = await md.put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.92})
+        assert (await as_(role).put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.9})).status_code == 403, role
+        assert (await as_(role).get("/api/v1/tender-intake/settings")).status_code == 200, role
+    ok = await as_(Role.MANAGING_DIRECTOR).put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.92})
     assert ok.status_code == 200 and ok.json()["auto_accept_min"] == 0.92
-    estimator = authed_client(frozenset({Role.ESTIMATOR.value}))
-    assert (await estimator.get("/api/v1/tender-intake/settings")).json()["auto_accept_min"] == 0.92
+    assert (await as_(Role.ESTIMATOR).get("/api/v1/tender-intake/settings")).json()["auto_accept_min"] == 0.92
     for bad in (0.3, 1.5):
-        assert (await md.put("/api/v1/admin/intake-settings", json={"auto_accept_min": bad})).status_code in (400, 422), bad
-    assert (await md.get("/api/v1/tender-intake/settings")).json()["auto_accept_min"] == 0.92
+        assert (await as_(Role.MANAGING_DIRECTOR).put("/api/v1/admin/intake-settings", json={"auto_accept_min": bad})).status_code in (400, 422), bad
+    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json()["auto_accept_min"] == 0.92
     async with AsyncSession(app_engine) as session, session.begin():
         await session.execute(text("SELECT set_config('app.tenant_id', :t, false), set_config('app.is_system', 'on', false)"), {"t": TENANT})
         payloads = (await session.execute(text("SELECT payload FROM audit_events WHERE entity_type = 'tenant_ai_settings' AND payload ? 'intake_auto_accept_min'"))).scalars().all()
     assert {"before": 0.85, "after": 0.92} in [p["intake_auto_accept_min"] for p in payloads]
+    # The tenant row is shared by the other tests of this run: leave the default as found.
+    assert (await as_(Role.MANAGING_DIRECTOR).put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.85})).status_code == 200
 
 
 async def test_reclassify_and_bulk_reclassify_need_lead_estimator_and_confirm_routes(authed_client, app_engine):
+    # Every authed_client() call is a new identity (new sub), and project visibility is by membership.
+    estimator = authed_client(frozenset({Role.ESTIMATOR.value}))
     lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
     project_id, package_id = await _seed_project(app_engine, member_sub=await _sub_of(lead))
     a = await _seed_doc(app_engine, project_id, package_id, doc_class="other", name="a.pdf")
     b = await _seed_doc(app_engine, project_id, package_id, doc_class="other", name="b.pdf")
 
-    member_estimator = authed_client(frozenset({Role.ESTIMATOR.value}))
-    denied = await member_estimator.post(f"/api/v1/tender-documents/{a}/reclassify", json={"doc_class": "contract"})
-    assert denied.status_code == 403
-    denied_bulk = await member_estimator.post(
+    estimator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    assert (await estimator.post(f"/api/v1/tender-documents/{a}/reclassify", json={"doc_class": "contract"})).status_code == 403
+    denied_bulk = await estimator.post(
         f"/api/v1/projects/{project_id}/tender-documents/bulk-reclassify", json={"document_ids": [a], "doc_class": "contract"}
     )
     assert denied_bulk.status_code == 403
 
+    lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))  # a new identity again: make it a member too
+    async with AsyncSession(app_engine) as session, session.begin():
+        await session.execute(text("SELECT set_config('app.tenant_id', :t, false), set_config('app.is_system', 'on', false)"), {"t": TENANT})
+        await session.execute(
+            text("INSERT INTO project_members (project_id, user_id, tenant_id) VALUES (:p, :u, :t)"),
+            {"p": project_id, "u": await _sub_of(lead), "t": TENANT},
+        )
     one = await lead.post(f"/api/v1/tender-documents/{a}/reclassify", json={"doc_class": "contract", "confirm": True, "note": "conditions"})
     assert one.status_code == 200, one.text
     body = one.json()
@@ -61,7 +72,7 @@ async def test_reclassify_and_bulk_reclassify_need_lead_estimator_and_confirm_ro
         json={"document_ids": [a, b], "doc_class": "specification", "confirm": True},
     )
     assert bulk.status_code == 200, bulk.text
-    assert (bulk.json()["confirmed"], bulk.json()["failed"]) == (2, 0)  # a was already routed (contract): it is re-routed under the new class
+    assert (bulk.json()["confirmed"], bulk.json()["failed"]) == (2, 0)  # a was already routed (contract): re-routed under the new class
     docs = {d["id"]: d for d in (await lead.get(f"/api/v1/projects/{project_id}/tender-documents")).json()["items"]}
     assert {docs[a]["doc_class"], docs[b]["doc_class"]} == {"specification"} and {docs[a]["status"], docs[b]["status"]} == {"routed"}
 

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.errors import AIBudgetExceeded, AIDisabledForTenant, AIError, AINotConfigured, AIRateLimited, describe_reason
 from app.ai.gateway import AIMeta
 from app.core.config import Settings, get_settings
-from app.core.context import RequestContext
+from app.core.context import RequestContext, reset_context, set_context
 from app.core.enums import AttachmentSafetyStatus, AuditAction
 from app.core.errors import NotFoundError
 from app.integrations.s3 import get_object_bytes, put_object_streaming
@@ -213,11 +213,15 @@ async def prepare_batch(ctx: RequestContext, snaps: list[DocSnapshot], run: AiRu
     and re-raised by `process_document`, so failure isolation stays per document."""
 
     async def one(snap: DocSnapshot) -> tuple[UUID, Prepared]:
+        # No worker session is open in this phase, so bind the request context here (the AI gateway reads it).
+        token = set_context(ctx)
         try:
             return snap.id, await prepare_document(ctx, snap, run)
         except Exception as exc:  # noqa: BLE001
             logger.warning("tender_intake: could not prepare %s", snap.id, exc_info=True)
             return snap.id, Prepared(safety=IntakeSafety(status="pending", sniffed=None), error=exc)
+        finally:
+            reset_context(token)
 
     results = await asyncio.gather(*(one(s) for s in snaps if not s.is_duplicate))
     return dict(results)

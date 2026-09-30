@@ -266,7 +266,7 @@ test('tender pack: drop -> AI routes the confident ones -> drawings ready -> BOQ
   expect(scan).toMatchObject({ status: 'routed', routed_kind: 'drawing' })
   expect(scan.routed_ref.not_measurable).toBe(true)
   await lead.getByRole('button', { name: 'Change class of Notes.csv' }).first().click()
-  await lead.getByLabel('Class').selectOption({ label: 'Correspondence' })
+  await lead.locator('li').filter({ hasText: 'Notes.csv' }).first().getByLabel('Class', { exact: true }).selectOption({ label: 'Correspondence' })
   await expect(lead.getByRole('button', { name: 'Confirm Notes.csv' })).toHaveCount(0, { timeout: 30_000 })
   expect(byPath(await listDocs(lead, projectId), 'Notes.csv')).toMatchObject({ doc_class: 'correspondence', status: 'routed', classified_by: 'user' })
   await expect(lead.getByRole('heading', { name: 'Needs your check' })).toHaveCount(0)
@@ -381,7 +381,7 @@ test('a 300+ file tender pack stays usable: read in batches with live progress, 
 
   // "Original folders" puts the 340 loose files in one long list that shows 100 rows at a time.
   await lead.getByRole('button', { name: 'Original folders' }).click()
-  const rowCount = () => lead.getByRole('list', { name: /files$/ }).first().getByRole('listitem').count()
+  const rowCount = () => lead.getByRole('list', { name: 'Top level (no folder) files' }).getByRole('listitem').count()
   await expect.poll(rowCount, { timeout: 30_000 }).toBe(100)
   await lead.getByRole('button', { name: /^Show 100 more/ }).click()
   await expect.poll(rowCount).toBe(200)
@@ -399,7 +399,7 @@ test('a 300+ file tender pack stays usable: read in batches with live progress, 
   await lead.getByLabel(new RegExp(`^Select all ${specCount} in Specification$`)).check()
   await lead.getByRole('button', { name: new RegExp(`^Change class for ${specCount} files$`) }).click()
   const dialog = lead.getByRole('dialog', { name: 'Change class' })
-  await dialog.getByLabel('Class').selectOption({ label: 'Programme / schedule' })
+  await dialog.getByLabel('Class', { exact: true }).selectOption({ label: 'Programme / schedule' })
   await dialog.getByRole('button', { name: 'Apply class' }).click()
   await expect(lead.getByRole('status').filter({ hasText: new RegExp(`Changed ${specCount}, failed 0`) })).toBeVisible({ timeout: 300_000 })
   const after = await getTree(lead, projectId)

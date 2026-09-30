@@ -573,3 +573,21 @@ async def test_folders_that_lie_do_not_decide_the_class(rls_session, fake_s3, mo
     assert all(d.status == "routed" for d in docs.values())
     folder_seen = [re.search(r"^Folder path.*: (.*)$", r.user, re.M).group(1) for r in mock_model if "Folder path" in r.user]
     assert "Tender/02 BOQ" in folder_seen  # the lying folder was in front of the AI, as a weak hint
+
+
+async def test_the_concurrent_ai_phase_binds_the_request_context_itself(rls_session, fake_s3, celery_calls, monkeypatch):
+    """In the worker no session is open while documents are prepared, so nothing else has bound the RequestContext the
+    gateway reads. A gateway without a fixed ctx (the real default) must still work."""
+    from app.core.config import get_settings
+
+    provider = MockProvider()
+    settings = get_settings()
+    set_gateway_override(lambda s: AIGateway(settings=settings, store=MemoryStore(), provider=provider))  # no ctx=
+    try:
+        tenant_id, project_id = await _seed(rls_session)
+        est, package = await upload(rls_session, tenant_id, project_id, _few())
+        await run_worker(rls_session, monkeypatch, est, package)
+    finally:
+        set_gateway_override(None)
+    docs = await _by_name(rls_session)
+    assert len(provider.calls) == 5 and all(d.classified_by == "ai" for d in docs.values() if d.doc_class)

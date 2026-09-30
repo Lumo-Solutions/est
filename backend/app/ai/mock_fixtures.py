@@ -216,7 +216,7 @@ _DRAWING_TYPE_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
 _UNIT_TYPE = re.compile(r"\b(?:villa|unit|house|plot)\s*type\s*[-:]?\s*([A-Z]?\d{1,2}[A-Z]?|[A-D])\b|\btype\s*([0-9]{1,2}[A-Z]?)\b", re.I)
 _INSTRUCTION_LINE = re.compile(
     r"ignore\s+(?:all\s+|any\s+|the\s+)*(?:previous|prior|above|earlier)|disregard|(?:classify|mark|label|file|treat|set)\s+(?:this|it|the\s+document)\s+as"
-    r"|auto[-\s]?accept|approve|set\s+(?:the\s+)?confidence|confidence\s*(?:=|:|of|to)|you\s+are\s+now|new\s+instructions|system\s+prompt",
+    r"|auto[-\s]?accept|approve\s+(?:this|it|everything|immediately)|set\s+(?:the\s+)?confidence|confidence\s*(?:=|:|of|to)|you\s+are\s+now|new\s+instructions|system\s+prompt",
     re.I,
 )
 COMPROMISED_MARKER = "[[MOCK-COMPROMISED]]"  # a test hook: makes the mock behave like a model that obeyed the document

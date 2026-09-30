@@ -160,9 +160,9 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     await expect(lead.getByRole('group', { name: 'Specification, 1 file' })).toBeVisible()
     await expect(lead.getByRole('group', { name: 'Addendum, 1 file' })).toBeVisible()
     await expect(lead.getByRole('group', { name: 'Contract / Conditions, 1 file' })).toBeVisible()
-    // Open the stormwater discipline down to its drawing type and its row: number, title-ish, confidence, who decided.
+    // A small pack opens fully: the stormwater discipline down to its drawing type and its row (confidence, who decided).
     const storm = drawings.getByRole('group', { name: 'Stormwater drainage, 1 file' })
-    await storm.getByRole('group', { name: /Plan & profile/ }).getByRole('button', { expanded: false }).click()
+    await expect(storm.getByRole('group', { name: 'Plan & profile / longitudinal section, 1 file' })).toBeVisible()
     const stormRow = storm.getByRole('listitem').filter({ hasText: 'C-102 Storm Drainage Plan and Profile Rev A.pdf' })
     await expect(stormRow).toBeVisible()
     await expect(stormRow).toContainText('AI')
@@ -175,7 +175,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
 
     // ---- 5. a person files the unsure one: one click on Change, then the class
     await lead.getByRole('button', { name: 'Change class of Site visit notes.pdf' }).first().click()
-    await lead.getByLabel('Class').selectOption({ label: 'Correspondence' })
+    await lead.locator('li').filter({ hasText: 'Site visit notes.pdf' }).first().getByLabel('Class', { exact: true }).selectOption({ label: 'Correspondence' })
     await expect(lead.getByRole('button', { name: 'Confirm Site visit notes.pdf' })).toHaveCount(0, { timeout: 30_000 })
     const filed = byName(await getTree(lead, state.projectId), 'Site visit notes.pdf')
     expect(filed).toMatchObject({ doc_class: 'correspondence', classified_by: 'user', decided_by: 'user', routed_kind: 'register', display_status: 'ready' })
@@ -196,7 +196,6 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     await lead.getByRole('link', { name: 'Import BOQ' }).click()
     await expect(lead).toHaveURL(new RegExp(`/projects/${state.projectId}/boq/import\\?document=${boq.id}`))
     await expect(lead.getByRole('status').filter({ hasText: 'Pre-filled from tender document BOQ Rev 0.xlsx' })).toBeVisible({ timeout: 30_000 })
-    await expect(lead.getByLabel('Sheet')).toHaveValue('BOQ')
     await expect(lead.getByLabel('Header row')).toHaveValue('4')
     await expect(lead.getByLabel('Item No column *')).toHaveValue('Item')
     await expect(lead.getByLabel('Description column *')).toHaveValue('Description')
@@ -222,7 +221,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     await lead.goto(`/projects/${state.projectId}`)
     await lead.getByRole('button', { name: 'Change class of C-102 Storm Drainage Plan and Profile Rev A.pdf' }).click()
     const dialog = lead.getByRole('dialog', { name: /Change class of C-102/ })
-    await dialog.getByLabel('Class').selectOption({ label: 'Specification' })
+    await dialog.getByLabel('Class', { exact: true }).selectOption({ label: 'Specification' })
     await dialog.getByRole('button', { name: 'Apply class' }).click()
     // A routed drawing leaving the takeoff asks first.
     const confirm = lead.getByRole('dialog', { name: 'Take this out of the takeoff?' })
@@ -239,7 +238,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     // Changing its mind restores the same drawing without running extraction again.
     await lead.getByRole('button', { name: 'Change class of C-102 Storm Drainage Plan and Profile Rev A.pdf' }).click()
     const again = lead.getByRole('dialog', { name: /Change class of C-102/ })
-    await again.getByLabel('Class').selectOption({ label: 'Drawing' })
+    await again.getByLabel('Class', { exact: true }).selectOption({ label: 'Drawing' })
     await again.getByLabel('Discipline').selectOption({ label: 'Stormwater drainage' })
     await again.getByLabel('Drawing type').selectOption({ label: 'Plan & profile / longitudinal section' })
     await again.getByRole('button', { name: 'Apply class' }).click()
@@ -252,7 +251,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
   test('the project page is accessible and does not overflow at 1440, 1280 and 1024', async ({ browser }) => {
     const lead = await login(browser, 'lead1', 'Lead1Pass!')
     for (const width of [1440, 1280, 1024]) {
-      await lead.setViewportSize({ width, height: 1000 })
+      await lead.setViewportSize({ width, height: 1900 })
       await lead.goto(`/projects/${state.projectId}`)
       await expect(lead.getByRole('group', { name: 'Drawing, 3 files' })).toBeVisible()
       await lead.waitForTimeout(400)

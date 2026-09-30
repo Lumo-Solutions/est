@@ -149,7 +149,7 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     await lead.reload()
     await expect(lead.getByRole('heading', { name: 'Needs your check' })).toBeVisible()
     await lead.getByRole('button', { name: 'Change class of Site visit notes.pdf' }).first().click()
-    await lead.getByLabel('Class').selectOption({ label: 'Correspondence' })
+    await lead.locator('li').filter({ hasText: 'Site visit notes.pdf' }).first().getByLabel('Class', { exact: true }).selectOption({ label: 'Correspondence' })
     await expect(lead.getByRole('button', { name: 'Confirm Site visit notes.pdf' })).toHaveCount(0, { timeout: 30_000 })
     docs = await listDocs(lead, state.projectId)
     const drawingDocs = docs.filter((d) => d.routed_kind === 'drawing')
@@ -173,14 +173,14 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     expect(items.map((i) => i.item_no)).toEqual(expect.arrayContaining(['1', '1.1', '2.1', '5.3', '6.2']))
 
     // ---- 6. read the drawing annotations with the AI (per-sheet progress, links into the takeoff viewer)
-    await lead.goto(`/projects/${state.projectId}/drawings/${state.drawings[0]}`)
-    await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
-    await lead.goto(`/projects/${state.projectId}/drawings/${state.drawings[1]}`)
-    await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
+    for (const drawingId of state.drawings) {
+      await lead.goto(`/projects/${state.projectId}/drawings/${drawingId}`)
+      await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
+    }
     const summary = await pollJson<{ sheets: number; queued: number; done: number; annotations: number }>(
       lead, `/api/v1/projects/${state.projectId}/drawing-annotations/summary`, (v) => v.sheets > 0 && v.queued === 0 && v.annotations > 0, 'annotations read',
     )
-    expect(summary.done).toBeGreaterThanOrEqual(2)
+    expect(summary.done).toBeGreaterThanOrEqual(3)
     expect(summary.annotations).toBeGreaterThanOrEqual(10) // 7 on C-101 + 3 on L-201, all AI-read
 
     // ---- 7. verify the BOQ against the drawings
@@ -238,10 +238,11 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
 
     // ---- 10. the admin usage view shows this run's AI calls (mock: no cost)
     const md = await login(browser, 'md1', 'Md1Pass!')
-    const usage = (await (await md.request.get('/api/v1/admin/ai-usage')).json()) as { rows: { task: string; calls: number; cost_usd: number }[] }
+    const usage = (await (await md.request.get('/api/v1/admin/ai-usage')).json()) as { rows: { task: string; provider: string; calls: number; cost_usd: number }[] }
     const tasks = new Set(usage.rows.map((r) => r.task))
     for (const t of ['boq_interpret', 'evidence_rank', 'drawing_annotations']) expect(tasks.has(t), `AI usage row for ${t}`).toBe(true)
-    expect(usage.rows.every((r) => r.cost_usd === 0)).toBe(true)
+    // The month-to-date view may also hold real-provider spend from before this run; the mock rows cost nothing.
+    expect(usage.rows.filter((r) => r.provider === 'mock').every((r) => r.cost_usd === 0)).toBe(true)
     await md.context().close()
     await lead.context().close()
   })
