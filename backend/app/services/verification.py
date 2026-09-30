@@ -9,10 +9,8 @@ reconciliation link, so verification and reconciliation stay one system.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
@@ -26,7 +24,7 @@ from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.models.ai import AiCall
 from app.models.boq import BoqLineItem, BoqTolerance
-from app.models.takeoff import Drawing, DrawingAnnotation, DrawingMeasurement, DrawingSheet
+from app.models.takeoff import DrawingAnnotation, DrawingMeasurement, DrawingSheet
 from app.models.taxonomy import TradeNode
 from app.models.verification import VerificationLine, VerificationMapping, VerificationRun
 from app.services import audit
@@ -39,7 +37,6 @@ from app.verification.engine import (
     Interpretation,
     LineInput,
     LineResult,
-    VClass,
     compute_line,
     find_missing_in_boq,
     generate_candidates,

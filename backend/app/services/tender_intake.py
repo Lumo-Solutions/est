@@ -491,13 +491,14 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
 
 
 async def _route_boq(session: AsyncSession, ctx: RequestContext, doc: ProjectDocument) -> None:
-    if doc.ext not in ("xlsx", "csv", "xls"):
+    # A PDF BOQ opens the wizard's PDF flow (table reader first, AI only for unclear pages); an .xls is routed but not importable.
+    if doc.ext not in ("xlsx", "csv", "xls", "pdf"):
         raise ConflictError(f"A .{doc.ext} file cannot go to the BOQ import wizard")
     mapping = suggest_mapping(doc.doc_metadata)
     doc.routed_kind = "boq_wizard"
     doc.routed_ref = {
         "sheet_name": mapping["sheet_name"], "header_row": mapping["header_row"], "suggested_mapping": mapping,
-        "importable": doc.ext in ("xlsx", "csv"),
+        "importable": doc.ext in ("xlsx", "csv", "pdf"),
     }
 
 

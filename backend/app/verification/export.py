@@ -111,7 +111,7 @@ def build_pdf(run: VerificationRun, lines: list[VerificationLine], project_label
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24,
                             title=f"Verification: {project_label}")
     story: list[Any] = [
-        Paragraph(f"Drawing vs BOQ verification", styles["Title"]),
+        Paragraph("Drawing vs BOQ verification", styles["Title"]),
         Paragraph(f"{project_label} &middot; generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC", styles["Normal"]),
         Spacer(1, 6),
         Paragraph("Quantities are measured from the drawings or read from their annotations. AI proposes which "

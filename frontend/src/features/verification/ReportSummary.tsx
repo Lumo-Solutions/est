@@ -109,15 +109,19 @@ export function TopRisks({
     <Card className="mt-4">
       <SectionHeading>Top risks</SectionHeading>
       <ul className="divide-y divide-row-rule">
-        {risks.map((r) => (
-          <li key={r.line_id} className="py-2 text-sm">
-            <button
-              type="button"
-              onClick={() => onOpen(r.line_id)}
-              className={`rounded text-left text-brand hover:underline ${ring}`}
-            >
-              {describe(r.line_id)}
-            </button>
+        {risks.map((r, i) => (
+          <li key={r.line_id ?? `no-line-${i}`} className="py-2 text-sm">
+            {r.line_id ? (
+              <button
+                type="button"
+                onClick={() => onOpen(r.line_id as string)}
+                className={`rounded text-left text-brand hover:underline ${ring}`}
+              >
+                {describe(r.line_id)}
+              </button>
+            ) : (
+              <span className="text-ink">Drawing item with no BOQ line</span>
+            )}
             <span className="ml-2 text-muted">
               {CLASS_LABEL[r.class]}
               {r.delta_pct != null ? `, ${fmtPct(r.delta_pct)}` : ''}

@@ -69,6 +69,7 @@ function seedQuotes(projectCode: string): void {
 async function login(browser: Browser, user: string, pass: string): Promise<Page> {
   const context = await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })
   const page = await context.newPage()
+  page.on('pageerror', (e) => console.error(`PAGEERROR (${user}): ${e.message}\n${e.stack ?? ''}`))
   await loginViaKeycloak(page, user, pass)
   return page
 }
@@ -148,6 +149,11 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     await lead.getByRole('button', { name: 'Confirm high-confidence' }).click()
     await lead.getByRole('button', { name: 'Confirm all' }).click()
     await expect(lead.getByRole('status').filter({ hasText: /Confirmed \d+, skipped \d+, failed 0/ })).toBeVisible({ timeout: 60_000 })
+    // the low-confidence landscape sheet is deliberately not bulk-confirmed: the estimator confirms it by hand
+    await lead.getByRole('button', { name: /^Confirm .*L-201 Landscape Plan Rev A\.pdf$/ }).click()
+    await expect
+      .poll(async () => (await listDocs(lead, state.projectId)).filter((d) => d.routed_kind === 'drawing').length, { timeout: 30_000 })
+      .toBe(2)
     docs = await listDocs(lead, state.projectId)
     const drawingDocs = docs.filter((d) => d.routed_kind === 'drawing')
     expect(drawingDocs).toHaveLength(2)
@@ -161,7 +167,7 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     await lead.goto(`/projects/${state.projectId}?tab=tender-documents`)
     await lead.getByLabel('Search documents').fill('BOQ Rev 0.xlsx')
     const boqRow = lead.getByRole('row', { name: /BOQ Rev 0\.xlsx/ }).first()
-    await boqRow.getByRole('link', { name: /Open BOQ Rev 0\.xlsx in BOQ import wizard/ }).click()
+    await boqRow.getByRole('link', { name: /Open .*BOQ Rev 0\.xlsx in BOQ import wizard/ }).click()
     await expect(lead.getByRole('status').filter({ hasText: /Pre-filled from tender document/ })).toBeVisible({ timeout: 30_000 })
     await lead.getByRole('button', { name: 'Preview' }).click()
     await expect(lead.getByRole('button', { name: 'Commit' })).toBeEnabled({ timeout: 30_000 })
@@ -212,8 +218,8 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     await lead.getByRole('button', { name: /Variance/ }).first().click()
     const row22 = lead.getByRole('row', { name: /2\.2/ }).first()
     await expect(row22).toBeVisible()
-    await row22.click()
-    const panel = lead.getByRole('dialog').or(lead.getByRole('complementary')).first()
+    await row22.getByRole('button', { name: 'Open line 2.2' }).click()
+    const panel = lead.getByRole('dialog', { name: /Line detail: 2\.2/ })
     await expect(panel).toContainText('150')
     await panel.getByRole('button', { name: /^Accept/ }).first().click()
     await expect
@@ -283,7 +289,11 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     await expect.poll(async () => ((await (await bd.request.get(`/api/v1/bid-settlements/${sid}/ai/proposals`)).json()) as typeof page1).items.find((p) => p.item_no === '2.1')?.status).toBe('accepted')
     await bd.getByRole('button', { name: /Accept all high-confidence/ }).click()
     await bd.getByRole('button', { name: /^Accept all$|^Confirm$|^Accept$/ }).last().click()
-    const after = (await (await bd.request.get(`/api/v1/bid-settlements/${sid}/ai/proposals`)).json()) as typeof page1
+    const loadProposals = async () => (await (await bd.request.get(`/api/v1/bid-settlements/${sid}/ai/proposals`)).json()) as typeof page1
+    await expect
+      .poll(async () => (await loadProposals()).items.filter((p) => p.status === 'accepted').length, { message: 'bulk accept applied', timeout: 30_000 })
+      .toBeGreaterThanOrEqual(2)
+    const after = await loadProposals()
     const accepted = after.items.filter((p) => p.status === 'accepted')
     expect(accepted.length).toBeGreaterThanOrEqual(2)
     expect(after.items.filter((p) => p.status === 'accepted').every((p) => !p.flags.some((f) => ['stale_rate', 'quote_exclusions', 'vendor_not_eligible'].includes(f)))).toBe(true)
@@ -321,9 +331,13 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     expect(download.suggestedFilename()).toMatch(/\.xlsx$/)
 
     // ---- the audit trail shows the AI decisions with who and which run
-    const audit = (await (await mdPage.request.get(`/api/v1/audit-events?entity_type=settlement_ai_proposal&limit=50`)).json()) as { items?: { payload: Record<string, unknown> }[] } | { payload: Record<string, unknown> }[]
-    const events = Array.isArray(audit) ? audit : (audit.items ?? [])
-    expect(events.length).toBeGreaterThan(0)
+    const auditRes = await mdPage.request.get(`/api/v1/audit/events?entity_type=settlement_ai_proposal&limit=100`)
+    expect(auditRes.ok(), await auditRes.text()).toBeTruthy()
+    // (the list endpoint never returns payloads; who / what / which project is what it exposes)
+    const events = (await auditRes.json()) as { actor_sub: string | null; action: string; project_id: string | null; entity_id: string | null }[]
+    const decided = events.filter((e) => e.project_id === state.projectId && e.action === 'update' && e.actor_sub)
+    expect(decided.length).toBeGreaterThanOrEqual(2) // the single accept and the bulk accept
+    expect(new Set(decided.map((e) => e.entity_id)).size).toBeGreaterThanOrEqual(2) // one event per proposal
     await mdPage.context().close()
     await bd.context().close()
     void csrfHeaders

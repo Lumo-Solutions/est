@@ -17,7 +17,7 @@ from app.ai.errors import AIError, describe_reason
 from app.ai.gateway import AIGateway, AIMeta
 from app.ai.provider import VISION, ImageInput
 from app.boq.pdf_reader import PageResult, PdfBoqRow, read_pdf_boq
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.takeoff.pdf import render_page_png
 from app.takeoff.prompts import load_schema, render_prompt
 

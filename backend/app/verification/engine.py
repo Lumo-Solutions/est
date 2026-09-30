@@ -292,6 +292,8 @@ def compute_line(
         else:
             attached.append((ref, "user"))
             seen.add(ref)
+    # measured geometry outranks annotations, so it must survive the cap (sort is stable: score order is kept within a kind)
+    attached.sort(key=lambda a: evidence_by_ref[a[0]].kind != "measurement")
     attached = attached[: MAX_ATTACHED + len(include)]
 
     used = [(evidence_by_ref[r], by) for r, by in attached if compatible(line, evidence_by_ref[r])]

@@ -16,7 +16,6 @@ import argparse
 import asyncio
 import io
 import json
-import re
 import sys
 import time
 import uuid
@@ -68,7 +67,6 @@ def _pack() -> dict[str, bytes]:
 
 
 def _classification_cases() -> list[dict]:
-    from app.intake.extract import extract_content
 
     cases: list[dict] = []
     for path, data in demo.build_pack().items():

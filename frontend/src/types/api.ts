@@ -1439,7 +1439,8 @@ export interface VerificationTradeSummary {
 }
 
 export interface VerificationTopRisk {
-  line_id: string
+  /** null for "missing in BOQ": a drawing item has no BOQ line */
+  line_id: string | null
   class: VerificationClass
   delta_pct: number | null
   note: string

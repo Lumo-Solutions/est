@@ -467,6 +467,8 @@ def evidence_rank(req: AIRequest) -> dict[str, Any]:
         for ref, kind, label, s in sorted(scored, key=lambda t: -t[3]):
 
             selected = best >= 0.4 and s >= best - 0.02 and s >= 0.4
+            if kind == "measurement" or ref.startswith(("m:", "g:")):
+                selected = selected or s >= 0.6   # measured geometry that agrees is kept even when an annotation words it better
 
             reason = ("wording and size agree with the drawing item" if s >= 0.6 else "partly agrees" if s >= 0.4 else "different item")
 

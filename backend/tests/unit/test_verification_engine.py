@@ -97,6 +97,14 @@ def test_annotated_used_only_when_no_measurement():
     assert r2.method == "measured" and r2.drawing_quantity == 250.0  # measurement wins over annotation
 
 
+def test_measurement_survives_the_attach_cap_when_many_annotations_rank_first():
+    anns = [ann(str(i), 60.0, text="60.0m D300 uPVC") for i in range(6)]
+    m = meas("g", 246.0)
+    cands = [Candidate(ref=a.ref, score=1.0, source="ai", selected=True) for a in anns] + [Candidate(ref=m.ref, score=0.8, source="ai", selected=True)]
+    r = run(line(), [*anns, m], cands=cands)
+    assert r.method == "measured" and r.drawing_quantity == 246.0
+
+
 def test_annotated_confidence_is_lower_and_multiple_annotations_flagged():
     single = run(line(), [ann("1", 245.0, text="L=245.0m D300 uPVC")])
     assert single.confidence <= 0.85
