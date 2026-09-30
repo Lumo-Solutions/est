@@ -18,6 +18,7 @@ from rapidfuzz import fuzz, process
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.errors import describe_reason
 from app.ai.gateway import AIGateway, AIMeta
 from app.core.config import get_settings
 from app.core.context import RequestContext
@@ -377,7 +378,7 @@ async def run_cost_proposals(
     warnings: list[str] = []
     if run.use_ai and (gw is None or ai_reason or not ai_out):
         warnings.append(
-            "AI matching was not used" + (f" ({ai_reason})" if ai_reason else "")
+            "AI matching was not used" + (f" ({describe_reason(ai_reason)})" if ai_reason else "")
             + ": proposals come from the built-in rules only (accepted quotes, then close cost-library matches)."
         )
     if counts["no_source"]:
@@ -587,7 +588,7 @@ async def run_markup_advice(
     warnings: list[str] = []
     result: dict = {"context": {k: v for k, v in context.items() if k != "project"}, "history": history, "options": [], "per_trade": [], "overall": ""}
     if advice is None:
-        warnings.append("Markup advice needs the AI" + (f" ({reason})" if reason else "") + "; nothing was suggested. Set the percentages yourself.")
+        warnings.append("Markup advice needs the AI" + (f" ({describe_reason(reason)})" if reason else "") + "; nothing was suggested. Set the percentages yourself.")
     else:
         # The platform, not the model, computes what each option would mean, with the existing engine.
         for opt in advice["options"]:

@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.errors import describe_reason
 from app.ai.gateway import AIGateway, AIMeta
 from app.boq import units as unit_conversion
 from app.core.context import RequestContext
@@ -335,7 +336,7 @@ async def run_verification(
     if run.use_ai and (gw is None or ai_reason or not ai_ranked) and lines:
         warnings.append(
             "AI mapping was not used"
-            + (f" ({ai_reason})" if ai_reason else "")
+            + (f" ({describe_reason(ai_reason)})" if ai_reason else "")
             + ": lines were matched with the built-in rules only, so more lines may need a person to check the mapping."
         )
     await progress("computing", total, total)

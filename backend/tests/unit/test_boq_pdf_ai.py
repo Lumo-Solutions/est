@@ -103,7 +103,7 @@ async def test_ai_unavailable_leaves_the_page_explicitly_unread():
                  S3_ENDPOINT="http://s3", VLLM_API_BASE="http://vllm.internal/v1", AI_PROVIDER="mock")
     gw = AIGateway(settings=s, store=MemoryStore(external_allowed=False), provider=Denied(), ctx=CTX)
     res = await extract_pdf_boq(build_scanned_pdf([BoqItem("1", "x")]), gateway=gw)
-    assert res.pages[0].status == "ai_unavailable" and "ai_not_allowed" in res.pages[0].note
+    assert res.pages[0].status == "ai_unavailable" and "not allowed" in res.pages[0].note
     assert res.rows == [] and "could not be read" in res.warnings[0]
 
 

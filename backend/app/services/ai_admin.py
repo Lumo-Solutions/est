@@ -9,7 +9,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.gateway import AIGateway
-from app.ai.store import _month_start
+from app.ai.store import DbStore, _month_start
 from app.core.config import Settings
 from app.core.context import RequestContext
 from app.core.enums import AuditAction
@@ -43,12 +43,20 @@ def _gateway_status(settings: Settings) -> dict:
 async def get_status(session: AsyncSession, ctx: RequestContext, settings: Settings) -> AiStatusOut:
     gw = _gateway_status(settings)
     allowed = await _allowed(session, ctx)
-    available = gw["configured"] and (allowed or not gw["external"])
+    budget_exceeded = False
+    if gw["external"] and settings.ai_monthly_budget_usd is not None:
+        # ai_calls is readable by lead_estimator+ only; the budget must count every role's calls, so use the
+        # store's system-scoped sum (the same one the gateway enforces the cap with).
+        month_spent, _project = await DbStore().spend(ctx, None)
+        budget_exceeded = float(month_spent) >= float(settings.ai_monthly_budget_usd)
+    available = gw["configured"] and (allowed or not gw["external"]) and not budget_exceeded
     message = None
     if gw["external"] and not gw["configured"]:
         message = "AI not configured"
     elif gw["external"] and not allowed:
         message = "External AI is not allowed for this organisation"
+    elif budget_exceeded:
+        message = "The monthly AI budget has been reached; AI features are paused until next month or the cap is raised"
     return AiStatusOut(
         provider=gw["provider"],
         external=gw["external"],
@@ -56,6 +64,7 @@ async def get_status(session: AsyncSession, ctx: RequestContext, settings: Setti
         external_ai_allowed=allowed,
         available=available,
         message=message,
+        budget_exceeded=budget_exceeded,
     )
 
 

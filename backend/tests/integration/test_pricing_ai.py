@@ -254,7 +254,7 @@ async def test_rules_only_when_ai_disabled_or_unavailable_and_the_ai_cannot_inve
     denied, _ = _gateway(sc["lead"], external_allowed=False)
     run = await _propose(rls_session, sc, gateway=denied)
     run_row = await svc.get_run(rls_session, run.id)
-    assert any("AI matching was not used" in w and "ai_not_allowed" in w for w in run_row.warnings)
+    assert any("AI matching was not used" in w and "not allowed" in w for w in run_row.warnings)
 
     # a model that answers with an invented ref and asks for a rate gets nothing applied
     register_mock_handler("cost_choose", lambda req: {"lines": [

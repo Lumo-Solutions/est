@@ -194,3 +194,36 @@ async def test_project_optout_and_budget_hard_stop_on_real_db(authed_client, app
     with pytest.raises(AIDisabledForTenant):
         await gw2.run(task="budget_probe", system="s", user="three", schema=SCHEMA, meta=meta)
     await md.put("/api/v1/admin/ai-settings", json={"external_ai_allowed": False})
+
+
+async def test_status_says_when_the_monthly_budget_is_reached_for_every_role(authed_client, client, app_engine):
+    """The UI message comes from /ai/status. The spend is summed system-wide, so an estimator (who cannot read ai_calls
+    under RLS) is told the same thing as a director."""
+    from decimal import Decimal
+
+    import app.db.session as dbs
+    from app.ai.store import CallRecord, DbStore
+    from app.core.config import get_settings
+
+    dbs.get_worker_engine.cache_clear()
+    md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))
+    await md.put("/api/v1/admin/ai-settings", json={"external_ai_allowed": True})
+    await DbStore().record(_ctx(Role.LEAD_ESTIMATOR.value), CallRecord(
+        task="budget_status", provider="anthropic", model="claude-sonnet-5-5", prompt_version="1", input_sha256="0" * 64,
+        status="ok", external=True, cost_usd=Decimal("5.000000"),
+    ))
+    app = client._transport.app
+    capped = _settings(AI_MONTHLY_BUDGET_USD="1.00")
+    app.dependency_overrides[get_settings] = lambda: capped
+    try:
+        for role in (Role.ESTIMATOR, Role.MANAGING_DIRECTOR):
+            body = (await authed_client(frozenset({role.value})).get("/api/v1/ai/status")).json()
+            assert body["budget_exceeded"] is True and body["available"] is False and "budget" in body["message"].lower()
+            assert body["provider"] == "anthropic" and "key" not in str(body).lower()
+        roomy = _settings(AI_MONTHLY_BUDGET_USD="1000")
+        app.dependency_overrides[get_settings] = lambda: roomy
+        body = (await authed_client(frozenset({Role.ESTIMATOR.value})).get("/api/v1/ai/status")).json()
+        assert body["budget_exceeded"] is False and body["available"] is True
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        await authed_client(frozenset({Role.MANAGING_DIRECTOR.value})).put("/api/v1/admin/ai-settings", json={"external_ai_allowed": False})

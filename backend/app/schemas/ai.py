@@ -18,6 +18,7 @@ class AiStatusOut(BaseModel):
     external_ai_allowed: bool
     available: bool
     message: str | None = None
+    budget_exceeded: bool = False
 
 
 class AiSettingsIn(BaseModel):

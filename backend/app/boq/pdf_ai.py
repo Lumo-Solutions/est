@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from app.ai.errors import AIError
+from app.ai.errors import AIError, describe_reason
 from app.ai.gateway import AIGateway, AIMeta
 from app.ai.provider import VISION, ImageInput
 from app.boq.pdf_reader import PageResult, PdfBoqRow, read_pdf_boq
@@ -141,7 +141,7 @@ async def _read_page_with_ai(
         )
     except AIError as exc:
         page.status = "ai_unavailable"
-        page.note = f"AI unavailable ({exc.code})"
+        page.note = f"AI unavailable: {describe_reason(exc.code)}"
         return
     import io
 

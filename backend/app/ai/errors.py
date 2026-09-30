@@ -46,3 +46,18 @@ class AITransientError(AIProviderError):
 
 class AIOutputInvalid(AIProviderError):
     code = "ai_output_invalid"
+
+
+_REASON_TEXT = {
+    "ai_not_configured": "AI is not configured",
+    "ai_not_allowed": "external AI is not allowed for this organisation or project",
+    "ai_budget_exceeded": "the AI budget has been reached",
+    "ai_rate_limited": "the AI rate limit was reached",
+    "ai_provider_error": "the AI provider returned an error",
+    "ai_output_invalid": "the AI returned an invalid answer",
+}
+
+
+def describe_reason(code: str | None) -> str:
+    """Plain-language version of an AIError.code, for messages shown to people."""
+    return _REASON_TEXT.get(code or "", "AI is unavailable")
