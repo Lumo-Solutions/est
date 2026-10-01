@@ -24,22 +24,23 @@ const okStatus: AiStatusOut = {
   available: false,
   message: 'External AI is not allowed for this organisation',
 }
-const usage: AiUsageOut = {
+const usage = {
   month_to_date_usd: 12.5,
   monthly_budget_usd: 100,
   project_budget_usd: null,
   rows: [
-    { task: 'boq_match', provider: 'openai', model: 'gpt-x', calls: 7, cached: 2, errors: 1, blocked: 0, tokens_in: 1000, tokens_out: 500, cost_usd: 1.23 },
+    { task: 'boq_match', provider: 'openai', model: 'gpt-x', calls: 7, cached: 2, errors: 1, blocked: 0, tokens_in: 1000, tokens_cached: 321, tokens_out: 500, cost_usd: 1.23, rate_verified: true },
+    { task: 'intake_classify', provider: 'qwen', model: 'qwen3.7-plus', calls: 3, cached: 0, errors: 0, blocked: 0, tokens_in: 90, tokens_cached: 0, tokens_out: 40, cost_usd: 0.42, rate_verified: false },
   ],
   recent: [
     { id: 'c1', created_at: '2026-09-01T10:00:00Z', task: 'boq_match', provider: 'openai', model: 'gpt-x', project_id: null, entity_type: null, entity_id: null, status: 'ok', tokens_in: 10, tokens_out: 5, cost_usd: 0.01, latency_ms: 420, error: null, created_by: null },
   ],
-}
+} as unknown as AiUsageOut
 
 function setup(status: AiStatusOut = okStatus) {
   get.mockImplementation((path: string) => {
     if (path.startsWith('/tender-intake/settings'))
-      return Promise.resolve({ auto_accept_min: 0.85, default_auto_accept_min: 0.85 })
+      return Promise.resolve({ auto_accept_min: 0.85, default_auto_accept_min: 0.85, auto_measure_disciplines: ['stormwater'] })
     return Promise.resolve(path.startsWith('/ai/status') ? status : usage)
   })
   put.mockResolvedValue({})
@@ -89,6 +90,20 @@ describe('AiAdmin', () => {
     expect(await screen.findByText('$1.23')).toBeInTheDocument()
     expect(screen.getByText(/monthly budget/)).toBeInTheDocument()
     expect(screen.getByText('420 ms')).toBeInTheDocument()
+  })
+
+  it('shows cached tokens and marks unverified rates', async () => {
+    roles = [Role.BD_DIRECTOR]
+    setup()
+    expect(await screen.findByText(/\$0\.42/)).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Cached tokens' })).toBeInTheDocument()
+    expect(screen.getByText('321')).toBeInTheDocument()
+    const rows = screen.getAllByRole('row')
+    const verified = rows.find((r) => r.textContent?.includes('$1.23'))!
+    const unverified = rows.find((r) => r.textContent?.includes('$0.42'))!
+    expect(unverified).toHaveTextContent('unverified')
+    expect(verified).not.toHaveTextContent('unverified')
+    expect(screen.getByText(/Price not yet checked against your provider invoice/)).toBeInTheDocument()
   })
 
   it('does not request usage for other roles', async () => {
@@ -143,7 +158,7 @@ describe('AiAdmin', () => {
       setup()
       expect(await screen.findByLabelText(label)).toBeDisabled()
       expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
-      expect(screen.getByText('Only the managing director can change this')).toBeInTheDocument()
+      expect(screen.getAllByText('Only the managing director can change this').length).toBeGreaterThan(0)
     })
 
     it('shows server errors', async () => {
@@ -153,6 +168,41 @@ describe('AiAdmin', () => {
       fireEvent.change(await screen.findByLabelText(label), { target: { value: '95' } })
       fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       expect(await screen.findByRole('alert')).toHaveTextContent('Value rejected by server')
+    })
+  })
+
+  describe('measure automatically on intake', () => {
+    it('lists the disciplines with the saved ones ticked and explains the other ways drawings get measured', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      expect(await screen.findByRole('checkbox', { name: 'Stormwater drainage' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Roads / civil' })).not.toBeChecked()
+      expect(screen.getByText(/when opened, when the verification report needs them, or by "Measure all"/)).toBeInTheDocument()
+    })
+
+    it('saves the ticked disciplines only', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Roads / civil' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save automatic measuring' }))
+      await waitFor(() =>
+        expect(put).toHaveBeenCalledWith('/admin/intake-settings', { auto_measure_disciplines: ['stormwater', 'roads_civil'] }),
+      )
+    })
+
+    it('can clear the list back to none', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Stormwater drainage' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save automatic measuring' }))
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/intake-settings', { auto_measure_disciplines: [] }))
+    })
+
+    it('is read-only for other roles', async () => {
+      roles = [Role.BD_DIRECTOR]
+      setup()
+      expect(await screen.findByRole('checkbox', { name: 'Roads / civil' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Save automatic measuring' })).not.toBeInTheDocument()
     })
   })
 })

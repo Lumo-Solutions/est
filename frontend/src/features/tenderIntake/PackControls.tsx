@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { ConfirmModal } from '../../components/ConfirmModal'
-import { useCancelTenderPackage, usePauseTenderPackage, useResumeTenderPackage } from './api'
-import type { PackageProgress } from './types'
+import { useCancelTenderPackage, useCostEstimate, usePauseTenderPackage, useResumeTenderPackage } from './api'
+import { CostEstimateModal } from './CostEstimateModal'
+import { CostConfirmationRequiredError, type CostEstimate, type PackageProgress } from './types'
 
 const CONTROLLABLE = ['uploading', 'processing', 'paused']
 
@@ -24,6 +25,23 @@ function packName(p: PackageProgress): string {
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Request failed')
 
+// Loads the estimate for a pack about to be resumed and reports it once (mounted only while that check runs).
+function EstimateLoader({ packageId, onLoaded, onFailed }: { packageId: string; onLoaded: (e: CostEstimate) => void; onFailed: (e: Error) => void }) {
+  const { data, error } = useCostEstimate(packageId)
+  const reported = useRef(false)
+  useEffect(() => {
+    if (reported.current) return
+    if (data) {
+      reported.current = true
+      onLoaded(data)
+    } else if (error) {
+      reported.current = true
+      onFailed(error)
+    }
+  }, [data, error, onLoaded, onFailed])
+  return null
+}
+
 // Pause, Resume and Cancel for the packs that are still uploading, being read, or paused. Lead estimators and above
 // only: everyone else sees nothing here.
 export function PackControls({ projectId, packages, canConfirm }: { projectId: string; packages: PackageProgress[]; canConfirm: boolean }) {
@@ -33,6 +51,8 @@ export function PackControls({ projectId, packages, canConfirm }: { projectId: s
   const [cancelling, setCancelling] = useState<PackageProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [checking, setChecking] = useState<PackageProgress | null>(null)
+  const [review, setReview] = useState<{ pack: PackageProgress; estimate: CostEstimate } | null>(null)
 
   const active = packages.filter((p) => CONTROLLABLE.includes(p.status))
   if (!canConfirm || active.length === 0) return null
@@ -44,6 +64,25 @@ export function PackControls({ projectId, packages, canConfirm }: { projectId: s
       onError: (e) => setError(`Could not ${verb} ${packName(p)}: ${msg(e)}`),
       onSettled: () => setBusyId(null),
     })
+  }
+
+  const doResume = (p: PackageProgress) => {
+    setError(null)
+    setBusyId(p.id)
+    resume.mutate(p.id, {
+      onError: (e) => {
+        if (e instanceof CostConfirmationRequiredError && e.estimate) setReview({ pack: p, estimate: e.estimate })
+        else setError(`Could not resume ${packName(p)}: ${msg(e)}`)
+      },
+      onSettled: () => setBusyId(null),
+    })
+  }
+
+  // Resume looks at the estimated AI cost first; only a pack that needs confirmation opens the modal.
+  const startResume = (p: PackageProgress) => {
+    setError(null)
+    setBusyId(p.id)
+    setChecking(p)
   }
 
   return (
@@ -59,7 +98,7 @@ export function PackControls({ projectId, packages, canConfirm }: { projectId: s
             </p>
             <div className="flex items-center gap-2">
               {p.status === 'paused' ? (
-                <Button size="sm" loading={busyId === p.id && resume.isPending} onClick={() => run(resume, p, 'resume')} aria-label={`Resume ${packName(p)}`}>
+                <Button size="sm" loading={busyId === p.id && (resume.isPending || checking?.id === p.id)} onClick={() => startResume(p)} aria-label={`Resume ${packName(p)}`}>
                   Resume
                 </Button>
               ) : (
@@ -78,6 +117,36 @@ export function PackControls({ projectId, packages, canConfirm }: { projectId: s
         <p role="alert" className="mt-2 text-sm text-danger">
           {error}
         </p>
+      )}
+      {checking && (
+        <EstimateLoader
+          key={checking.id}
+          packageId={checking.id}
+          onLoaded={(estimate) => {
+            const p = checking
+            setChecking(null)
+            if (estimate.confirmation_required) {
+              setBusyId(null)
+              setReview({ pack: p, estimate })
+            } else doResume(p)
+          }}
+          onFailed={(e) => {
+            const p = checking
+            setChecking(null)
+            setBusyId(null)
+            setError(`Could not check the AI cost of ${packName(p)}: ${msg(e)}`)
+          }}
+        />
+      )}
+      {review && (
+        <CostEstimateModal
+          open
+          projectId={projectId}
+          packageId={review.pack.id}
+          estimate={review.estimate}
+          onClose={() => setReview(null)}
+          onConfirmed={() => doResume(review.pack)}
+        />
       )}
       <ConfirmModal
         open={cancelling !== null}

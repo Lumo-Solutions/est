@@ -1,4 +1,10 @@
+import { useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
+import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
+import { useCostEstimate } from './api'
+import { CostEstimateModal } from './CostEstimateModal'
+import { CONFIRM_ROLES } from './lib'
 import { displayStatusLabel } from './treeLib'
 import type { PackageProgress, TreeSummary } from './types'
 
@@ -20,6 +26,20 @@ function Bar({ label, now, max }: { label: string; now: number; max: number }) {
   )
 }
 
+// Loads the estimate for a pack waiting on the cost OK and shows it in the modal (mounted only after the button).
+function ReviewCost({ pack, onClose }: { pack: PackageProgress; onClose: () => void }) {
+  const { data, isError, error } = useCostEstimate(pack.id)
+  if (isError) {
+    return (
+      <p role="alert" className="mt-1 text-sm text-danger">
+        Could not load the estimated cost: {error.message}
+      </p>
+    )
+  }
+  if (!data) return null
+  return <CostEstimateModal open packageId={pack.id} estimate={data} onClose={onClose} />
+}
+
 // What the project is doing right now, from counts only: files arriving ("Uploaded U of E files"), files being read
 // ("Reading documents: D of T" with a count per state), and a paused banner.
 export function IntakeProgress({ summary, packages = [] }: { summary: TreeSummary; packages?: PackageProgress[] }) {
@@ -30,15 +50,37 @@ export function IntakeProgress({ summary, packages = [] }: { summary: TreeSummar
   const expected = arriving.reduce((n, p) => n + p.expected_count, 0)
   const unfinished = uploading.filter((p) => p.pending_upload === 0 && p.registered < p.expected_count)
   const paused = packages.filter((p) => p.status === 'paused')
+  const awaiting = packages.filter((p) => p.awaiting_cost_confirmation)
+  const { hasRole } = useAuth()
+  const canReview = hasRole(...CONFIRM_ROLES)
+  const [reviewing, setReviewing] = useState<string | null>(null)
   const showReading = summary.in_progress > 0 || summary.packages_processing > 0
 
-  if (!showUpload && !showReading && paused.length === 0) return null
+  if (!showUpload && !showReading && paused.length === 0 && awaiting.length === 0) return null
 
   const done = Math.max(0, summary.total - summary.in_progress)
   const counts = IN_PROGRESS_STATES.filter((s) => (summary.by_display_status[s] ?? 0) > 0)
 
   return (
     <Card className="mt-6" aria-label="Reading progress">
+      {awaiting.map((p) => (
+        <div key={p.id} className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-control bg-warning-subtle px-3 py-2">
+          <p role="status" className="text-sm font-medium text-ink">
+            Waiting for your OK on the estimated AI cost before reading starts
+          </p>
+          {canReview && (
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-label={awaiting.length > 1 ? `Review estimated cost for ${p.label || 'upload'}` : undefined}
+              onClick={() => setReviewing(p.id)}
+            >
+              Review estimated cost
+            </Button>
+          )}
+          {reviewing === p.id && <ReviewCost pack={p} onClose={() => setReviewing(null)} />}
+        </div>
+      ))}
       {paused.length > 0 && (
         <p role="status" className="mb-2 rounded-control bg-warning-subtle px-3 py-2 text-sm font-medium text-ink">
           {paused.length === 1 ? 'This pack is paused.' : `${paused.length} packs are paused.`} Nothing new is read or uploaded until it is resumed.

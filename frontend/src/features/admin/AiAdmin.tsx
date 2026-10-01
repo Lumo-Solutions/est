@@ -4,9 +4,10 @@ import { Badge, type BadgeTone } from '../../components/Badge'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { SkeletonRows } from '../../components/Skeleton'
 import { Role } from '../../lib/roles'
-import type { AiCallStatus } from '../../types/api'
+import type { AiCallStatus, AiUsageRow } from '../../types/api'
 import { AiStatusNotice } from '../ai/AiStatusNotice'
 import { useAiStatus, useAiUsage, useSetExternalAi } from '../ai/api'
+import { DRAWING_DISCIPLINES, disciplineLabel } from '../tenderIntake/lib'
 import { useIntakeSettings, useSetIntakeSettings } from './api'
 
 // Mirrors the backend: only the managing director changes the switch;
@@ -21,7 +22,11 @@ const CALL_STATUS_TONE: Record<AiCallStatus, BadgeTone> = {
   blocked: 'warning',
 }
 
+// The usage rows now carry cached tokens and whether the price is verified (older servers omit them).
+type UsageRow = AiUsageRow & { tokens_cached?: number; rate_verified?: boolean }
+
 const usd = (n: number) => `$${n.toFixed(2)}`
+const UNVERIFIED_HELP = 'Price not yet checked against your provider invoice.'
 const th = 'px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-slate-500'
 const thNum = 'px-2 py-1.5 text-right text-xs font-medium uppercase tracking-wide text-slate-500'
 const num = 'px-2 py-1.5 text-right tabular-nums'
@@ -112,6 +117,62 @@ function IntakeAutoAcceptCard({ canEdit }: { canEdit: boolean }) {
   )
 }
 
+function AutoMeasureCard({ canEdit }: { canEdit: boolean }) {
+  const { data } = useIntakeSettings()
+  const save = useSetIntakeSettings()
+  const [draft, setDraft] = useState<string[] | null>(null)
+  if (!data) return null
+  const saved = data.auto_measure_disciplines ?? []
+  const selected = draft ?? saved
+  const toggle = (code: string) =>
+    setDraft(selected.includes(code) ? selected.filter((c) => c !== code) : [...selected, code])
+  return (
+    <section aria-labelledby="intake-auto-measure-title">
+      <h2 id="intake-auto-measure-title" className="text-sm font-semibold text-slate-800">
+        Measure automatically on intake
+      </h2>
+      <p className="mt-2 text-sm text-slate-600">
+        Drawings of the ticked disciplines are measured as soon as intake sorts them. Other drawings are measured when
+        opened, when the verification report needs them, or by &quot;Measure all&quot;. With none ticked, nothing is
+        measured automatically.
+      </p>
+      <fieldset className="mt-2" disabled={!canEdit || save.isPending}>
+        <legend className="sr-only">Disciplines to measure automatically</legend>
+        <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+          {DRAWING_DISCIPLINES.map((code) => (
+            <label key={code} className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={selected.includes(code)}
+                onChange={() => toggle(code)}
+                className="h-4 w-4 rounded border-slate-300 text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+              />
+              {disciplineLabel(code)}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {canEdit && (
+        <button
+          type="button"
+          disabled={draft === null || save.isPending}
+          onClick={() => save.mutate({ auto_measure_disciplines: draft ?? [] }, { onSuccess: () => setDraft(null) })}
+          className="mt-2 rounded-control bg-brand px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+          aria-label="Save automatic measuring"
+        >
+          Save
+        </button>
+      )}
+      {!canEdit && <p className="mt-1 text-xs text-slate-500">Only the managing director can change this</p>}
+      {save.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {save.error.message}
+        </p>
+      )}
+    </section>
+  )
+}
+
 export function AiAdmin() {
   const { hasRole } = useAuth()
   const canSwitch = hasRole(...SWITCH_ROLES)
@@ -184,6 +245,7 @@ export function AiAdmin() {
       </section>
 
       <IntakeAutoAcceptCard canEdit={canSwitch} />
+      <AutoMeasureCard canEdit={canSwitch} />
 
       {!canSeeUsage && <p className="text-xs text-slate-500">Your role cannot view AI usage.</p>}
       {canSeeUsage && usageLoading && <SkeletonRows count={3} />}
@@ -223,12 +285,13 @@ export function AiAdmin() {
                     <th className={thNum}>Errors</th>
                     <th className={thNum}>Blocked</th>
                     <th className={thNum}>Tokens in</th>
+                    <th className={thNum}>Cached tokens</th>
                     <th className={thNum}>Tokens out</th>
                     <th className={thNum}>Cost (USD)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {usage.rows.map((r) => (
+                  {(usage.rows as UsageRow[]).map((r) => (
                     <tr key={`${r.task}|${r.provider}|${r.model}`}>
                       <td className="px-2 py-1.5">{r.task}</td>
                       <td className="px-2 py-1.5">{r.provider}</td>
@@ -238,12 +301,25 @@ export function AiAdmin() {
                       <td className={num}>{r.errors}</td>
                       <td className={num}>{r.blocked}</td>
                       <td className={num}>{r.tokens_in}</td>
+                      <td className={num}>{r.tokens_cached ?? 0}</td>
                       <td className={num}>{r.tokens_out}</td>
-                      <td className={num}>{usd(r.cost_usd)}</td>
+                      <td className={num}>
+                        {usd(r.cost_usd)}
+                        {r.rate_verified === false && (
+                          <span className="ml-1 rounded-pill bg-warning-subtle px-1.5 py-0.5 text-xs font-medium text-ink" title={UNVERIFIED_HELP}>
+                            unverified
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            )}
+            {(usage.rows as UsageRow[]).some((r) => r.rate_verified === false) && (
+              <p className="mt-2 text-xs text-slate-500">
+                &quot;unverified&quot;: {UNVERIFIED_HELP} The cost shown is an estimate from the published price.
+              </p>
             )}
           </section>
 
