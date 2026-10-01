@@ -94,3 +94,31 @@ A file over the automatic-reading limit (or with too many pages, or one that too
 
 Document `status` gains `pending_upload` (registered, bytes not here yet; never listed by `/items`). Package `status` gains
 `uploading`, `paused`, `cancelled`.
+
+---
+
+# Addendum: drawings on demand, cost estimate (UI contract)
+
+## Drawing measurement states
+`DrawingOut` (drawings list/detail) gains `measurement`: `indexed | queued | measuring | measured | failed` (computed from `status`;
+for `failed` the reason is `error_message`). Intake now leaves drawings `indexed` (status value `indexed`); `ready`/`partial` read as `measured`.
+* `POST /drawings/{id}/measure` -> `202 {state}` (estimator+). Call it when a drawing is **opened in the takeoff** (idempotent; also bumps a
+  drawing waiting in a bulk request to the front). `state`: `queued | measuring | measured | skipped`.
+* `POST /projects/{id}/drawings/measure` body `{disciplines?: string[], drawing_types?: string[], drawing_ids?: string[]}` (at least one) ->
+  `202 {matched, queued, measuring, measured, skipped}` (lead_estimator+, audited). "Measure all: roads, drainage".
+* `GET /projects/{id}/drawings/measurement-summary` -> `{total: {indexed,queued,measuring,measured,failed}, by_discipline: {<discipline|none>: {...}}}`.
+* `GET /tender-intake/settings` -> adds `auto_measure_disciplines: string[]`; `PUT /admin/intake-settings` (managing_director) accepts
+  `{auto_accept_min?: number, auto_measure_disciplines?: string[]}` (either/both; default list is empty = nothing auto-measures).
+* The intake tree's `display_status` for an indexed drawing is `ready`; while measuring it is `extracting`.
+
+## AI cost: estimate, confirm
+* `GET /tender-packages/{id}/cost-estimate` (lead_estimator+) -> `{package_id, provider, external, ai_available, files_needing_ai,
+  models: [{model, tier, calls, avg_tokens_in, avg_tokens_cached, avg_tokens_out, est_usd, rate_verified, basis}], total_usd,
+  any_unverified, monthly_remaining_usd, project_remaining_usd, within_budget, confirmation_required, confirmed_at, confirmed_usd, note}`.
+  `rate_verified: false` (qwen3.7-plus) must be shown as **unverified**. `basis`: `history` (from past calls) or `default`.
+* `POST /tender-packages/{id}/confirm-cost` body `{accepted_usd}` (the total the person saw) -> the estimate again. 409
+  `urn:installtec:cost-confirmation-required` if the estimate grew > 10 % since (body has `estimate`: show it again).
+* `POST /tender-packages/{id}/resume` now returns **409 `urn:installtec:cost-confirmation-required`** (with `estimate` in the problem body) when an external AI
+  provider would read the pack and nobody confirmed: show the estimate, ask, call confirm-cost, then resume. A pack that waits like this has
+  `PackageProgress.awaiting_cost_confirmation: true` (the dispatcher does not start it, also for new uploads).
+* `AiUsageRow` (admin AI usage) gains `tokens_cached` and `rate_verified` (show an "unverified" badge/text on rows where it is false).
