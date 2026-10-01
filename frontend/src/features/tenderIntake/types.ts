@@ -111,12 +111,18 @@ export interface BulkConfirmResult {
   failed: number
   skipped: number
   results: ConfirmItemResult[]
+  /** Filter-based calls only: how many files matched when the first call started. */
+  matched?: number | null
+  /** Filter-based calls only: pass back as `cursor` until it is null. */
+  next_cursor?: string | null
 }
 
 export interface BulkConfirmBody {
   package_id?: string | null
   document_ids?: string[] | null
   min_confidence?: number | null
+  filter?: DocFilter | null
+  cursor?: string | null
 }
 
 export interface AddendumLink {
@@ -175,7 +181,9 @@ export interface ReclassifyBody {
 }
 
 export interface BulkReclassifyBody extends ReclassifyBody {
-  document_ids: string[]
+  document_ids?: string[] | null
+  filter?: DocFilter | null
+  cursor?: string | null
   confirm: boolean
 }
 
@@ -223,15 +231,23 @@ export interface TreeItem {
   created_at: string
 }
 
+export interface TreeBoqDoc {
+  id: string
+  name: string
+}
+
 export interface TreeSummary {
   total: number
   by_display_status: Record<string, number>
   by_class: Record<string, number>
   needs_check: number
   in_progress: number
+  /** Registered files whose bytes have not arrived yet (a resumable upload in progress). */
+  pending_upload: number
   drawings_total: number
   drawings_ready: number
-  boq_documents: string[]
+  boq_documents: TreeBoqDoc[]
+  first_drawing_id: string | null
   addenda: number
   packages_processing: number
   auto_accept_min: number
@@ -239,7 +255,69 @@ export interface TreeSummary {
   ai_message: string | null
 }
 
+/** Counts of the "by document type" tree; `null` = not set. Roll up by summing. */
+export interface GroupCount {
+  doc_class: string | null
+  discipline: string | null
+  drawing_type: string | null
+  count: number
+}
+
+/** Files directly in an upload folder (`''` = top level). */
+export interface FolderCount {
+  folder: string
+  count: number
+}
+
+export type PackageStatus = 'uploading' | 'processing' | 'ready' | 'failed' | 'paused' | 'cancelled'
+
+export interface PackageProgress {
+  id: string
+  label: string | null
+  status: PackageStatus | string
+  created_at: string
+  expected_count: number
+  registered: number
+  uploaded: number
+  waiting: number
+  pending_upload: number
+}
+
+// GET /projects/{id}/tender-documents/tree: counts only, no file list.
 export interface TreeOut {
-  items: TreeItem[]
   summary: TreeSummary
+  groups: GroupCount[]
+  folders: FolderCount[]
+  packages: PackageProgress[]
+}
+
+/** Which documents of a project; the same vocabulary for the paged list and the bulk actions. `none` = not set. */
+export interface DocFilter {
+  package_id?: string
+  doc_class?: string
+  discipline?: string
+  drawing_type?: string
+  display_status?: string
+  decided_by?: string
+  flag?: string
+  exclude_flags?: string[]
+  has_class?: boolean
+  /** Exact upload folder ('' = top level); with include_subfolders, that folder and everything below it. */
+  folder?: string
+  include_subfolders?: boolean
+  q?: string
+}
+
+// GET /projects/{id}/tender-documents/items
+export interface TreeItemPage {
+  items: TreeItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface PackageControlOut {
+  package_id: string
+  status: string
+  cancelled_documents: number
 }

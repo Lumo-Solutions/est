@@ -1,4 +1,4 @@
-import type { TenderClass, TreeItem, TreeSummary } from './types'
+import type { GroupCount, PackageProgress, TenderClass, TreeItem, TreeItemPage, TreeOut, TreeSummary } from './types'
 
 // Shared builders for the tree tests.
 let seq = 0
@@ -47,9 +47,11 @@ export function treeSummary(over: Partial<TreeSummary> = {}): TreeSummary {
     by_class: {},
     needs_check: 0,
     in_progress: 0,
+    pending_upload: 0,
     drawings_total: 0,
     drawings_ready: 0,
     boq_documents: [],
+    first_drawing_id: null,
     addenda: 0,
     packages_processing: 0,
     auto_accept_min: 0.85,
@@ -73,3 +75,30 @@ export const TEST_CLASSES: TenderClass[] = CLASS_ROWS.map(([code, label], i) => 
   enabled: true,
   sort_order: i,
 }))
+
+export function groupCount(doc_class: string | null, count: number, discipline: string | null = null, drawing_type: string | null = null): GroupCount {
+  return { doc_class, discipline, drawing_type, count }
+}
+
+export function packageProgress(over: Partial<PackageProgress> = {}): PackageProgress {
+  return {
+    id: 'pk1',
+    label: 'Transmittal 1',
+    status: 'processing',
+    created_at: '2026-10-01T00:00:00Z',
+    expected_count: 10,
+    registered: 10,
+    uploaded: 10,
+    waiting: 0,
+    pending_upload: 0,
+    ...over,
+  }
+}
+
+export function treeOut(over: Partial<TreeOut> = {}): TreeOut {
+  return { summary: treeSummary(), groups: [], folders: [], packages: [], ...over }
+}
+
+export function itemPage(items: TreeItem[], total = items.length, offset = 0, limit = 100): TreeItemPage {
+  return { items, total, limit, offset }
+}

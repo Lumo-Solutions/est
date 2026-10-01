@@ -1,14 +1,14 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import { Badge } from '../../components/Badge'
 import { Button } from '../../components/Button'
 import { Card, SectionHeading } from '../../components/Card'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { ClassFields } from './ClassFields'
 import { EMPTY_CHOICE, choiceBody, type ClassChoice } from './classChoice'
-import { useBulkConfirm, useConfirmDocument, useReclassifyDocument, useTenderClasses } from './api'
-import { confidenceTone, disciplineLabel, drawingTypeLabel, flagLabel, formatConfidence } from './lib'
-import { classLabeler, classOptions, decidedByInfo, isBulkConfirmable, needsCheckItems, visibleFlags } from './treeLib'
-import type { TreeItem } from './types'
+import { useBulkConfirm, useConfirmDocument, useInvalidateIntake, useReclassifyDocument, useTenderClasses, useTenderItems } from './api'
+import { confidenceTone, disciplineLabel, drawingTypeLabel, formatConfidence } from './lib'
+import { CONFIRM_ALL_FILTER, NEEDS_CHECK_FILTER, capList, classLabeler, classOptions, decidedByInfo, flagText, visibleFlags } from './treeLib'
+import type { TreeItem, TreeSummary } from './types'
 
 const PAGE = 25
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Request failed')
@@ -70,7 +70,7 @@ const Row = memo(function Row({ item, canAct, classLabel, options, busy, error, 
             {decided && <Badge tone={decided.tone}>{decided.label}</Badge>}
             {visibleFlags(item).map(({ flag, tone }) => (
               <Badge key={flag} tone={tone}>
-                {flagLabel(flag)}
+                {flagText(flag)}
               </Badge>
             ))}
           </p>
@@ -102,9 +102,11 @@ const Row = memo(function Row({ item, canAct, classLabel, options, busy, error, 
         </div>
         {canAct && (
           <div className="flex shrink-0 items-center gap-2">
-            <Button size="sm" loading={busy} onClick={() => onConfirm(item)} aria-label={`Confirm ${item.name}`}>
-              Confirm
-            </Button>
+            {item.doc_class && (
+              <Button size="sm" loading={busy} onClick={() => onConfirm(item)} aria-label={`Confirm ${item.name}`}>
+                Confirm
+              </Button>
+            )}
             <Button
               size="sm"
               variant="secondary"
@@ -143,28 +145,35 @@ const Row = memo(function Row({ item, canAct, classLabel, options, busy, error, 
   )
 })
 
-// The "Needs your check" list at the top of the project page: one-click Confirm or Change for each
-// file the AI was not sure enough about to route on its own.
-export function NeedsCheckList({ projectId, items, canConfirm }: { projectId: string; items: TreeItem[]; canConfirm: boolean }) {
+
+// The "Needs your check" list at the top of the project page: one-click Confirm or Change for each file the AI was
+// not sure enough about to route on its own. The list is paged from the server; "Confirm all" works server-side on
+// every matching file, not just the rows on screen.
+export function NeedsCheckList({ projectId, summary, canConfirm }: { projectId: string; summary: TreeSummary; canConfirm: boolean }) {
   const { data: classes = [] } = useTenderClasses()
   const confirmDoc = useConfirmDocument(projectId)
   const reclassify = useReclassifyDocument(projectId)
-  const bulk = useBulkConfirm(projectId)
-  const [limit, setLimit] = useState(PAGE)
+  const bulk = useBulkConfirm(projectId, { quiet: true })
+  const invalidateIntake = useInvalidateIntake(projectId)
+  const list = useTenderItems(projectId, NEEDS_CHECK_FILTER, { limit: PAGE, enabled: summary.needs_check > 0 })
+  const confirmable = useTenderItems(projectId, CONFIRM_ALL_FILTER, { limit: 1, enabled: canConfirm && summary.needs_check > 0 })
   const [busyId, setBusyId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [confirmAll, setConfirmAll] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [progress, setProgress] = useState<{ confirmed: number; total: number } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [failures, setFailures] = useState<string[]>([])
+  const cancelRef = useRef(false)
 
-  const rows = useMemo(() => needsCheckItems(items), [items])
-  const shown = rows.slice(0, limit)
-  const bulkIds = useMemo(() => shown.filter(isBulkConfirmable).map((i) => i.id), [shown])
+  const rows = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data])
   const classLabel = useMemo(() => classLabeler(classes), [classes])
   const options = useMemo(() => classOptions(classes), [classes])
-  const nameOf = useMemo(() => new Map(rows.map((r) => [r.id, r.name])), [rows])
 
-  if (rows.length === 0) return null
+  if (summary.needs_check === 0 && !running && !result) return null
+
+  const confirmableCount = confirmable.data?.pages[0]?.total ?? 0
+  const heldBack = Math.max(0, summary.needs_check - confirmableCount)
 
   const setError = (id: string, m: string | null) =>
     setErrors((prev) => {
@@ -195,56 +204,105 @@ export function NeedsCheckList({ projectId, items, canConfirm }: { projectId: st
     )
   }
 
-  const runConfirmAll = () => {
+  // Confirm every matching file: one chunk per request, following next_cursor until the server says it is done.
+  const runConfirmAll = async () => {
     setConfirmAll(false)
     setResult(null)
     setFailures([])
-    bulk.mutate(
-      { document_ids: bulkIds },
-      {
-        onSuccess: (r) => {
-          setResult(`Confirmed ${r.confirmed}, skipped ${r.skipped}, failed ${r.failed}`)
-          setFailures(r.results.filter((x) => !x.ok && x.error).map((x) => `${nameOf.get(x.id) ?? x.id}: ${x.error}`))
-        },
-        onError: (e) => setFailures([msg(e)]),
-      },
+    setRunning(true)
+    cancelRef.current = false
+    const names = new Map(rows.map((r) => [r.id, r.name]))
+    let total = confirmableCount
+    let confirmed = 0
+    let failed = 0
+    let skipped = 0
+    let stopped = false
+    const fails: string[] = []
+    setProgress({ confirmed, total })
+    try {
+      let cursor: string | null = null
+      let first = true
+      do {
+        if (cancelRef.current) {
+          stopped = true
+          break
+        }
+        const r: Awaited<ReturnType<typeof bulk.mutateAsync>> = await bulk.mutateAsync({ filter: CONFIRM_ALL_FILTER, cursor })
+        if (first && r.matched != null) total = r.matched
+        first = false
+        confirmed += r.confirmed
+        failed += r.failed
+        skipped += r.skipped
+        for (const x of r.results) if (!x.ok && x.error) fails.push(`${names.get(x.id) ?? x.id}: ${x.error}`)
+        setProgress({ confirmed, total })
+        const next: string | null = r.next_cursor ?? null
+        if (next === cursor) break
+        cursor = next
+      } while (cursor)
+    } catch (e) {
+      fails.push(msg(e))
+    } finally {
+      setRunning(false)
+      setProgress(null)
+      invalidateIntake()
+    }
+    setResult(
+      `${stopped ? 'Stopped. ' : ''}Confirmed ${confirmed} of ${total}${skipped > 0 ? `, skipped ${skipped}` : ''}${failed > 0 ? `, failed ${failed}` : ''}`,
     )
+    setFailures(fails)
   }
 
-  const heldBack = shown.length - bulkIds.length
+  const failureView = capList(failures, 20)
+  const notShown = summary.needs_check - rows.length
 
   return (
     <Card className="mt-6 border-2 border-warning-subtle">
       <SectionHeading
         action={
-          canConfirm && bulkIds.length > 0 ? (
-            <Button size="sm" loading={bulk.isPending} onClick={() => setConfirmAll(true)}>
-              Confirm all shown ({bulkIds.length})
+          canConfirm && confirmableCount > 0 && !running ? (
+            <Button size="sm" onClick={() => setConfirmAll(true)}>
+              Confirm all ({confirmableCount})
             </Button>
           ) : undefined
         }
       >
-        Needs your check ({rows.length})
+        Needs your check ({summary.needs_check})
       </SectionHeading>
       <p className="mb-2 text-sm text-ink-2">
         {canConfirm
           ? 'These files were not certain enough to sort on their own. Confirm the proposed class or change it.'
           : 'These files need a lead estimator or above to confirm or change the class. You can see them here but not change them.'}
       </p>
+      {progress && (
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <p role="status" className="text-sm text-ink">
+            Confirmed {progress.confirmed} of {progress.total}
+          </p>
+          <Button variant="secondary" size="sm" onClick={() => (cancelRef.current = true)}>
+            Cancel
+          </Button>
+        </div>
+      )}
       {result && (
         <p role="status" className="mb-2 text-sm text-ink">
           {result}
         </p>
       )}
-      {failures.length > 0 && (
+      {failureView.shown.length > 0 && (
         <ul role="alert" className="mb-2 space-y-1 text-sm text-danger">
-          {failures.map((f) => (
-            <li key={f}>{f}</li>
+          {failureView.shown.map((f, i) => (
+            <li key={`${i}-${f}`}>{f}</li>
           ))}
+          {failureView.more > 0 && <li>and {failureView.more} more</li>}
         </ul>
       )}
+      {list.isError && (
+        <p role="alert" className="mb-2 text-sm text-danger">
+          {msg(list.error)}
+        </p>
+      )}
       <ul aria-label="Files that need your check" className="divide-y divide-row-rule">
-        {shown.map((item) => (
+        {rows.map((item) => (
           <Row
             key={item.id}
             item={item}
@@ -258,22 +316,22 @@ export function NeedsCheckList({ projectId, items, canConfirm }: { projectId: st
           />
         ))}
       </ul>
-      {rows.length > shown.length && (
+      {list.hasNextPage && (
         <div className="mt-3">
-          <Button variant="secondary" size="sm" onClick={() => setLimit((l) => l + PAGE)}>
-            Show {Math.min(PAGE, rows.length - shown.length)} more ({rows.length - shown.length} not shown)
+          <Button variant="secondary" size="sm" loading={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+            Show {Math.min(PAGE, Math.max(notShown, 0)) || PAGE} more{notShown > 0 ? ` (${notShown} not shown)` : ''}
           </Button>
         </div>
       )}
       <ConfirmModal
         open={confirmAll}
-        title="Confirm all shown?"
-        message={`Route ${bulkIds.length} ${bulkIds.length === 1 ? 'file' : 'files'} as proposed.${
-          heldBack > 0 ? ` ${heldBack} with a conflict or suspicious text stay here for a one-by-one check.` : ''
+        title="Confirm all?"
+        message={`Route ${confirmableCount} ${confirmableCount === 1 ? 'file' : 'files'} as proposed.${
+          heldBack > 0 ? ` ${heldBack} stay here for a one-by-one check (a conflict, suspicious text or no proposed class).` : ''
         }`}
         confirmLabel="Confirm all"
         onCancel={() => setConfirmAll(false)}
-        onConfirm={runConfirmAll}
+        onConfirm={() => void runConfirmAll()}
       />
     </Card>
   )
