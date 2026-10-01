@@ -8,6 +8,7 @@ import type {
   BulkConfirmBody,
   BulkConfirmResult,
   BulkReclassifyBody,
+  CostEstimate,
   DocFilter,
   PackageControlOut,
   TreeItemPage,
@@ -23,6 +24,7 @@ import type {
   TenderPackage,
   TenderPackageAccepted,
 } from './types'
+import { asCostConfirmationError } from './types'
 
 export const IN_FLIGHT_STATUSES = ['received', 'processing']
 const POLL_MS = 2500
@@ -342,7 +344,14 @@ export function useBulkReclassify(projectId: string | undefined, options: { quie
 function usePackageControl(projectId: string | undefined, action: 'pause' | 'resume' | 'cancel') {
   const invalidate = useInvalidateIntake(projectId)
   return useMutation({
-    mutationFn: (packageId: string) => api.post<PackageControlOut>(`/tender-packages/${packageId}/${action}`),
+    mutationFn: async (packageId: string) => {
+      try {
+        return await api.post<PackageControlOut>(`/tender-packages/${packageId}/${action}`)
+      } catch (e) {
+        // Resume can answer 409 cost-confirmation-required: surface it typed, with the estimate from the body.
+        return action === 'resume' ? asCostConfirmationError(e) : Promise.reject(e)
+      }
+    },
     onSuccess: invalidate,
   })
 }
@@ -350,3 +359,30 @@ function usePackageControl(projectId: string | undefined, action: 'pause' | 'res
 export const usePauseTenderPackage = (projectId: string | undefined) => usePackageControl(projectId, 'pause')
 export const useResumeTenderPackage = (projectId: string | undefined) => usePackageControl(projectId, 'resume')
 export const useCancelTenderPackage = (projectId: string | undefined) => usePackageControl(projectId, 'cancel')
+
+/** The estimated AI cost of reading a pack. Always fresh: it changes as files are added. */
+export function useCostEstimate(packageId: string | undefined, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ['tender-cost-estimate', packageId],
+    queryFn: ({ signal }) => api.get<CostEstimate>(`/tender-packages/${packageId}/cost-estimate`, signal),
+    enabled: Boolean(packageId) && (options.enabled ?? true),
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  })
+}
+
+/** Records that a lead estimator accepted `accepted_usd`; a cost-confirmation 409 carries the new estimate. */
+export function useConfirmCost(projectId: string | undefined) {
+  const invalidate = useInvalidateIntake(projectId)
+  return useMutation({
+    mutationFn: async ({ packageId, accepted_usd }: { packageId: string; accepted_usd: number }) => {
+      try {
+        return await api.post<CostEstimate>(`/tender-packages/${packageId}/confirm-cost`, { accepted_usd })
+      } catch (e) {
+        return asCostConfirmationError(e)
+      }
+    },
+    onSuccess: invalidate,
+  })
+}

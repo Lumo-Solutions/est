@@ -1,9 +1,55 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const m = vi.hoisted(() => ({ roles: [] as string[] }))
+vi.mock('../../auth/AuthContext', () => ({
+  useAuth: () => ({ hasRole: (...r: string[]) => r.some((x) => m.roles.includes(x)) }),
+}))
+vi.mock('./api', () => ({
+  useCostEstimate: () => ({
+    data: {
+      package_id: 'pk1', provider: 'qwen', external: true, ai_available: true, files_needing_ai: 3, models: [], total_usd: 0.5,
+      any_unverified: false, monthly_remaining_usd: null, project_remaining_usd: null, within_budget: true,
+      confirmation_required: true, confirmed_at: null, confirmed_usd: null, note: '',
+    },
+    isError: false,
+  }),
+  useConfirmCost: () => ({ mutate: vi.fn(), isPending: false }),
+}))
+
 import { IntakeProgress } from './IntakeProgress'
 import { packageProgress, treeSummary } from './testFixtures'
 
 describe('IntakeProgress', () => {
+  beforeEach(() => {
+    m.roles = []
+  })
+
+  describe('waiting for the cost OK', () => {
+    const waiting = [packageProgress({ status: 'processing', awaiting_cost_confirmation: true })]
+    const text = 'Waiting for your OK on the estimated AI cost before reading starts'
+
+    it('lead estimators see the banner and a button that opens the estimate', () => {
+      m.roles = ['lead_estimator']
+      render(<IntakeProgress summary={treeSummary({ total: 5 })} packages={waiting} />)
+      expect(screen.getByText(text)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Review estimated cost' }))
+      expect(screen.getByRole('dialog', { name: 'Estimated AI cost' })).toBeInTheDocument()
+    })
+
+    it('other roles see only the banner text', () => {
+      m.roles = ['estimator']
+      render(<IntakeProgress summary={treeSummary({ total: 5 })} packages={waiting} />)
+      expect(screen.getByText(text)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Review estimated cost' })).not.toBeInTheDocument()
+    })
+
+    it('no banner when no pack is waiting', () => {
+      m.roles = ['lead_estimator']
+      render(<IntakeProgress summary={treeSummary({ total: 10 })} packages={[packageProgress({ status: 'paused' })]} />)
+      expect(screen.queryByText(text)).not.toBeInTheDocument()
+    })
+  })
+
   it('renders nothing when nothing is happening', () => {
     const { container } = render(<IntakeProgress summary={treeSummary({ total: 5 })} packages={[packageProgress({ status: 'ready' })]} />)
     expect(container).toBeEmptyDOMElement()

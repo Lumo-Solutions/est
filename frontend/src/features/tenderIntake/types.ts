@@ -1,3 +1,5 @@
+import type { ApiError, ProblemDetails } from '../../lib/api'
+
 // Mirrors backend/app/schemas/tender_intake.py. Decimals arrive as JSON numbers.
 
 export interface TenderPackage {
@@ -281,6 +283,8 @@ export interface PackageProgress {
   uploaded: number
   waiting: number
   pending_upload: number
+  /** An external AI would read this pack and nobody has confirmed the estimated cost yet. */
+  awaiting_cost_confirmation?: boolean
 }
 
 // GET /projects/{id}/tender-documents/tree: counts only, no file list.
@@ -320,4 +324,64 @@ export interface PackageControlOut {
   package_id: string
   status: string
   cancelled_documents: number
+}
+
+// --- AI cost estimate and confirmation (GET /tender-packages/{id}/cost-estimate, POST .../confirm-cost) ---
+
+export interface ModelEstimate {
+  model: string
+  tier: string
+  calls: number
+  avg_tokens_in: number
+  avg_tokens_cached: number
+  avg_tokens_out: number
+  est_usd: number
+  /** False: a published or default price, not yet checked against a provider invoice. */
+  rate_verified: boolean
+  basis: 'history' | 'default' | string
+}
+
+export interface CostEstimate {
+  package_id: string
+  provider: string
+  external: boolean
+  ai_available: boolean
+  files_needing_ai: number
+  models: ModelEstimate[]
+  total_usd: number
+  any_unverified: boolean
+  monthly_remaining_usd: number | null
+  project_remaining_usd: number | null
+  within_budget: boolean
+  confirmation_required: boolean
+  confirmed_at: string | null
+  confirmed_usd: number | null
+  note: string
+}
+
+export const COST_CONFIRMATION_TYPE = 'urn:installtec:cost-confirmation-required'
+
+/** A 409 from resume or confirm-cost: the cost was not (or no longer) confirmed; `estimate` is the current one. */
+export class CostConfirmationRequiredError extends Error {
+  readonly status: number
+  readonly problem: ProblemDetails
+  readonly estimate: CostEstimate | null
+
+  constructor(source: { status: number; problem: ProblemDetails; message?: string }) {
+    super(source.message || source.problem.detail || source.problem.title || 'Cost confirmation required')
+    this.name = 'CostConfirmationRequiredError'
+    this.status = source.status
+    this.problem = source.problem
+    const e = source.problem.estimate
+    this.estimate = e && typeof e === 'object' ? (e as CostEstimate) : null
+  }
+}
+
+/** Turns a cost-confirmation 409 (an ApiError) into the typed error; anything else is rethrown unchanged. */
+export function asCostConfirmationError(e: unknown): never {
+  const err = e as Partial<ApiError> | null
+  if (e instanceof Error && err?.status === 409 && err.problem?.type === COST_CONFIRMATION_TYPE) {
+    throw new CostConfirmationRequiredError({ status: err.status, problem: err.problem, message: e.message })
+  }
+  throw e
 }
