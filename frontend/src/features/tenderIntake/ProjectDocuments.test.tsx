@@ -16,6 +16,7 @@ const m = vi.hoisted(() => ({
 vi.mock('../../auth/AuthContext', () => ({
   useAuth: () => ({ hasRole: (...r: string[]) => r.some((x) => m.roles.includes(x)) }),
 }))
+vi.mock('../drawings/MeasureAll', () => ({ MeasureAll: ({ projectId }: { projectId: string }) => <div data-testid="measure-all">{projectId}</div> }))
 // The upload panel is the other half of the intake work; here it only needs to show where it is placed.
 vi.mock('./UploadPanel', () => ({
   UploadPanel: ({ variant }: { variant?: string }) => <div data-testid={`upload-${variant ?? 'inline'}`}>Upload panel</div>,
@@ -85,6 +86,14 @@ describe('ProjectDocuments', () => {
     expect(screen.getByTestId('upload-hero')).toBeInTheDocument()
     expect(screen.queryByText('Next steps')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Add more files/ })).not.toBeInTheDocument()
+  })
+
+  it('places the measure-all card below the next steps once there are documents, not for an empty project', () => {
+    renderPanel()
+    expect(screen.queryByTestId('measure-all')).not.toBeInTheDocument()
+    setTree(treeOut({ summary: treeSummary({ total: 1 }), groups: [groupCount('other', 1)] }))
+    renderPanel()
+    expect(screen.getByTestId('measure-all')).toHaveTextContent('p1')
   })
 
   it('an empty project shows no upload to a role that cannot upload', () => {
