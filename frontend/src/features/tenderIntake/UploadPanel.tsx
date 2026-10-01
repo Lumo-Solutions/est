@@ -1,13 +1,68 @@
-import { useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card, SectionHeading } from '../../components/Card'
 import { DropZone, type PathedFile } from '../../components/DropZone'
 import { TextField } from '../../components/Field'
-import { useAddTenderFiles, useCreateTenderPackage } from './api'
-import { MAX_FILE_BYTES, formatBytes, splitIntoBatches, todayIso } from './lib'
+import { MAX_FILE_BYTES, formatBytes, todayIso } from './lib'
+import { STOPPED_BY_USER, pathOf, runUpload, type UploadOutcome, type UploadProgress } from './upload/uploader'
 
-// Upload in batches (<= 20 files / 200 MB per request, matching the backend
-// limits). The first batch creates the package; the rest are added to it.
+const PREVIEW_ROWS = 10
+const LIST_CAP = 50
+const PROGRESS_INTERVAL_MS = 250
+
+const num = (n: number) => n.toLocaleString('en-US')
+
+function formatTotal(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  return formatBytes(bytes)
+}
+
+function statusText(p: UploadProgress | null): string | null {
+  if (!p) return null
+  if (p.phase === 'hashing') return `Preparing ${num(p.done)} / ${num(p.total)}`
+  if (p.phase === 'registering') return `Registering ${num(p.total)} files`
+  const failed = p.failed > 0 ? ` (${num(p.failed)} failed)` : ''
+  return `Uploaded ${num(p.uploaded)} / ${num(p.total)}${failed}`
+}
+
+function percent(p: UploadProgress): number {
+  if (p.phase === 'hashing') return p.total ? (p.done / p.total) * 100 : 0
+  if (p.phase === 'registering') return p.total ? (p.done / p.total) * 100 : 0
+  return p.total ? (p.uploaded / p.total) * 100 : 0
+}
+
+// A bounded preview: the first few paths, never one row per file. Memoised so progress ticks do not touch it.
+const FilePreview = memo(function FilePreview({ files }: { files: PathedFile[] }) {
+  const shown = files.slice(0, PREVIEW_ROWS)
+  return (
+    <ul aria-label="Files to upload" className="divide-y divide-row-rule text-sm text-ink">
+      {shown.map((f, i) => (
+        <li key={`${pathOf(f)}-${i}`} className="flex justify-between gap-4 py-1.5">
+          <span className="truncate">{pathOf(f)}</span>
+          <span className="shrink-0 tabular-nums text-ink-2">{formatBytes(f.size)}</span>
+        </li>
+      ))}
+      {files.length > shown.length && (
+        <li className="py-1.5 text-ink-2">and {num(files.length - shown.length)} more</li>
+      )}
+    </ul>
+  )
+})
+
+function CappedList({ items, render }: { items: string[]; render?: (s: string) => string }) {
+  const shown = items.slice(0, LIST_CAP)
+  return (
+    <ul className="mt-2 space-y-1 text-sm">
+      {shown.map((m, i) => (
+        <li key={`${m}-${i}`}>{render ? render(m) : m}</li>
+      ))}
+      {items.length > shown.length && <li>and {num(items.length - shown.length)} more</li>}
+    </ul>
+  )
+}
+
+// Hash every file in the browser, register them with the server, then send only the bytes the server still needs
+// (see ./upload/uploader.ts). Dropping the same folder again after a stop or a closed tab continues where it stopped.
 //
 // `hero` is the empty-project look: one big drop target with Choose folder / Choose files buttons and
 // the label, ref and date fields folded away under "Upload details". `compact` is the plain card.
@@ -25,75 +80,119 @@ export function UploadPanel({
 }) {
   const hero = variant === 'hero'
   const dropRef = useRef<HTMLDivElement>(null)
-  // The hero buttons drive the DropZone's own (visually hidden) inputs, so its batching and folder
-  // handling are reused as they are.
+  // The hero buttons drive the DropZone's own (visually hidden) inputs, so its folder handling is reused as it is.
   const openInput = (testId: string) => dropRef.current?.querySelector<HTMLInputElement>(`[data-testid="${testId}"]`)?.click()
   const [label, setLabel] = useState(`Transmittal ${todayIso()}`)
   const [ref, setRef] = useState('')
   const [received, setReceived] = useState(todayIso())
-  const [files, setFiles] = useState<File[]>([])
-  const [rejected, setRejected] = useState<string[]>([])
-  const [progress, setProgress] = useState<string | null>(null)
+  const [files, setFiles] = useState<PathedFile[]>([])
+  const [tooBig, setTooBig] = useState<string[]>([])
+  const [progress, setProgress] = useState<UploadProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<UploadOutcome | null>(null)
   const [busy, setBusy] = useState(false)
-  // Set after the first batch created the package, so a retry continues in the same package.
-  const [resumePackageId, setResumePackageId] = useState<string | null>(null)
-  const [uploadedSoFar, setUploadedSoFar] = useState(0)
-  const create = useCreateTenderPackage(projectId)
-  const addFiles = useAddTenderFiles(undefined, projectId)
+  const abortRef = useRef<AbortController | null>(null)
+  const throttle = useRef<{ last: number; timer: ReturnType<typeof setTimeout> | null; pending: UploadProgress | null }>({
+    last: 0,
+    timer: null,
+    pending: null,
+  })
+
+  useEffect(
+    () => () => {
+      abortRef.current?.abort()
+      if (throttle.current.timer) clearTimeout(throttle.current.timer)
+    },
+    [],
+  )
+
+  const totalBytes = useMemo(() => files.reduce((s, f) => s + f.size, 0), [files])
+
+  const pushProgress = (p: UploadProgress) => {
+    const t = throttle.current
+    t.pending = p
+    const wait = PROGRESS_INTERVAL_MS - (Date.now() - t.last)
+    if (wait <= 0) {
+      t.last = Date.now()
+      t.pending = null
+      setProgress(p)
+    } else if (!t.timer) {
+      t.timer = setTimeout(() => {
+        t.timer = null
+        t.last = Date.now()
+        if (t.pending) setProgress(t.pending)
+        t.pending = null
+      }, wait)
+    }
+  }
+
+  const flushProgress = (p: UploadProgress | null) => {
+    const t = throttle.current
+    if (t.timer) clearTimeout(t.timer)
+    t.timer = null
+    t.pending = null
+    setProgress(p)
+  }
 
   const onFiles = (chosen: File[]) => {
-    const tooBig = chosen.filter((f) => f.size > MAX_FILE_BYTES)
-    setRejected(tooBig.map((f) => `${f.name} is ${formatBytes(f.size)}: larger than the 60 MB per-file limit, so it was not added.`))
+    const big = chosen.filter((f) => f.size > MAX_FILE_BYTES)
+    setTooBig(
+      big.map((f) => `${pathOf(f)} is ${formatBytes(f.size)}: larger than the ${MAX_FILE_BYTES / (1024 * 1024)} MB per-file limit, so it was not added.`),
+    )
     const ok = chosen.filter((f) => f.size <= MAX_FILE_BYTES)
     setFiles((prev) => [...prev, ...ok])
     setError(null)
-    setProgress(null)
+    setNotice(null)
+    setOutcome(null)
+    flushProgress(null)
   }
 
   const upload = async () => {
+    const ac = new AbortController()
+    abortRef.current = ac
     setBusy(true)
     onUploadStart?.()
     setError(null)
-    const batches = splitIntoBatches(files)
-    const total = files.length + uploadedSoFar
-    let done = uploadedSoFar
-    let packageId = resumePackageId
-    let remaining = files
-    setProgress(`Uploaded ${done} of ${total} files`)
+    setNotice(null)
+    setOutcome(null)
+    let last: UploadProgress | null = null
     try {
-      for (const batch of batches) {
-        if (packageId === null) {
-          const first = await create.mutateAsync({
-            files: batch,
-            label: label.trim() || undefined,
-            transmittal_ref: ref.trim() || undefined,
-            received_date: received || undefined,
-          })
-          packageId = first.package_id
-          setResumePackageId(packageId)
-        } else {
-          await addFiles.mutateAsync({ files: batch, packageId })
-        }
-        done += batch.length
-        remaining = remaining.slice(batch.length)
-        // Sent files leave the list at once, so a retry after an error only re-sends what is left.
-        setFiles(remaining)
-        setUploadedSoFar(done)
-        setProgress(`Uploaded ${done} of ${total} files`)
+      const result = await runUpload({
+        projectId,
+        files,
+        label: label.trim() || undefined,
+        transmittal_ref: ref.trim() || undefined,
+        received_date: received || undefined,
+        signal: ac.signal,
+        onProgress: (p) => {
+          last = p
+          pushProgress(p)
+        },
+        onRegistered: ({ resumed, alreadyUploaded }) => {
+          if (resumed) setNotice(`Continuing an unfinished upload: ${num(alreadyUploaded)} ${alreadyUploaded === 1 ? 'file was' : 'files were'} already here.`)
+        },
+      })
+      flushProgress(last)
+      setOutcome(result)
+      if (result.stopped === STOPPED_BY_USER) {
+        setNotice(result.stopped)
+      } else if (result.stopped) {
+        setError(result.stopped)
+      } else if (result.packageId) {
+        if (result.failed.length === 0) setFiles([])
+        onUploaded(result.packageId)
       }
-      setRejected([])
-      setResumePackageId(null)
-      setUploadedSoFar(0)
-      onUploaded(packageId as string)
     } catch (e) {
-      setError(
-        `${e instanceof Error ? e.message : 'Upload failed'}. ${done} of ${total} files were uploaded; ${remaining.length} still to send. Press Upload to continue with the rest.`,
-      )
+      flushProgress(last)
+      setError(e instanceof Error ? e.message : 'Upload failed')
     } finally {
+      abortRef.current = null
       setBusy(false)
     }
   }
+
+  const stop = () => abortRef.current?.abort()
 
   const fields = (
     <div className="grid gap-4 md:grid-cols-3">
@@ -103,44 +202,79 @@ export function UploadPanel({
     </div>
   )
 
+  const status = statusText(progress)
   const queue = (
     <>
-      {rejected.length > 0 && (
-        <ul role="alert" className="mt-3 space-y-1 text-sm text-danger">
-          {rejected.map((m) => (
-            <li key={m}>{m}</li>
-          ))}
-        </ul>
+      {tooBig.length > 0 && (
+        <div role="alert" className="mt-3 text-sm text-danger">
+          <CappedList items={tooBig} />
+        </div>
       )}
       {files.length > 0 && (
         <div className="mt-4">
-          <ul aria-label="Files to upload" className="max-h-48 divide-y divide-row-rule overflow-y-auto text-sm text-ink">
-            {files.map((f, i) => (
-              <li key={`${f.name}-${i}`} className="flex justify-between gap-4 py-1.5">
-                <span className="truncate">{(f as PathedFile).relativePath ?? f.name}</span>
-                <span className="shrink-0 tabular-nums text-ink-2">{formatBytes(f.size)}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 flex items-center gap-3">
-            <Button onClick={upload} loading={busy}>
-              Upload {files.length} {files.length === 1 ? 'file' : 'files'}
+          <p className="mb-2 text-sm font-medium text-ink">
+            {num(files.length)} {files.length === 1 ? 'file' : 'files'} ({formatTotal(totalBytes)}) ready
+          </p>
+          <FilePreview files={files} />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button onClick={upload} loading={busy} disabled={busy}>
+              Upload {num(files.length)} {files.length === 1 ? 'file' : 'files'}
             </Button>
+            {busy && (
+              <Button variant="secondary" onClick={stop}>
+                Stop
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => setFiles([])} disabled={busy}>
               Clear list
             </Button>
           </div>
+          {busy && (
+            <p className="mt-2 text-xs text-ink-2">
+              You can press Stop, or close this tab, at any time. Dropping the same folder again continues where it stopped.
+            </p>
+          )}
         </div>
       )}
       {progress && (
-        <p role="status" className="mt-3 text-sm text-ink-2">
-          {progress}
-        </p>
+        <div className="mt-3">
+          <div
+            role="progressbar"
+            aria-label="Upload progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(percent(progress))}
+            className="h-2 w-full overflow-hidden rounded-full bg-row-rule"
+          >
+            <div className="h-full bg-brand transition-[width]" style={{ width: `${percent(progress)}%` }} />
+          </div>
+        </div>
       )}
+      <p role="status" aria-live="polite" className="mt-2 text-sm text-ink-2">
+        {status}
+        {status && notice ? ' ' : ''}
+        {notice}
+      </p>
       {error && (
         <p role="alert" className="mt-3 text-sm text-danger">
           {error}
         </p>
+      )}
+      {outcome && outcome.rejected.length > 0 && (
+        <details className="mt-3 text-sm text-ink">
+          <summary className="cursor-pointer font-medium">
+            {num(outcome.rejected.length)} {outcome.rejected.length === 1 ? 'file was' : 'files were'} not accepted
+          </summary>
+          <CappedList items={outcome.rejected.map((r) => `${r.path}: ${r.reason}`)} />
+        </details>
+      )}
+      {outcome && outcome.failed.length > 0 && (
+        <div role="alert" className="mt-3 text-sm text-danger">
+          <p className="font-medium">
+            {num(outcome.failed.length)} {outcome.failed.length === 1 ? 'file' : 'files'} could not be uploaded. Press Upload to try them again.
+          </p>
+          <CappedList items={outcome.failed.map((f) => `${f.path}: ${f.message}`)} />
+        </div>
       )}
     </>
   )
@@ -170,7 +304,7 @@ export function UploadPanel({
                 Choose files
               </Button>
             </div>
-            <p className="mt-3 text-xs text-ink-2">PDF, DXF, DWG, XLSX, DOCX, images or a .zip; up to 60 MB per file</p>
+            <p className="mt-3 text-xs text-ink-2">PDF, DXF, DWG, XLSX, DOCX, images or a .zip; up to 250 MB per file</p>
           </div>
         </div>
         <details className="mt-3">

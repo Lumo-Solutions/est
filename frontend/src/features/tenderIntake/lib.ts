@@ -1,9 +1,7 @@
 import type { BadgeTone } from '../../components/Badge'
 import type { TenderDocument } from './types'
 
-export const MAX_FILE_BYTES = 60 * 1024 * 1024
-export const MAX_BATCH_FILES = 20
-export const MAX_BATCH_BYTES = 200 * 1024 * 1024
+export const MAX_FILE_BYTES = 250 * 1024 * 1024
 
 export const UPLOAD_ROLES = ['estimator', 'lead_estimator', 'procurement_head', 'bd_director', 'managing_director']
 export const CONFIRM_ROLES = ['lead_estimator', 'procurement_head', 'bd_director', 'managing_director']
@@ -64,28 +62,6 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** Split files into upload batches of at most maxFiles files and maxBytes total. */
-export function splitIntoBatches<T extends { size: number }>(
-  files: T[],
-  maxFiles = MAX_BATCH_FILES,
-  maxBytes = MAX_BATCH_BYTES,
-): T[][] {
-  const batches: T[][] = []
-  let current: T[] = []
-  let bytes = 0
-  for (const f of files) {
-    if (current.length > 0 && (current.length >= maxFiles || bytes + f.size > maxBytes)) {
-      batches.push(current)
-      current = []
-      bytes = 0
-    }
-    current.push(f)
-    bytes += f.size
-  }
-  if (current.length > 0) batches.push(current)
-  return batches
 }
 
 export function isSuperseded(doc: TenderDocument, all: TenderDocument[]): boolean {
