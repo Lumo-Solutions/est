@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
+import { MeasurementBadge } from '../features/drawings/MeasurementBadge'
+import { Role } from '../lib/roles'
 import {
   useDrawing,
+  useMeasureOnOpen,
   useMeasurements,
   useSheet,
   useSheetEntities,
@@ -22,6 +26,12 @@ export function TakeoffViewerPage() {
   const [calibrationPoints, setCalibrationPoints] = useState<[number, number][]>([])
 
   const { data: drawing, isError: drawingError, error: drawingErr } = useDrawing(drawingId)
+  const { hasRole } = useAuth()
+  // Opening a drawing in the takeoff starts measuring it (estimator+ only).
+  const measure = useMeasureOnOpen(
+    drawing,
+    hasRole(Role.ESTIMATOR, Role.LEAD_ESTIMATOR, Role.PROCUREMENT_HEAD, Role.BD_DIRECTOR, Role.MANAGING_DIRECTOR),
+  )
   const {
     data: sheet,
     isLoading: sheetLoading,
@@ -43,6 +53,37 @@ export function TakeoffViewerPage() {
         <p role="alert" className="mt-4 text-danger">
           {(sheetErr ?? drawingErr)?.message}
         </p>
+      </div>
+    )
+  }
+  const notMeasured = drawing?.measurement === 'indexed' || drawing?.measurement === 'queued' || drawing?.measurement === 'measuring'
+  if (drawing && (drawing.measurement === 'failed' || (notMeasured && !sheet && !sheetLoading))) {
+    return (
+      <div className="px-6 py-6 xl:px-10">
+        <Link
+          to={`/projects/${projectId}/drawings/${drawingId}`}
+          className="rounded text-sm text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        >
+          ← Sheets
+        </Link>
+        <p className="mt-4 flex flex-wrap items-center gap-2 text-sm text-muted">
+          <MeasurementBadge state={drawing.measurement} errorMessage={drawing.error_message} />
+        </p>
+        {drawing.measurement !== 'failed' && (
+          <p role="status" className="mt-2 text-ink">
+            Measuring this drawing now...
+          </p>
+        )}
+        {drawing.measurement === 'failed' && (
+          <button
+            type="button"
+            onClick={() => measure.mutate()}
+            disabled={measure.isPending}
+            className="mt-2 rounded text-sm text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-50"
+          >
+            Retry measuring
+          </button>
+        )}
       </div>
     )
   }
@@ -92,6 +133,14 @@ export function TakeoffViewerPage() {
           <p className="mt-1 text-xs text-muted">
             {sheet.drawing_number ?? '--'} · Rev {sheet.revision ?? '--'}
           </p>
+          <p className="mt-2 text-xs">
+            <MeasurementBadge state={drawing.measurement} errorMessage={drawing.error_message} />
+          </p>
+          {notMeasured && (
+            <p role="status" className="mt-1 text-xs text-ink">
+              Measuring this drawing now...
+            </p>
+          )}
           {sheet.scale_disagreement && (
             <p className="mt-1 text-xs text-amber-800">⚠ Scale sources disagree -- verify calibration.</p>
           )}

@@ -64,6 +64,33 @@ export type DrawingStatus =
   | 'failed'
   | 'partial'
 
+export type MeasurementState = 'indexed' | 'queued' | 'measuring' | 'measured' | 'failed'
+
+export interface MeasureRequest {
+  disciplines?: string[]
+  drawing_types?: string[]
+  drawing_ids?: string[]
+}
+
+export interface MeasureOut {
+  matched: number
+  queued: number
+  measuring: number
+  measured: number
+  skipped: number
+}
+
+export type MeasurementCounts = Record<MeasurementState, number>
+
+export interface MeasurementSummary {
+  total: MeasurementCounts
+  by_discipline: Record<string, MeasurementCounts>
+}
+
+export interface DrawingMeasureStateOut {
+  state: 'queued' | 'measuring' | 'measured' | 'skipped'
+}
+
 export interface DrawingOut {
   id: string
   project_id: string
@@ -74,6 +101,8 @@ export interface DrawingOut {
   sha256: string
   sheet_count: number | null
   status: DrawingStatus
+  // Computed from status: drawings are measured on demand (error_message is the reason for `failed`).
+  measurement: MeasurementState
   error_message: string | null
   created_at: string
   // DWG conversion: kind === 'dwg' is the original upload; the DXF derived

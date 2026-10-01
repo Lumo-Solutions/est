@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '../../auth/AuthContext'
 import { Card } from '../../components/Card'
 import { SkeletonRows } from '../../components/Skeleton'
+import { MeasureAll } from '../drawings/MeasureAll'
 import { AddendaRegister } from './AddendaRegister'
 import { AiStatusNotice } from './AiStatusNotice'
 import { Disclosure } from './Disclosure'
@@ -68,6 +69,7 @@ export function ProjectDocuments({ projectId }: { projectId: string }) {
         <>
           <NeedsCheckList projectId={projectId} summary={summary} canConfirm={canConfirm} />
           <NextSteps projectId={projectId} summary={summary} />
+          <MeasureAll projectId={projectId} />
           {canUpload && (
             <Disclosure title="Add more files" hint="Drop another folder, files or a zip." defaultOpen={openAddMore ?? false}>
               <UploadPanel projectId={projectId} onUploaded={noop} />

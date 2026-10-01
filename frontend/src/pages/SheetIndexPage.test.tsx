@@ -52,13 +52,17 @@ interface Calls {
   posts: { url: string; body: unknown }[]
 }
 
-function mockFetch(sheets: DrawingSheetOut[], aiAvailable = true): Calls {
+function mockFetch(sheets: DrawingSheetOut[], aiAvailable = true, drawingOver: Record<string, unknown> = {}): Calls {
   const calls: Calls = { sheets: 0, posts: [] }
   const json = (body: unknown, status = 200) =>
     Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && url.endsWith('/measure')) {
+        calls.posts.push({ url, body: null })
+        return json({ state: 'queued' }, 202)
+      }
       if (init?.method === 'POST') {
         calls.posts.push({ url, body: JSON.parse(String(init.body)) })
         return json({ queued_sheets: 3 }, 202)
@@ -68,7 +72,7 @@ function mockFetch(sheets: DrawingSheetOut[], aiAvailable = true): Calls {
         return json(sheets)
       }
       if (url.endsWith('/drawings/d1')) {
-        return json({ id: 'd1', original_filename: 'plans.pdf', status: 'ready', kind: 'pdf' })
+        return json({ id: 'd1', original_filename: 'plans.pdf', status: 'ready', kind: 'pdf', ...drawingOver })
       }
       if (url.includes('/drawing-annotations?')) return json(ANNOTATIONS)
       if (url.endsWith('/ai/status')) {
@@ -221,5 +225,48 @@ describe('SheetIndexPage annotations', () => {
     expect(screen.getAllByText('AI-read')).toHaveLength(2)
     fireEvent.click(toggle)
     expect(screen.queryByText('Slab 200mm')).toBeNull()
+  })
+})
+
+describe('SheetIndexPage measure on open', () => {
+  const measurePosts = (c: Calls) => c.posts.filter((p) => p.url.endsWith('/measure'))
+
+  it('calls /measure exactly once for an estimator opening an indexed drawing', async () => {
+    const calls = mockFetch([], true, { measurement: 'indexed', status: 'indexed' })
+    renderPage()
+    expect(await screen.findByText('Measuring this drawing now...')).toBeInTheDocument()
+    await waitFor(() => expect(measurePosts(calls)).toHaveLength(1))
+    expect(measurePosts(calls)[0].url).toBe('/api/v1/drawings/d1/measure')
+    expect(screen.getByText('Not measured yet')).toBeInTheDocument()
+    expect(screen.queryByText(/No sheets indexed yet/)).toBeNull()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(measurePosts(calls)).toHaveLength(1)
+  })
+
+  it('never calls /measure for a read-only role', async () => {
+    allowed = false
+    const calls = mockFetch([], true, { measurement: 'indexed', status: 'indexed' })
+    renderPage()
+    expect(await screen.findByText(/has not been measured yet/)).toBeInTheDocument()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(measurePosts(calls)).toHaveLength(0)
+  })
+
+  it('never calls /measure for an already measured drawing', async () => {
+    const calls = mockFetch([sheet(0)], true, { measurement: 'measured' })
+    renderPage()
+    await screen.findByText('1 of 1 sheets extracted')
+    expect(screen.getByText('Measured')).toBeInTheDocument()
+    expect(measurePosts(calls)).toHaveLength(0)
+  })
+
+  it('shows the failure reason and calls /measure only on an explicit Retry click', async () => {
+    const calls = mockFetch([], true, { measurement: 'failed', status: 'failed', error_message: 'Out of memory' })
+    renderPage()
+    expect(await screen.findByText('Measuring failed')).toBeInTheDocument()
+    expect(screen.getAllByText('Out of memory').length).toBeGreaterThan(0)
+    expect(measurePosts(calls)).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry measuring' }))
+    await waitFor(() => expect(measurePosts(calls)).toHaveLength(1))
   })
 })

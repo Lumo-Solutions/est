@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type {
@@ -6,11 +7,15 @@ import type {
   DrawingEntityOut,
   DrawingMeasurementOut,
   DrawingOut,
+  DrawingMeasureStateOut,
   DrawingSheetOut,
   ManualScaleCalibrationIn,
+  MeasureOut,
+  MeasureRequest,
   MeasurementOverrideIn,
   MeasurementOverrideOut,
   ReadAnnotationsIn,
+  MeasurementSummary,
   ReadAnnotationsOut,
   SheetScaleCalibrationOut,
 } from '../../types/api'
@@ -86,6 +91,7 @@ export function useDrawing(drawingId: string | undefined) {
     // "ready"/"failed" without a manual refresh.
     refetchInterval: (query) => {
       const status = query.state.data?.status
+      if (query.state.data?.measurement === 'queued' || query.state.data?.measurement === 'measuring') return 3000
       return status && ['queued', 'converting', 'indexing', 'extracting', 'embedding'].includes(status) ? 3000 : false
     },
   })
@@ -230,4 +236,67 @@ export function useRevertMeasurementOverride(drawingId: string | undefined, shee
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['drawings', drawingId, 'measurements', sheetId] }),
   })
+}
+
+// Opening a drawing starts its measuring (idempotent; also bumps it to the front of a bulk queue). Estimator+.
+export function useMeasureDrawing(drawingId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<DrawingMeasureStateOut>(`/drawings/${drawingId}/measure`),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['drawings', drawingId] }),
+  })
+}
+
+// Bulk "Measure all": by discipline, drawing type or explicit ids. Lead estimator+.
+export function useMeasureDrawings(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: MeasureRequest) => api.post<MeasureOut>(`/projects/${projectId}/drawings/measure`, body),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'drawings'] })
+    },
+  })
+}
+
+export const MEASUREMENT_POLL_MS = 5000
+
+export function measurementBusy(summary: MeasurementSummary | undefined): boolean {
+  return Boolean(summary && (summary.total.queued > 0 || summary.total.measuring > 0))
+}
+
+export function useMeasurementSummary(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'drawings', 'measurement-summary'],
+    queryFn: ({ signal }) =>
+      api.get<MeasurementSummary>(`/projects/${projectId}/drawings/measurement-summary`, signal),
+    enabled: Boolean(projectId),
+    refetchInterval: (query) => (measurementBusy(query.state.data) ? MEASUREMENT_POLL_MS : false),
+  })
+}
+
+// Opening a drawing starts measuring it: POST /measure once when it is `indexed` (only when `canMeasure`, i.e.
+// estimator+; read-only roles never call it). `failed` is retried only by an explicit click (`measure.mutate()`).
+// When the drawing turns `measured` while the page is open, the sheet and measurement lists are refetched.
+export function useMeasureOnOpen(drawing: DrawingOut | undefined, canMeasure: boolean) {
+  const measure = useMeasureDrawing(drawing?.id)
+  const queryClient = useQueryClient()
+  const requested = useRef<string | null>(null)
+  const sawBusy = useRef(false)
+  const state = drawing?.measurement
+  const id = drawing?.id
+  const { mutate } = measure
+  useEffect(() => {
+    if (state === 'indexed' && canMeasure && id && requested.current !== id) {
+      requested.current = id
+      mutate()
+    }
+  }, [state, canMeasure, id, mutate])
+  useEffect(() => {
+    if (state === 'indexed' || state === 'queued' || state === 'measuring') sawBusy.current = true
+    else if (state === 'measured' && sawBusy.current) {
+      sawBusy.current = false
+      queryClient.invalidateQueries({ queryKey: ['drawings', id] })
+    }
+  }, [state, id, queryClient])
+  return measure
 }
