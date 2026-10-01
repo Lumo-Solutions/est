@@ -203,14 +203,9 @@ async def refresh_package_status(session: AsyncSession, package_id: UUID) -> str
             )
         ).all()
     }
-    top_level = (
-        await session.execute(
-            select(func.count()).select_from(ProjectDocument).where(
-                ProjectDocument.package_id == package_id, ProjectDocument.parent_document_id.is_(None)
-            )
-        )
-    ).scalar_one()
-    if counts.get(DocStatus.PENDING_UPLOAD.value, 0) > 0 or (package.expected_count and top_level < package.expected_count):
+    # `expected_count` is informational (files the drop announced; some are refused at registration and never become
+    # rows): only files registered and still waiting for bytes keep a pack in "uploading".
+    if counts.get(DocStatus.PENDING_UPLOAD.value, 0) > 0:
         new = PackageStatus.UPLOADING.value
     elif counts.get(DocStatus.RECEIVED.value, 0) + counts.get(DocStatus.PROCESSING.value, 0) > 0:
         new = PackageStatus.PROCESSING.value

@@ -152,6 +152,32 @@ async def test_identical_bytes_are_sent_once_and_arrive_together(ctxs, s3):
     assert len([k for k in s3["puts"]]) == 1
 
 
+async def test_a_later_copy_waits_for_the_root_not_for_another_copy_and_arrives_with_it(ctxs, s3):
+    """Found by the 2,000-file proof run: a copy registered in a later batch attached itself to an earlier *copy* (rows
+    created in one transaction share a created_at, so the order between a root and its copy is arbitrary), and when the
+    root arrived only its direct copies were released: the later one stayed pending for ever."""
+    c = ctxs
+    first = await up.register_files(c["s"], c["est"], c["project"], reg(("Z/root.pdf", PDF + b"r"), ("Y/copy.pdf", PDF + b"r")))
+    root_id, copy_id = first.files[0].document_id, first.files[1].document_id
+    await c["s"].execute(text("UPDATE project_documents SET created_at = created_at - interval '5 seconds' WHERE id = :i"), {"i": copy_id})
+    second = await up.register_files(c["s"], c["est"], c["project"], reg(("X/third.pdf", PDF + b"r")))
+    third = (await c["s"].execute(select(ProjectDocument).where(ProjectDocument.id == second.files[0].document_id))).scalar_one()
+    assert third.duplicate_of_id == root_id and not second.files[0].upload  # the root, never the other copy
+    await send(c, root_id, first.package_id, PDF + b"r")
+    await c["s"].refresh(third)
+    assert third.status == "received"
+
+
+async def test_a_chain_of_copies_written_before_that_fix_is_released_with_its_root(ctxs, s3):
+    c = ctxs
+    out = await up.register_files(c["s"], c["est"], c["project"], reg(("a/root.pdf", PDF + b"q"), ("b/one.pdf", PDF + b"q"), ("c/two.pdf", PDF + b"q")))
+    root_id, one_id, two_id = (f.document_id for f in out.files)
+    await c["s"].execute(text("UPDATE project_documents SET duplicate_of_id = :one WHERE id = :two"), {"one": one_id, "two": two_id})  # two waits for one
+    await send(c, root_id, out.package_id, PDF + b"q")
+    rows = {r.id: r.status for r in (await c["s"].execute(select(ProjectDocument))).scalars()}
+    assert set(rows.values()) == {"received"}
+
+
 async def test_bytes_already_in_the_project_need_no_upload(ctxs, s3):
     c = ctxs
     first = await up.register_files(c["s"], c["est"], c["project"], reg(("a.pdf", PDF + b"a")))
@@ -192,11 +218,12 @@ async def test_a_pack_over_the_cap_is_refused_with_a_clear_message(ctxs, s3, mon
         await up.register_files(c["s"], c["est"], c["project"], reg(("d.pdf", PDF + b"4")))
 
 
-async def test_a_pack_whose_expected_files_have_not_all_been_announced_stays_uploading(ctxs, s3):
+async def test_files_refused_at_registration_do_not_keep_a_pack_uploading_for_ever(ctxs, s3):
+    """Found by the proof run: 18 junk files were refused at registration, so registered < announced for ever."""
     c = ctxs
-    out = await up.register_files(c["s"], c["est"], c["project"], reg(("a.pdf", PDF + b"a"), total_files=3))
+    out = await up.register_files(c["s"], c["est"], c["project"], reg(("a.pdf", PDF + b"a"), ("junk/.DS_Store", b"x"), total_files=2))
     r = await send(c, out.files[0].document_id, out.package_id, PDF + b"a")
-    assert r.package_status == "uploading" and (r.uploaded, r.expected_count) == (1, 3)  # 2 more files are still to come
+    assert r.package_status == "processing" and (r.uploaded, r.expected_count) == (1, 2)
 
 
 # ------------------------------------------------------------------ pause / resume / cancel

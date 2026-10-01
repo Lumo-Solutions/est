@@ -26,7 +26,7 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
-SERVICES="backend celery-worker celery-worker-vlm celery-worker-email celery-worker-quotation celery-worker-convert celery-beat"
+SERVICES="backend celery-worker celery-worker-index celery-worker-vlm celery-worker-email celery-worker-quotation celery-worker-convert celery-beat"
 
 rendered=$(docker compose -f "$DEPLOY_DIR/docker-compose.yml" -f "$DEPLOY_DIR/docker-compose.prod.yml" --env-file "$ENV_FILE" config)
 

@@ -403,7 +403,7 @@ services:
     # Concurrency, recycling and limits are configuration, not code: one child reads one file at a time, so memory is
     # about INGEST_CONCURRENCY x one file. A child is replaced after N tasks or when it holds too much memory.
     command: celery -A app.workers.celery_app worker -Q ingest,embed -c ${INGEST_CONCURRENCY:-2} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
-    mem_limit: ${INGEST_MEM_LIMIT:-2g}
+    mem_limit: ${INGEST_MEM_LIMIT:-1536m}
     cpus: ${INGEST_CPUS:-2}
     # --- addition: the `embed` queue runs OnnxEmbedder (embeddings.py),
     # which needs the same /models volume as backend -- see the comment on
@@ -422,6 +422,31 @@ services:
     # which workers never satisfy since they run no webserver -- ping this
     # worker's own node by hostname so inspect doesn't hang waiting for
     # every node in the cluster to answer.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
+  # The drawing pipeline's page index and geometry (`index` queue): the heaviest PDF work in the system, kept off the
+  # `ingest` worker so one monster drawing can only ever starve (or be OOM-killed with) this container, never intake.
+  celery-worker-index:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: installtec_celery_worker_index
+    command: celery -A app.workers.celery_app worker -Q index -c ${INDEX_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
+    mem_limit: ${INDEX_MEM_LIMIT:-2g}
+    cpus: ${INDEX_CPUS:-1.5}
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
       interval: 30s

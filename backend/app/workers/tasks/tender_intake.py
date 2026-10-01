@@ -38,8 +38,14 @@ from app.workers.base import run_async, with_worker_session
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-_SETTINGS = get_settings()
 _NIL_TENANT = "00000000-0000-0000-0000-000000000000"
+
+
+def _limit(name: str, default: int) -> int:
+    try:
+        return getattr(get_settings(), name)
+    except Exception:  # noqa: BLE001 -- decorating a task must not need a full environment
+        return default
 
 
 # ------------------------------------------------------------------------------------ dispatching
@@ -202,8 +208,8 @@ async def process_one(tenant_id: UUID, document_id: UUID) -> None:
 @celery_app.task(
     bind=True,
     name="app.workers.tasks.tender_intake.process_intake_file",
-    soft_time_limit=_SETTINGS.intake_task_soft_limit_s,
-    time_limit=_SETTINGS.intake_task_hard_limit_s,
+    soft_time_limit=_limit("intake_task_soft_limit_s", 240),
+    time_limit=_limit("intake_task_hard_limit_s", 300),
     acks_late=True,
 )
 def process_intake_file(self, document_id: str, tenant_id: str) -> None:

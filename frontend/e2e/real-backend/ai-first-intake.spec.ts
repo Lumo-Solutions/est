@@ -36,7 +36,7 @@ interface TreeItem {
 }
 interface Tree {
   items: TreeItem[]
-  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: string[]; auto_accept_min: number }
+  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: { id: string; name: string }[]; auto_accept_min: number }
 }
 
 function writeDemoPack(): string {
@@ -57,10 +57,23 @@ async function login(browser: Browser, user: string, pass: string): Promise<Page
   return page
 }
 
+async function getItems(page: Page, projectId: string): Promise<TreeItem[]> {
+  const out: TreeItem[] = []
+  for (let offset = 0; ; offset += 500) {
+    const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/items?limit=500&offset=${offset}`)
+    expect(res.ok(), await res.text()).toBeTruthy()
+    const body = (await res.json()) as { items: TreeItem[]; total: number }
+    out.push(...body.items)
+    if (out.length >= body.total) return out
+  }
+}
+
+// The tree endpoint returns counts only (summary, groups, folders, packs); the files are paged from /items.
 async function getTree(page: Page, projectId: string): Promise<Tree> {
   const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/tree`)
   expect(res.ok(), await res.text()).toBeTruthy()
-  return (await res.json()) as Tree
+  const counts = (await res.json()) as Omit<Tree, 'items'>
+  return { ...counts, items: await getItems(page, projectId) }
 }
 
 async function waitForTree(page: Page, projectId: string, done: (t: Tree) => boolean, message: string, timeout = 240_000): Promise<Tree> {
@@ -191,7 +204,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
 
     // ---- 7. the Excel BOQ is ready to import: the wizard opens pre-filled; the dry run is still the user's to run
     const boq = byName(ready, 'BOQ Rev 0.xlsx')
-    expect(ready.summary.boq_documents).toContain(boq.id)
+    expect(ready.summary.boq_documents.map((d) => d.id)).toContain(boq.id)
     await lead.getByLabel('BOQ document').selectOption({ label: 'BOQ Rev 0.xlsx' })
     await lead.getByRole('link', { name: 'Import BOQ' }).click()
     await expect(lead).toHaveURL(new RegExp(`/projects/${state.projectId}/boq/import\\?document=${boq.id}`))

@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from celery import chord, group
-from celery.exceptions import Retry
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -353,16 +353,30 @@ async def _index_sheets_body(session: AsyncSession, drawing_id: str, task_id: st
         await _finish_job(session, job, ok=True, error=None, started_at=t0)
         return sheet_ids
     except Exception as exc:  # noqa: BLE001 -- persisted below, then re-raised for Celery retry bookkeeping
+        message = str(exc)
+        if isinstance(exc, SoftTimeLimitExceeded):
+            message = (
+                f"Reading this file took longer than {get_settings().drawing_index_soft_limit_s} seconds (too many pages or "
+                "drawing objects). Split it into smaller PDFs and upload those."
+            )
         drawing.status = DrawingStatus.FAILED.value
-        drawing.error_message = str(exc)
+        drawing.error_message = message
         await session.flush()
-        await _finish_job(session, job, ok=False, error=str(exc), started_at=t0)
+        await _finish_job(session, job, ok=False, error=message, started_at=t0)
         raise
+
+
+def _limit(name: str, default: int) -> int:
+    try:
+        return getattr(get_settings(), name)
+    except Exception:  # noqa: BLE001 -- decorating a task must not need a full environment
+        return default
 
 
 @celery_app.task(
     bind=True, name="app.workers.tasks.takeoff.index_sheets",
     autoretry_for=(ConnectionError,), retry_backoff=True, retry_jitter=True, max_retries=5,
+    soft_time_limit=_limit("drawing_index_soft_limit_s", 300), time_limit=_limit("drawing_index_hard_limit_s", 360),
 )
 def index_sheets(self, drawing_id: str, tenant_id: str, actor_user_id: str | None, actor_roles: list[str] | None = None) -> None:
     # actor_roles matters: build_worker_context() only sets is_system=True

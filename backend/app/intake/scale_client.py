@@ -104,8 +104,9 @@ def main() -> int:
             print("register failed", r.status_code, r.text[:300], flush=True)
             return 2
         body = r.json()
+        if package_id is None:
+            resumed = body["resumed"]  # only the first batch says whether an unfinished upload was found
         package_id = body["package_id"]
-        resumed = resumed or body["resumed"]
         by_path: dict[str, list[int]] = {}
         for i in range(start, min(start + 500, total)):
             by_path.setdefault(rel[i], []).append(i)

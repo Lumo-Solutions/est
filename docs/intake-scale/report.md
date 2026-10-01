@@ -96,4 +96,72 @@ can restart it. The fix therefore has four parts: a bounded, resumable upload; p
 by in-flight broker messages) under hard limits; container containment; and recovery + control (pause / resume / cancel,
 sweeper).
 
-(Sections 1-6 are filled in as the work is done.)
+## 1. Upload, now resumable
+
+Register (path, size, sha256) in batches of 500, then one raw streaming PUT per file, 4 at a time, retried; the server streams to S3
+(multipart above 8 MiB, never more than one part in memory, digest checked before the object becomes visible) and drops a stalled
+upload after 60 s. Re-dropping the folder resumes from the server's state. Browser side: SHA-256 streamed in 4 MB slices, no file list
+rendered beyond 10 rows, progress `X / N`. Proven at scale with a CLI client speaking the same protocol (`app/intake/scale_client.py`):
+upload killed abruptly after 700 files, re-run: `resumed=True already_on_server=721 to_send=1181 rejected=18`, no duplicate rows.
+
+## 2. Processing under hard limits
+
+One Celery task per file, enqueued from the database (`dispatch_intake`, at most `INTAKE_DISPATCH_LIMIT`=40 in flight, paused packs skipped),
+swept every 30 s. prefetch 1, concurrency from config (2 on dev), `--max-tasks-per-child`, `--max-memory-per-child`; drawing page index on its
+own queue/worker (`index`, concurrency 1). Files over 40 MiB, with too many pages or slower than 240 s land in "Needs your check: too large".
+CAD-export PDF pages (>20,000 objects) are read with PDFium (real 8 MB A0 sheet: pdfplumber 163 s / 3 GB, now 2.4 s / 0.4 GB); page renders are
+capped (A1-and-below render byte-identical to before, so cached AI answers still hit). AI: gateway rate limit honoured by waiting for the next window
+(6 tries) instead of dropping to rules; 429/5xx back off inside the gateway; the failure breaker is shared through Redis.
+**Deviation:** "batch text-only files into one AI call" was not done. It changes the prompt/input hash (re-bills every cached answer) and puts several
+documents in one prompt, which lets one document's text influence another's class (the injection defence this project built). Calls are instead
+bounded, rate-limited, cached, and duplicates copy their original's class.
+
+## 3. Containment
+
+`mem_limit`/`cpus` on backend and every worker, concurrency and recycling from env: see `docs/deploy-deltas.md`. Not limited (and measured large):
+Postgres (peak 2.4 GB) and SeaweedFS (peak 1.9 GB): size the Docker VM at 10 GB or add limits for them.
+
+## 4. Recovery
+
+`pause` / `resume` / `cancel` (lead_estimator+, audited, UI buttons); `reap_stuck_documents` (processing > 360 s goes back to received, 3 attempts then
+failed with a reason) runs in `intake_tick` and in the hourly stale-job reaper. Pack and document state live in the DB, so a lost broker message only
+delays a file. Redis visibility timeout 30 min.
+
+## 5. UI at scale
+
+`/tree` returns counts only; `/items` pages with server-side filters; the tree, Needs-your-check and flat search are virtualised; "Confirm all" confirms every
+match server-side in chunks of 100 with a cursor. Unit-tested with a 2,000-row group rendering < 40 DOM rows.
+
+## 6. Proof runs (what was actually run)
+
+Synthetic pack: 2,001 files / 3.38 GB (`scale_pack`: 560 vector PDFs A4-A0, 40 long drawing sets of 30-60 pages, 40 scans, 12 PDFs of 52-98 MB, 300 DXF,
+BOQ xlsx/csv/pdf, specs, docx, addenda, 100 duplicates, junk, 8 zips), mock provider, project `SCALE-SIM-2`.
+
+* Upload: tab-close simulation at 700 files then resume (above); 2.46 GB sent in 331 s on resume.
+* Kill mid-run: both pool children SIGKILLed while reading (848 routed, 1,111 waiting): the worker survived, reading continued, **2 files were re-read
+  (attempts=2), none lost or duplicated**. A whole-container kill / restart was also exercised in an earlier run of the same pack (424 routed, container
+  killed and started: 424 -> 461 and onward, no loss).
+* End state of intake: 2,051 documents terminal (1,986 routed, 54 needs-your-check, 3 rejected, 8 zip parents), 2,043 distinct paths for 2,043 rows.
+  Classes: drawing 1,015, specification 246, boq 186, clarification 88, contract 87, tender forms 87, correspondence 86, tender instructions 86,
+  site investigation 85, addendum 60.
+* Peak memory per container (docker stats, 3 s samples): ingest worker 1,417 MiB of 1.5 GiB, index worker 1,677 MiB of 2 GiB, backend 474 MiB of 1 GiB,
+  vlm 357 MiB, email 230, quotation 220, convert 212, beat 143; unlimited: Postgres 2,442, SeaweedFS 1,933, Keycloak 498. Nothing was OOM-killed.
+* Time: intake reading ran at about 40-60 files/min with 2 children (about 40 min for 2,051 files once uploaded). **The drawing pipeline did not finish**:
+  with one index child, 114 of 898 drawings were `ready` (183 extracting, 601 queued) when the run was stopped, because the host ran out of memory
+  (Claude Code reaped two background pollers). Total wall clock is therefore not a meaningful number (the sampler recorded 3.5 h including idle time).
+
+Bugs the runs found and fixed (all with tests): CAD PDFs in pdfplumber (above); a stalled upload held a DB transaction and blocked backend reload (idle timeout);
+copies registered in a later batch attached to another copy instead of the root and stayed pending (recursive release); rejected junk kept a pack
+"uploading" for ever; the dispatcher's uuid parameter; an addendum routed before its drawing; index tasks starving intake (own queue).
+
+## Not done / open (stated plainly)
+
+* **Your crashed packs were NOT resumed with the real provider, and nothing was merged.** There are two: project `103` pack `661d42e3` (560 files, the 07:04
+  crash) and project `102` pack `948b4c0f` (1,588 files, 2.7 GB, uploaded yesterday and stuck in processing). Both are **paused** (so nothing touches them) and
+  every worker is stopped. The 1,588-file pack is fully uploaded and only needs reading; the 560-file one also needs the rest of the folder re-dropped.
+  Resume = start the stack with your normal AI provider, press Resume on each pack. The real run will spend provider money (the 9 earlier calls cost $0.70, vision calls ~$0.08 each).
+* Incident I caused and reversed: when I first started the workers they were on the mock provider and read 132 files of pack `948b4c0f` (44 classified by mock,
+  38 parked as too large, 10 rejected). I reset the 44 mock-classified files to `received` (their classification rows deleted; the audit trail keeps the entries).
+* e2e (mocked and real-backend) were not re-run after the UI changes: `intake-scale.spec.ts` is written, `tender-intake.spec.ts` / `ai-first-intake.spec.ts` were only
+  adapted for the new `/tree` shape and will need UI-assertion updates.
+* Unit (705), integration (313 + new) and API (107) suites passed separately before the last fixes; the last fixes were re-run on the intake files only.

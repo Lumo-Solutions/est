@@ -209,6 +209,9 @@ class Settings(BaseSettings):
     intake_register_batch: int = Field(default=500, alias="INTAKE_REGISTER_BATCH")
     # The streaming upload buffers at most one part of this size per request (S3 multipart).
     intake_upload_part_bytes: int = Field(default=8 * 1024 * 1024, alias="INTAKE_UPLOAD_PART_BYTES")
+    # A streamed upload that sends nothing for this long is abandoned (a closed tab or a dropped network leaves a
+    # half-open connection that would otherwise hold a database connection and a transaction forever).
+    intake_upload_idle_s: int = Field(default=60, alias="INTAKE_UPLOAD_IDLE_S")
     intake_max_pdf_pages: int = Field(default=800, alias="INTAKE_MAX_PDF_PAGES")
     intake_zip_max_entries: int = Field(default=1_000, alias="INTAKE_ZIP_MAX_ENTRIES")
     intake_zip_max_total_bytes: int = Field(default=250 * 1024 * 1024, alias="INTAKE_ZIP_MAX_TOTAL_BYTES")
@@ -239,6 +242,10 @@ class Settings(BaseSettings):
     # A file in `processing` this long without a heartbeat is treated as abandoned by a dead worker.
     intake_stuck_after_s: int = Field(default=360, alias="INTAKE_STUCK_AFTER_S")
     intake_max_attempts: int = Field(default=3, alias="INTAKE_MAX_ATTEMPTS")
+    # The drawing pipeline's page index (one task per drawing): a PDF that takes longer than this is marked failed with a
+    # reason ("split it"), and the child is killed at the hard limit, instead of starving the worker.
+    drawing_index_soft_limit_s: int = Field(default=300, alias="DRAWING_INDEX_SOFT_LIMIT_S")
+    drawing_index_hard_limit_s: int = Field(default=360, alias="DRAWING_INDEX_HARD_LIMIT_S")
     # PDF page images made for the drawing pipeline (VLM) are capped at this longest side, in pixels.
     pdf_render_max_px: int = Field(default=5000, alias="PDF_RENDER_MAX_PX")
 

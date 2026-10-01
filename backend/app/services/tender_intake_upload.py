@@ -19,6 +19,7 @@ the broker:
 from __future__ import annotations
 
 import logging
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
@@ -128,19 +129,27 @@ async def register_files(session: AsyncSession, ctx: RequestContext, project_id:
     shas = sorted({f.sha256.lower() for f in data.files})
     in_pack: dict[tuple[str, str, str | None], ProjectDocument] = {}
     earliest: dict[str, ProjectDocument] = {}
-    for doc in (
-        await session.execute(
-            select(ProjectDocument)
-            .where(ProjectDocument.project_id == project_id, ProjectDocument.sha256.in_(shas))
-            .order_by(ProjectDocument.created_at, ProjectDocument.id)
-        )
-    ).scalars().all():
+    known = list(
+        (
+            await session.execute(
+                select(ProjectDocument)
+                .where(ProjectDocument.project_id == project_id, ProjectDocument.sha256.in_(shas))
+                .order_by(ProjectDocument.created_at, ProjectDocument.id)
+            )
+        ).scalars().all()
+    )
+    by_id = {d.id: d for d in known}
+    for doc in known:
         if doc.package_id == package.id:
             in_pack[(doc.sha256, doc.original_filename, doc.archive_path)] = doc
+        # Always the root of a chain of copies: the file whose bytes the others wait for (or copy from).
+        root = doc
+        while root.duplicate_of_id is not None and root.duplicate_of_id in by_id and root.duplicate_of_id != root.id:
+            root = by_id[root.duplicate_of_id]
         current = earliest.get(doc.sha256)
         # A row whose bytes are on the server beats one that is still pending.
-        if current is None or (current.status == DocStatus.PENDING_UPLOAD.value and doc.status != DocStatus.PENDING_UPLOAD.value):
-            earliest[doc.sha256] = doc
+        if current is None or (current.status == DocStatus.PENDING_UPLOAD.value and root.status != DocStatus.PENDING_UPLOAD.value):
+            earliest[doc.sha256] = root
 
     existing_rows = (
         await session.execute(select(func.count()).select_from(ProjectDocument).where(ProjectDocument.package_id == package.id, ProjectDocument.parent_document_id.is_(None)))
@@ -207,6 +216,19 @@ async def register_files(session: AsyncSession, ctx: RequestContext, project_id:
 
 
 # ----------------------------------------------------------------------------------------- upload
+async def _without_stalls(body: AsyncIterator[bytes], idle_s: float) -> AsyncIterator[bytes]:
+    """Yields the body's chunks, but gives up when the sender goes quiet for `idle_s` seconds."""
+    iterator = body.__aiter__()
+    while True:
+        try:
+            chunk = await asyncio.wait_for(iterator.__anext__(), idle_s)
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError as exc:
+            raise UploadAborted(f"the upload stalled (nothing received for {int(idle_s)} seconds); send it again") from exc
+        yield chunk
+
+
 async def _counts(session: AsyncSession, package_id: UUID) -> tuple[int, int]:
     registered, pending = (
         await session.execute(
@@ -248,7 +270,7 @@ async def receive_upload(
 
     try:
         stored = await put_object_from_stream(
-            doc.object_key, body, bucket=doc.bucket, expected_sha256=doc.sha256, max_bytes=limit,
+            doc.object_key, _without_stalls(body, settings.intake_upload_idle_s), bucket=doc.bucket, expected_sha256=doc.sha256, max_bytes=limit,
             part_bytes=settings.intake_upload_part_bytes,
         )
     except UploadAborted as exc:
@@ -257,15 +279,8 @@ async def receive_upload(
     now = datetime.now(timezone.utc)
     doc.status, doc.uploaded_at, doc.size_bytes = DocStatus.RECEIVED.value, now, stored.size
     await session.flush()
-    # Files with the same bytes (waiting on this one) arrive with it.
-    await session.execute(
-        update(ProjectDocument)
-        .where(
-            ProjectDocument.duplicate_of_id == doc.id,
-            ProjectDocument.status == DocStatus.PENDING_UPLOAD.value,
-        )
-        .values(status=DocStatus.RECEIVED.value, uploaded_at=now, updated_at=now)
-    )
+    # Files with the same bytes (waiting on this one, directly or through another copy) arrive with it.
+    await session.execute(_ARRIVE_WITH_SQL, {"root": doc.id, "now": now})
     new_status = await refresh_package_status(session, package_id)
     registered, uploaded = await _counts(session, package_id)
     if registered == uploaded and new_status != PackageStatus.UPLOADING.value:
@@ -277,6 +292,19 @@ async def receive_upload(
         document_id=doc.id, state="uploaded", package_status=new_status, registered=registered, uploaded=uploaded,
         expected_count=package.expected_count,
     )
+
+
+_ARRIVE_WITH_SQL = text(
+    """
+    WITH RECURSIVE waiting AS (
+        SELECT id FROM project_documents WHERE duplicate_of_id = :root AND status = 'pending_upload'
+        UNION
+        SELECT d.id FROM project_documents d JOIN waiting w ON d.duplicate_of_id = w.id WHERE d.status = 'pending_upload'
+    )
+    UPDATE project_documents SET status = 'received', uploaded_at = :now, updated_at = :now
+    WHERE id IN (SELECT id FROM waiting)
+    """
+)
 
 
 # --------------------------------------------------------------------------------------- controls

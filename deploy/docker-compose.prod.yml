@@ -32,6 +32,9 @@ services:
   celery-worker:
     environment: *prod-app-env
 
+  celery-worker-index:
+    environment: *prod-app-env
+
   celery-worker-vlm:
     environment: *prod-app-env
 

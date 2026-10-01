@@ -424,3 +424,26 @@ def test_the_drawing_pipeline_reads_a_cad_page_with_pdfium_and_skips_geometry_th
     assert pdfplumber_pages == []  # pdfplumber never built the page's 8,000 objects
     monkeypatch.setattr(pdf_mod, "MAX_GEOMETRY_PAGE_OBJECTS", 3_000)
     assert pdf_mod.index_pdf_geometry(data) == {"page-1": []}  # too complex to analyse here: left to the vision path
+
+
+async def test_a_sender_that_goes_quiet_does_not_hold_the_request_open_forever():
+    import asyncio
+
+    from app.services import tender_intake_upload as up
+
+    async def stalls():
+        yield b"first"
+        await asyncio.sleep(30)
+        yield b"never"
+
+    seen = []
+    with pytest.raises(s3mod.UploadAborted, match="stalled"):
+        async for chunk in up._without_stalls(stalls(), 0.05):
+            seen.append(chunk)
+    assert seen == [b"first"]
+
+    async def fine():
+        yield b"a"
+        yield b"b"
+
+    assert [c async for c in up._without_stalls(fine(), 1)] == [b"a", b"b"]

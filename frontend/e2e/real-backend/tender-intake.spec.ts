@@ -30,7 +30,7 @@ interface TreeItem {
 }
 interface Tree {
   items: TreeItem[]
-  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: string[]; by_class: Record<string, number> }
+  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: { id: string; name: string }[]; by_class: Record<string, number> }
 }
 interface Doc {
   id: string
@@ -59,10 +59,23 @@ function writePack(salt: string, extra = 0): { dir: string; files: string[] } {
   return { dir, files: readdirSync(dir).sort() }
 }
 
+async function getItems(page: Page, projectId: string): Promise<TreeItem[]> {
+  const out: TreeItem[] = []
+  for (let offset = 0; ; offset += 500) {
+    const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/items?limit=500&offset=${offset}`)
+    expect(res.ok(), await res.text()).toBeTruthy()
+    const body = (await res.json()) as { items: TreeItem[]; total: number }
+    out.push(...body.items)
+    if (out.length >= body.total) return out
+  }
+}
+
+// The tree endpoint returns counts only (summary, groups, folders, packs); the files are paged from /items.
 async function getTree(page: Page, projectId: string): Promise<Tree> {
   const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/tree`)
   expect(res.ok(), await res.text()).toBeTruthy()
-  return (await res.json()) as Tree
+  const counts = (await res.json()) as Omit<Tree, 'items'>
+  return { ...counts, items: await getItems(page, projectId) }
 }
 
 async function waitForRead(page: Page, projectId: string, expected: number, timeout = 240_000): Promise<Tree> {

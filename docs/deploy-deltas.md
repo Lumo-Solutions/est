@@ -290,3 +290,41 @@ The owner decided, knowingly, to allow an external AI API until a GPU server run
 - Every uploaded file is now sent to the AI provider (filename, folder, file type, the first two pages of text or a workbook's sheet names and first rows; a page image only when the text is not enough). Nothing changes for `local_vllm` / `mock`. With an external provider this is more traffic than before (previously only uncertain files); the budgets, the tenant switch and the project opt-out apply as before, and a spent budget or a switched-off AI makes intake fall back to the rules (files then wait under "Needs your check").
 - New settings with code defaults (like the other `INTAKE_*` keys they are not wired through `docker-compose.yml`; add them to the celery worker's environment if you need to change them): `INTAKE_AI_BATCH_SIZE` [16], `INTAKE_AI_CONCURRENCY` [4], `INTAKE_AI_MAX_CONSECUTIVE_FAILURES` [3]. The auto-accept threshold (default 85%) is a tenant setting, not an env key (AI admin screen, managing_director).
 - Migration `0037` adds `tenant_ai_settings.intake_auto_accept_min`, `project_documents.classified_by` / `auto_accepted`, `drawings.archived_at` / `archived_reason` and `addenda.withdrawn_at` / `withdrawn_reason`.
+
+## Intake at scale (migration 0038, branch `fix/intake-scale`)
+
+A real 1,600-file tender took the Docker VM (and Windows with it) down: no container had a memory limit, so the busiest worker
+starved the whole WSL2 VM. Full analysis and proof runs: `docs/intake-scale/report.md`.
+
+- **Migrate and rebuild:** `make migrate` (0038 adds `tender_packages.expected_count/paused_at/cancelled_at`, `project_documents.uploaded_at/queued_at/attempts` and three
+  indexes), and `make up` so the frontend image (the new upload/tree, `nginx.conf` with `client_max_body_size 300m` and an unbuffered `/api/` proxy) is rebuilt.
+  Docker Desktop's WSL2 VM is what is shared with Windows: on a 16 GB laptop give it 10 GB (`%UserProfile%\.wslconfig`: `[wsl2]` `memory=10GB`, then `wsl --shutdown`);
+  the limits below are caps inside it, so one runaway container is killed and restarted **alone**.
+- **Container limits (dev values, all overridable in `deploy/.env`):**
+
+  | service | `mem_limit` / `cpus` | concurrency (`-c`) | env |
+  |---|---|---|---|
+  | backend | 1g / 2 | uvicorn | `BACKEND_MEM_LIMIT`, `BACKEND_CPUS` |
+  | celery-worker (`ingest,embed`: intake + drawing index) | 2g / 2 | 2 | `INGEST_MEM_LIMIT`, `INGEST_CPUS`, `INGEST_CONCURRENCY` |
+  | celery-worker-vlm | 1g / 1 | 1 | `VLM_MEM_LIMIT`, `VLM_CPUS`, `VLM_CONCURRENCY` |
+  | celery-worker-email | 384m / 0.5 | 1 | `EMAIL_*` |
+  | celery-worker-quotation | 512m / 1 | 1 | `QUOTATION_*` |
+  | celery-worker-convert (DWG hand-off) | 512m / 1 | 1 | `CONVERT_*` |
+  | celery-beat | 256m / 0.5 | - | `BEAT_*` |
+  | dwg-converter (profile `dwg`) | 2g / 1.5 | 1 | (unchanged) |
+
+  Every worker also runs `--max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50}` and `--max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000}`, so a child is
+  replaced after 50 tasks or as soon as it finishes a task holding more than ~700 MB. `worker_prefetch_multiplier=1` and `task_acks_late` were already set.
+  In production set `*_MEM_LIMIT` from the host's real budget (deploy/docker-compose.prod.yml does not override these).
+- **New settings (all have defaults, all passed through `docker-compose.yml`):** `INTAKE_MAX_FILES_PER_PACK` (3000: a bigger drop is refused with a message),
+  `INTAKE_MAX_FILE_SIZE_BYTES` (250 MiB: the upload limit), `INTAKE_MAX_PROCESS_BYTES` (40 MiB: a bigger file is stored but left under "Needs your check: too large"),
+  `INTAKE_DISPATCH_LIMIT` (40 files queued or being read at once), `INTAKE_AI_CONCURRENCY`, `INTAKE_TASK_SOFT_LIMIT_S`/`INTAKE_TASK_HARD_LIMIT_S` (240/300 s per file),
+  `INTAKE_UPLOAD_IDLE_S` (60 s: a stalled upload is dropped), `PDF_RENDER_MAX_PX` (5000), `DRAWING_INDEX_SOFT_LIMIT_S`/`..._HARD_LIMIT_S` (300/360 s for a drawing's page index),
+  `CELERY_MAX_TASKS_PER_CHILD`, `CELERY_MAX_MEMORY_PER_CHILD_KB`. `INTAKE_MAX_REQUEST_BYTES` (100 MiB) and `INTAKE_MAX_FILES_PER_REQUEST` (50) only bound the old
+  multipart endpoints, which still buffer and are kept for scripts and small packs.
+- **celery-beat now also runs `intake_tick` every 30 s** (dispatcher + sweeper for intake files). If beat is down, uploads still dispatch immediately and a finished file pulls in the next one;
+  only recovery of files abandoned by a dead worker waits for beat. The Redis visibility timeout is 30 minutes (was 1 hour), so a message a dead worker had taken comes back sooner.
+- **Reverse proxy:** nginx (`frontend/nginx.conf`) now allows 300 MB bodies and does not buffer request bodies; behind another proxy do the same for
+  `PUT /api/v1/tender-packages/*/documents/*/content` (Caddy streams by default).
+- **PDF reading:** a page with more than 20,000 drawing objects (a CAD export) is read with PDFium instead of pdfplumber (a real 8 MB A0 sheet took pdfplumber 163 s and 3 GB);
+  vector-geometry analysis is skipped above 150,000 objects per page.
