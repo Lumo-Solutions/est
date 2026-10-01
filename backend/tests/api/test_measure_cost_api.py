@@ -111,6 +111,9 @@ async def test_the_auto_measure_list_is_managing_director_only_and_defaults_to_n
     assert out.status_code == 200 and out.json()["auto_measure_disciplines"] == ["roads_civil", "sewer"] and out.json()["auto_accept_min"] == 0.85
     out2 = await md.put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.9})  # either field alone
     assert out2.json()["auto_accept_min"] == 0.9 and out2.json()["auto_measure_disciplines"] == ["roads_civil", "sewer"]
+    # The tenant row is shared by the other tests of this run: leave the defaults as found.
+    reset = await md.put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.85, "auto_measure_disciplines": []})
+    assert reset.json()["auto_measure_disciplines"] == []
 
 
 async def test_cost_estimate_and_confirmation_are_lead_only(authed_client, app_engine):

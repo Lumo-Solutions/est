@@ -22,7 +22,7 @@ async def test_only_the_managing_director_changes_the_threshold_and_everyone_can
     def as_(role: Role):
         return authed_client(frozenset({role.value}))
 
-    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85}
+    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85, "auto_measure_disciplines": []}
     for role in ROLES_BELOW_MD:
         assert (await as_(role).put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.9})).status_code == 403, role
         assert (await as_(role).get("/api/v1/tender-intake/settings")).status_code == 200, role
