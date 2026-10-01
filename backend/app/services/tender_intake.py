@@ -527,12 +527,18 @@ async def _resolve_target(session: AsyncSession, project_id: UUID, reference: st
 
 async def _resolve_open_links(session: AsyncSession, project_id: UUID) -> None:
     result = await session.execute(
-        select(AddendumLink).where(AddendumLink.project_id == project_id, AddendumLink.resolved.is_(False))
+        select(AddendumLink, Addendum.withdrawn_at)
+        .join(Addendum, Addendum.id == AddendumLink.addendum_id)
+        .where(AddendumLink.project_id == project_id, AddendumLink.resolved.is_(False))
     )
-    for link in result.scalars().all():
+    for link, withdrawn_at in result.all():
         target = await _resolve_target(session, project_id, link.reference_text)
         if target is not None:
             link.target_document_id, link.resolved = target.id, True
+            if link.action == "supersedes" and withdrawn_at is None:
+                # Files are read one by one, so an addendum can be routed before the drawing it supersedes: the mark
+                # that `_route_addendum` puts on an existing target is put on a late one here, whatever the order.
+                target.routed_ref = {**target.routed_ref, "superseded_by_addendum": str(link.addendum_id)}
     await session.flush()
 
 

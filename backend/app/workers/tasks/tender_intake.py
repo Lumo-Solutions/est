@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import get_settings
 from app.core.context import RequestContext, system_context
@@ -88,7 +88,10 @@ async def _claim(session, document_id: UUID) -> processing.DocSnapshot | None:
     settings = get_settings()
     row = (
         await session.execute(
-            select(ProjectDocument).where(ProjectDocument.id == document_id).with_for_update(skip_locked=True)
+            select(ProjectDocument)
+            .where(ProjectDocument.id == document_id)
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)  # the dispatcher and the sweeper change rows with plain SQL
         )
     ).scalar_one_or_none()
     if row is None:
@@ -137,7 +140,13 @@ async def _fail_or_retry(session, ctx: RequestContext, document_id: UUID, messag
     if doc.status not in (DocStatus.PROCESSING.value, DocStatus.RECEIVED.value):
         return
     if (doc.attempts or 0) < get_settings().intake_max_attempts:
-        doc.status, doc.queued_at, doc.error_message = DocStatus.RECEIVED.value, None, f"retrying after: {message}"[:500]
+        # An explicit UPDATE: the dispatcher set queued_at with plain SQL, so an ORM "set to None" could look unchanged.
+        await session.execute(
+            update(ProjectDocument)
+            .where(ProjectDocument.id == doc.id)
+            .values(status=DocStatus.RECEIVED.value, queued_at=None, error_message=f"retrying after: {message}"[:500])
+        )
+        await session.refresh(doc)
         return
     await processing.mark_failed(session, ctx, document_id, message)
 

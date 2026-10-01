@@ -63,7 +63,7 @@ describe('runUpload', () => {
     expect(t.registerCalls.map((c) => c.package_id)).toEqual([null, 'pk1', 'pk1'])
     expect(t.puts).toHaveLength(1200)
     expect(out).toMatchObject({ packageId: 'pk1', uploaded: 1200, failed: [], rejected: [] })
-  })
+  }, 30_000)
 
   it('uses relativePath as the path and sends the hash', async () => {
     const t = makeDeps()

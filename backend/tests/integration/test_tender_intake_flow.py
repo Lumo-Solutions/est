@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.errors import ConflictError, ForbiddenError, ValidationAppError
 from app.db.rls import set_rls_context
@@ -84,16 +85,55 @@ def mock_model(postgres_container):
     set_gateway_override(None)
 
 
+async def drive_worker(session, monkeypatch, ctx: RequestContext, tenant_id: uuid.UUID, *, rounds: int = 400) -> dict:
+    """The real worker, one file per task, on the test session: the dispatcher claims files (bounded, honouring paused
+    packs) and `process_one` reads each, round after round, until nothing is left to claim (zip members and retries
+    included). Every `with_worker_session` sets the RLS context of the ctx it is given, like a worker session does."""
+    from app.workers.tasks import tender_intake as worker
+
+    async def fake_with_worker_session(c, body, *args):
+        await set_rls_context(session, c)
+        try:
+            return await body(session, *args)
+        finally:
+            await set_rls_context(session, ctx)
+
+    queued: list[uuid.UUID] = []
+    batch: list[uuid.UUID] = []
+    stats = {"rounds": 0, "peak_in_flight": 0, "processed": 0}
+
+    def enqueue(ids, tenant):
+        queued.extend(ids)
+        # Claimed (queued_at set) and not yet read: what the dispatcher keeps bounded.
+        stats["peak_in_flight"] = max(stats["peak_in_flight"], len(queued) + len(batch))
+        return []
+
+    monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
+    monkeypatch.setattr(worker, "enqueue_documents", enqueue)
+    for _ in range(rounds):
+        await worker.dispatch_for_tenant(tenant_id)
+        batch[:] = list(queued)
+        queued[:] = []
+        if not batch:
+            break
+        stats["rounds"] += 1
+        while batch:
+            await worker.process_one(tenant_id, batch.pop(0))
+            stats["processed"] += 1
+    await set_rls_context(session, ctx)
+    return stats
+
+
 @pytest.fixture
 def celery_calls(monkeypatch, postgres_container):
     from app.workers.tasks.dwg import convert_dwg
     from app.workers.tasks.takeoff import index_sheets
-    from app.workers.tasks.tender_intake import rerun_document
+    from app.workers.tasks.tender_intake import dispatch_intake
 
     calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": []}
     monkeypatch.setattr(convert_dwg, "apply_async", lambda args=None, countdown=0, **kw: calls["convert"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(index_sheets, "apply_async", lambda args=None, countdown=0, **kw: calls["ingest"].append((args, countdown)) or type("T", (), {"id": "t"})())
-    monkeypatch.setattr(rerun_document, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
+    monkeypatch.setattr(dispatch_intake, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
     return calls
 
 
@@ -398,8 +438,9 @@ async def test_reclassify_edit_exclude_rerun_and_disabled_class(ingested, celery
 
     scan = docs["Scan_0042.pdf"]
     rerun = await svc.request_rerun(s, lead, scan.id)
-    assert rerun.status == "received" and len(celery_calls["rerun"]) == 1
-    assert celery_calls["rerun"][0][0][0] == str(scan.id)
+    assert rerun.status == "received" and rerun.queued_at is None and rerun.attempts == 0
+    assert len(celery_calls["rerun"]) == 1  # the dispatcher is asked to run; it claims the file from the database
+    assert celery_calls["rerun"][0][0] == (str(ingested["tenant"]), str(scan.package_id))
     with pytest.raises(ConflictError):
         await svc.request_rerun(s, lead, docs["bomb.zip"].id)  # rejected by safety: cannot be re-run
 
@@ -416,11 +457,6 @@ async def test_worker_glue_isolates_a_failing_document_and_finalises_the_package
     files = [f for f in build_pack() if f.name in ("ITT.pdf", "Conditions_of_Contract.pdf", "Notes.csv")]
     package, ids = await svc.create_package(rls_session, est, project_id, [(f.name, f.data) for f in files])
 
-    async def fake_with_worker_session(ctx, body, *args):
-        await set_rls_context(rls_session, ctx)
-        return await body(rls_session, *args)
-
-    monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
     real = processing.process_document
 
     async def flaky(session, ctx, document_id, prepared=None, run=None):
@@ -430,10 +466,12 @@ async def test_worker_glue_isolates_a_failing_document_and_finalises_the_package
         return await real(session, ctx, document_id, prepared, run)
 
     monkeypatch.setattr(worker.processing, "process_document", flaky)
-    await worker._process_package(est, str(package.id), None)
+    await drive_worker(rls_session, monkeypatch, est, tenant_id)
 
     docs = await _by_name(rls_session)
+    # A failure is retried (the dispatcher picks the file up again) and, after INTAKE_MAX_ATTEMPTS, parked as failed.
     assert docs["ITT.pdf"].status == "failed" and "boom" in docs["ITT.pdf"].error_message
+    assert docs["ITT.pdf"].attempts == get_settings().intake_max_attempts
     # The contract is a confident AI classification: accepted and routed to the register without a person.
     assert (docs["Conditions_of_Contract.pdf"].status, docs["Conditions_of_Contract.pdf"].auto_accepted) == ("routed", True)
     assert docs["Notes.csv"].status == "proposed"  # nothing in it says what it is: waits for a person

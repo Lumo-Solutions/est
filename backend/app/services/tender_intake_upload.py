@@ -23,7 +23,8 @@ from collections.abc import AsyncIterator
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import bindparam, func, select, text, update
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -361,7 +362,7 @@ _CLAIM_SQL = text(
           AND (d.queued_at IS NULL OR d.queued_at < now() - make_interval(secs => :requeue))
           AND d.attempts < :max_attempts
           AND p.status NOT IN ('paused', 'cancelled')
-          AND (:package IS NULL OR d.package_id = CAST(:package AS uuid))
+          AND (CAST(:package AS uuid) IS NULL OR d.package_id = CAST(:package AS uuid))
           AND (d.duplicate_of_id IS NULL OR EXISTS (
                 SELECT 1 FROM project_documents o
                 WHERE o.id = d.duplicate_of_id AND o.status NOT IN ('pending_upload', 'received', 'processing')))
@@ -373,7 +374,7 @@ _CLAIM_SQL = text(
     FROM cand WHERE d.id = cand.id
     RETURNING d.id
     """
-)
+).bindparams(bindparam("package", type_=PG_UUID(as_uuid=True)))
 
 
 async def claim_for_dispatch(session: AsyncSession, tenant_id: UUID, *, package_id: UUID | None = None) -> list[UUID]:
@@ -393,7 +394,7 @@ async def claim_for_dispatch(session: AsyncSession, tenant_id: UUID, *, package_
         _CLAIM_SQL,
         {
             "tenant": tenant_id, "requeue": settings.intake_requeue_after_s, "max_attempts": settings.intake_max_attempts,
-            "package": str(package_id) if package_id else None, "n": room,
+            "package": package_id, "n": room,
         },
     )
     return [r[0] for r in rows.all()]

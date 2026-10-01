@@ -341,18 +341,15 @@ async def build_summary(session: AsyncSession, project_id: UUID, *, ai_available
     # The groups of the "by document type" view: class -> (drawings) discipline -> drawing type.
     dtype = ProjectDocument.doc_metadata["drawing_type"].astext
     is_drawing = ProjectDocument.doc_class == DocClass.DRAWING.value
+    discipline = case((is_drawing, ProjectDocument.sub_type), else_=None).label("discipline")
+    drawing_type = case((is_drawing, dtype), else_=None).label("drawing_type")
     groups = [
         GroupCount(doc_class=c, discipline=disc, drawing_type=dt, count=n)
         for c, disc, dt, n in (
             await session.execute(
-                select(
-                    ProjectDocument.doc_class,
-                    case((is_drawing, ProjectDocument.sub_type), else_=None),
-                    case((is_drawing, dtype), else_=None),
-                    func.count(),
-                )
+                select(ProjectDocument.doc_class, discipline, drawing_type, func.count())
                 .where(live, ProjectDocument.status != DocStatus.PENDING_UPLOAD.value)
-                .group_by(1, 2, 3)
+                .group_by(ProjectDocument.doc_class, discipline, drawing_type)
             )
         ).all()
     ]

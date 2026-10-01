@@ -38,8 +38,7 @@ def _fakes(monkeypatch):
     monkeypatch.setattr(svc, "put_object_streaming", put)
     monkeypatch.setattr(svc, "presign_get_url", presign)
     dispatched: list = []
-    monkeypatch.setattr(worker.process_tender_package, "apply_async", lambda args=None, countdown=0, **kw: dispatched.append(args))
-    monkeypatch.setattr(worker.rerun_document, "apply_async", lambda args=None, countdown=0, **kw: dispatched.append(("rerun", args)))
+    monkeypatch.setattr(worker.dispatch_intake, "apply_async", lambda args=None, countdown=0, **kw: dispatched.append(args))
     return {"store": store, "dispatched": dispatched, "processing": processing}
 
 
@@ -98,8 +97,7 @@ async def test_estimator_member_uploads_and_a_task_is_dispatched(authed_client, 
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["file_count"] == 2 and body["status"] == "processing"
-    args = _fakes["dispatched"][0]
-    assert args[0] == body["package_id"] and len(args[4]) == 2  # only the new documents
+    assert _fakes["dispatched"][0] == (TENANT, body["package_id"])  # the dispatcher is asked to run for the pack
 
     listing = await estimator.get(f"/api/v1/projects/{project_id}/tender-documents")
     assert listing.json()["total"] == 2
@@ -154,8 +152,8 @@ async def test_upload_caps_count_file_size_and_request_size(authed_client, app_e
 
     monkeypatch.setattr(settings, "intake_max_file_size_bytes", 50)
     big = await estimator.post(url, files=_upload([("big.pdf", PDF + b"x" * 100)]))
-    assert big.status_code == 422 and "per-file limit" in big.text
-    monkeypatch.setattr(settings, "intake_max_file_size_bytes", 60 * 1024 * 1024)
+    assert big.status_code == 422 and "larger than" in big.text and "streaming upload" in big.text
+    monkeypatch.setattr(settings, "intake_max_file_size_bytes", 250 * 1024 * 1024)
 
     monkeypatch.setattr(settings, "intake_max_request_bytes", 40)
     batch = await estimator.post(url, files=_upload([("a.pdf", PDF + b"a" * 20), ("b.pdf", PDF + b"b" * 20)]))
@@ -204,7 +202,7 @@ async def test_estimator_denied_lead_estimator_allowed_for_every_review_action(a
     assert (await lead.get(f"/api/v1/tender-documents/{docs['reclassify']}")).json()["doc_class"] == "contract"
     assert (await lead.get(f"/api/v1/tender-documents/{docs['exclude']}")).json()["status"] == "excluded"
     assert (await lead.get(f"/api/v1/tender-documents/{docs['edit']}")).json()["title"] == "New title"
-    assert any(d and d[0] == "rerun" for d in _fakes["dispatched"])
+    assert _fakes["dispatched"] and _fakes["dispatched"][-1][0] == TENANT  # re-run asks the dispatcher to claim the file again
 
     # The bulk endpoint too, for the lowest allowed role, over a fresh confident proposal.
     fresh = await _seed_doc(app_engine, project_id, package_id)

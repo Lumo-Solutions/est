@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,10 +79,15 @@ async def get_document(session: AsyncSession, document_id: UUID) -> ProjectDocum
 
 
 # ---------------------------------------------------------------- the AI run (breaker, concurrency)
+# Fallback state when Redis cannot be reached: key -> (value, expires_at). Per process, which is still enough to span
+# the files one worker child reads in a row.
+_LOCAL_STATE: dict[str, tuple[str, float]] = {}
+
+
 class SharedBreaker:
     """The AI breaker as Redis keys, shared by every worker process: with one Celery task per file a failure streak
-    cannot be counted inside a task, so it is counted here. Everything is best effort: when Redis is down the run
-    simply keeps its own in-process state (the same behaviour as before)."""
+    cannot be counted inside a task, so it is counted here. When Redis cannot be reached the same counters live in
+    this process (a worker child reads many files in a row, so the streak is still seen)."""
 
     def __init__(self, url: str, tenant_id: UUID, settings: Settings) -> None:
         self._url = url
@@ -101,38 +107,48 @@ class SharedBreaker:
         finally:
             await client.aclose()
 
+    @staticmethod
+    def _local_get(key: str) -> str | None:
+        hit = _LOCAL_STATE.get(key)
+        if hit is None or hit[1] < time.monotonic():
+            _LOCAL_STATE.pop(key, None)
+            return None
+        return hit[0]
+
     async def open_reason(self) -> str | None:
         try:
             value = await self._call(lambda c: c.get(self._keys()[1]))
+            return value.decode() if value else None
         except Exception:  # noqa: BLE001
-            return None
-        return value.decode() if value else None
+            return self._local_get(self._keys()[1])
 
     async def open(self, reason: str) -> None:
         try:
             await self._call(lambda c: c.set(self._keys()[1], reason, ex=self._open_s))
         except Exception:  # noqa: BLE001
-            pass
+            _LOCAL_STATE[self._keys()[1]] = (reason, time.monotonic() + self._open_s)
 
     async def failure(self, reason: str) -> None:
+        fails_key, _ = self._keys()
+
+        async def bump(c):
+            n = await c.incr(fails_key)
+            await c.expire(fails_key, 300)
+            return n
+
         try:
-            fails_key, _ = self._keys()
-
-            async def bump(c):
-                n = await c.incr(fails_key)
-                await c.expire(fails_key, 300)
-                return n
-
-            if int(await self._call(bump)) >= self._max_failures:
-                await self.open(reason)
+            streak = int(await self._call(bump))
         except Exception:  # noqa: BLE001
-            pass
+            streak = int(self._local_get(fails_key) or 0) + 1
+            _LOCAL_STATE[fails_key] = (str(streak), time.monotonic() + 300)
+        if streak >= self._max_failures:
+            await self.open(reason)
 
     async def success(self) -> None:
         try:
             await self._call(lambda c: c.delete(self._keys()[0]))
         except Exception:  # noqa: BLE001
-            pass
+            _LOCAL_STATE.pop(self._keys()[0], None)
 
 
 class AiRun:
@@ -321,6 +337,8 @@ async def prepare_one(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -> Pre
     token = set_context(ctx)
     try:
         return await prepare_document(ctx, snap, run)
+    except SoftTimeLimitExceeded:
+        raise  # the task's time budget: the worker parks the file for a person, it is not a failure to retry
     except Exception as exc:  # noqa: BLE001
         logger.warning("tender_intake: could not prepare %s", snap.id, exc_info=True)
         return Prepared(safety=IntakeSafety(status="pending", sniffed=None), error=exc)

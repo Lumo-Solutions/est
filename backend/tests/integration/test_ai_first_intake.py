@@ -38,6 +38,7 @@ from tests.integration.test_tender_intake_flow import (  # noqa: F401 -- fixture
     _install_gateway,
     _seed,
     celery_calls,
+    drive_worker,
     fake_s3,
     mock_model,
 )
@@ -63,21 +64,20 @@ class ExternalMock(MockProvider):
         return True
 
 
-async def run_worker(session: AsyncSession, monkeypatch, ctx: RequestContext, package) -> None:
-    """The real worker body (claim, concurrent AI phase, persist, auto-accept) on the test session. Every
-    `with_worker_session` sets the RLS context of the ctx it is given, exactly like a worker session does."""
-    from app.workers.tasks import tender_intake as worker
+async def run_worker(session: AsyncSession, monkeypatch, ctx: RequestContext, package) -> dict:
+    """The real per-file worker (dispatcher claim, read, persist, auto-accept) on the test session."""
+    return await drive_worker(session, monkeypatch, ctx, ctx.tenant_id)
 
-    async def fake_with_worker_session(c, body, *args):
-        await set_rls_context(session, c)
-        try:
-            return await body(session, *args)
-        finally:
-            await set_rls_context(session, ctx)
 
-    monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
-    await worker._process_package(ctx, str(package.id), None)
-    await set_rls_context(session, ctx)
+async def build_tree(session: AsyncSession, project_id, *, ai_available: bool, ai_message: str | None):
+    """What the project page shows, as one object: the counts (`summary`) and every file as a row (`items`)."""
+    from types import SimpleNamespace
+
+    from app.schemas.tender_intake import DocFilter
+
+    out = await tender_intake_tree.build_summary(session, project_id, ai_available=ai_available, ai_message=ai_message)
+    items, _ = await tender_intake_tree.list_tree_items(session, project_id, DocFilter(), limit=500, offset=0)
+    return SimpleNamespace(items=items, summary=out.summary)
 
 
 async def upload(session, tenant_id, project_id, files, *, roles=frozenset({"estimator"})):
@@ -218,7 +218,7 @@ async def test_needs_check_items_are_confirmed_or_changed_in_one_click(processed
     docs = await _by_name(s)
     lead = lead_ctx(processed)
     await set_rls_context(s, lead)
-    tree = await tender_intake_tree.build_tree(s, processed["project"], ai_available=True, ai_message=None)
+    tree = await build_tree(s, processed["project"], ai_available=True, ai_message=None)
     waiting = {i.name: i for i in tree.items if i.display_status == "needs_check"}
     assert set(waiting) == WAITING and tree.summary.needs_check == 2
     assert waiting["Scan_0042.pdf"].status_reason == "Confidence is below the auto-accept threshold"
@@ -229,7 +229,7 @@ async def test_needs_check_items_are_confirmed_or_changed_in_one_click(processed
     assert (scan.status, scan.routed_kind, scan.confirmed_by) == ("routed", "drawing", lead.user_id) and len(celery_calls["ingest"]) == before + 1
     notes = await svc.reclassify(s, lead, docs["Notes.csv"].id, "correspondence", None, "site notes", confirm=True)  # "Change"
     assert (notes.status, notes.routed_kind, notes.classified_by, notes.doc_class) == ("routed", "register", "user", "correspondence")
-    tree = await tender_intake_tree.build_tree(s, processed["project"], ai_available=True, ai_message=None)
+    tree = await build_tree(s, processed["project"], ai_available=True, ai_message=None)
     by_name = {i.name: i for i in tree.items}
     assert tree.summary.needs_check == 0
     assert by_name["Scan_0042.pdf"].decided_by == "user" and by_name["Scan_0042.pdf"].auto_accepted is False
@@ -241,22 +241,22 @@ async def test_the_tree_reports_each_stage_a_file_passes_through(rls_session, fa
     tenant_id, project_id = await _seed(rls_session)
     files = [f for f in build_pack() if f.name in ("C-101 Rev A.dxf", "ITT.pdf", "Notes.csv")]
     est, package = await upload(rls_session, tenant_id, project_id, [(f.name, f.data) for f in files])
-    tree = await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     assert {i.display_status for i in tree.items} == {"queued"} and tree.summary.in_progress == 3 and tree.summary.packages_processing == 1
     await rls_session.execute(text("UPDATE project_documents SET status = 'processing' WHERE original_filename = 'ITT.pdf'"))
-    assert {i.name: i.display_status for i in (await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)).items}["ITT.pdf"] == "reading"
+    assert {i.name: i.display_status for i in (await build_tree(rls_session, project_id, ai_available=True, ai_message=None)).items}["ITT.pdf"] == "reading"
     await rls_session.execute(text("UPDATE project_documents SET status = 'received' WHERE original_filename = 'ITT.pdf'"))
     await run_worker(rls_session, monkeypatch, est, package)
-    tree = await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     status = {i.name: i for i in tree.items}
     assert status["C-101 Rev A.dxf"].display_status == "extracting"  # the drawing is queued for extraction
     assert status["ITT.pdf"].display_status == "ready" and status["Notes.csv"].display_status == "needs_check"
     assert tree.summary.drawings_total == 1 and tree.summary.drawings_ready == 0 and tree.summary.in_progress == 1
     await rls_session.execute(text("UPDATE drawings SET status = 'ready'"))
-    tree = await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     assert {i.name: i.display_status for i in tree.items}["C-101 Rev A.dxf"] == "ready" and tree.summary.drawings_ready == 1
     await rls_session.execute(text("UPDATE drawings SET status = 'failed', error_message = 'no geometry'"))
-    failed = {i.name: i for i in (await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)).items}["C-101 Rev A.dxf"]
+    failed = {i.name: i for i in (await build_tree(rls_session, project_id, ai_available=True, ai_message=None)).items}["C-101 Rev A.dxf"]
     assert (failed.display_status, failed.status_reason) == ("failed", "no geometry")
 
 
@@ -397,7 +397,7 @@ async def _assert_rules_fallback(s, reason: str) -> dict[str, ProjectDocument]:
         assert d.classified_by == "rules" and "rules_fallback" in d.flags and d.doc_metadata["ai_unavailable_reason"] == reason, d.original_filename
         assert d.status == "proposed" and not d.auto_accepted  # nothing is routed on the rules' say-so alone
     assert {d.doc_class for d in docs.values() if d.original_filename == "ITT.pdf"} == {"tender_instructions"}
-    tree = await tender_intake_tree.build_tree(s, next(iter(docs.values())).project_id, ai_available=False, ai_message="AI not configured")
+    tree = await build_tree(s, next(iter(docs.values())).project_id, ai_available=False, ai_message="AI not configured")
     item = {i.name: i for i in tree.items}["ITT.pdf"]
     assert item.display_status == "needs_check" and item.status_reason == f"Classified by rules ({reason})" and item.classified_by == "rules"
     assert tree.summary.ai_available is False and tree.summary.ai_message == "AI not configured"
@@ -513,45 +513,37 @@ async def test_text_inside_a_pdf_cannot_steer_classification_or_get_itself_accep
     assert (await rls_session.execute(text("SELECT count(*) FROM audit_events WHERE payload->>'event' = 'auto_accept'"))).scalar_one() == 0
     lead = _ctx(frozenset({"lead_estimator"}), tenant_id=tenant_id)
     await set_rls_context(rls_session, lead)
-    tree = await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     item = {i.name: i for i in tree.items}["Terms.pdf"]
     assert item.display_status == "needs_check" and "aimed at the classifier" in item.status_reason
 
 
 # ------------------------------------------------------------------ a 300-file pack
-async def test_a_300_file_pack_is_read_in_batches_with_bounded_concurrency_and_routed(rls_session, fake_s3, celery_calls, monkeypatch):
+async def test_a_300_file_pack_is_read_one_file_at_a_time_under_the_dispatch_limit_and_routed(rls_session, fake_s3, celery_calls, monkeypatch):
     from app.core.config import get_settings
+    from app.services import tender_intake_upload as up
 
-    class Counting(MockProvider):
-        in_flight = 0
-        peak = 0
-
-        async def _complete(self, req):
-            Counting.in_flight += 1
-            Counting.peak = max(Counting.peak, Counting.in_flight)
-            try:
-                await asyncio.sleep(0.001)
-                return await super()._complete(req)
-            finally:
-                Counting.in_flight -= 1
-
-    provider, settings = Counting(), get_settings()
+    provider, settings = MockProvider(), get_settings()
+    limit = 7
+    monkeypatch.setattr(up, "get_settings", lambda: settings.model_copy(update={"intake_dispatch_limit": limit}))
     tenant_id, project_id = await _seed(rls_session)
     use_gateway(settings, MemoryStore(), provider)
     bulk = build_bulk_files(300)
     try:
         est, package = await upload(rls_session, tenant_id, project_id, [(f.name, f.data) for f in bulk])
-        await run_worker(rls_session, monkeypatch, est, package)
+        stats = await run_worker(rls_session, monkeypatch, est, package)
     finally:
         set_gateway_override(None)
     docs = await _by_name(rls_session)
-    assert len(docs) == 300 and len(provider.calls) == 300 and 1 < Counting.peak <= settings.intake_ai_concurrency
+    assert len(docs) == 300 and len(provider.calls) == 300  # one AI call per distinct file, never more
+    # 300 files were never "in the system" at once: at most `limit` were queued or being read at any moment.
+    assert stats["processed"] == 300 and 0 < stats["peak_in_flight"] <= limit
     wrong = {f.name: (docs[f.name].doc_class, f.expected_class) for f in bulk if docs[f.name].doc_class != f.expected_class}
     assert not wrong, list(wrong.items())[:5]
     assert all(d.status == "routed" and d.auto_accepted and d.routed_kind == "register" for d in docs.values())
     await rls_session.refresh(package)
     assert package.status == "ready"
-    tree = await tender_intake_tree.build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     assert tree.summary.total == 300 and tree.summary.needs_check == 0 and tree.summary.in_progress == 0
     assert sum(tree.summary.by_class.values()) == 300 and set(tree.summary.by_class) == {"correspondence", "clarification", "tender_instructions", "specification"}
 
