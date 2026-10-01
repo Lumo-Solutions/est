@@ -328,3 +328,40 @@ starved the whole WSL2 VM. Full analysis and proof runs: `docs/intake-scale/repo
   `PUT /api/v1/tender-packages/*/documents/*/content` (Caddy streams by default).
 - **PDF reading:** a page with more than 20,000 drawing objects (a CAD export) is read with PDFium instead of pdfplumber (a real 8 MB A0 sheet took pdfplumber 163 s and 3 GB);
   vector-geometry analysis is skipped above 150,000 objects per page.
+
+### Intake at scale, addendum: memory budget for a 16 GB PC, Postgres, SeaweedFS, drawing queues, AI cost (migration 0039)
+
+- **`%UserProfile%\.wslconfig`** (Docker Desktop's WSL2 VM is what is shared with Windows; the default is half the RAM and no swap):
+
+  ```ini
+  [wsl2]
+  memory=10GB
+  processors=6
+  swap=4GB
+  ```
+
+  Apply it: close Docker Desktop, run `wsl --shutdown` in PowerShell, start Docker Desktop again, check with `docker info --format "{{.MemTotal}}"` (about 10.5e9).
+- **Fit check (measured, the 2,001-file / 3.4 GB proof run):** the largest *simultaneous* total of every `installtec_*` container was **5.8 GiB** (p95 5.5 GiB), with the single peaks
+  ingest worker 1.4 GiB (cap 1.5), index worker 1.7 GiB (cap 2), backend 0.47 GiB (cap 1), vlm 0.36, SeaweedFS 1.9 GiB, Postgres 2.4 GiB (page cache included; untuned), Keycloak 0.5.
+  The caps added up (always-on set: backend 1 + ingest 1.5 + index 2 + vlm 1 + email 0.375 + quotation 0.5 + convert 0.5 + beat 0.25 = 7.1 GiB, plus SeaweedFS 2.5, Postgres about 1.5 tuned,
+  Keycloak and the small ones about 1) are **not** all reachable at once (they peak at different moments), so 10 GB plus 4 GB swap holds with margin for Windows itself; if the VM is
+  smaller (the default 7.7 GB), lower `INDEX_MEM_LIMIT`/`INGEST_MEM_LIMIT` and expect OOM-kills of the index worker on big CAD sets (`docker inspect -f '{{.State.OOMKilled}}' <container>`).
+  `--profile dwg` (the DWG converter, 2 GiB) is on top of that.
+- **SeaweedFS** has `mem_limit: ${SEAWEEDFS_MEM_LIMIT:-2560m}` (measured peak 1.9 GiB plus headroom).
+- **Postgres has no `mem_limit`, on purpose**: the kernel OOM-killing the database mid-write is worse than the database using a lot of memory. Its memory is bounded by settings
+  instead (`command: postgres -c ...`, all overridable as `PG_*` in `deploy/.env`): `shared_buffers=768MB` (the fixed cost; about 7% of a 10 GB VM), `effective_cache_size=3GB` (planner hint, not an allocation: the page cache it can count on),
+  `work_mem=16MB` (per sort/hash per connection, so it is kept modest: the worst case is connections x plan nodes x work_mem), `maintenance_work_mem=256MB` (index builds, vacuum),
+  `max_connections=100` (backend pool + 2 ingest + 1 index + vlm + beat children + Keycloak fit with room), `shm_size: 256mb` (parallel queries). The earlier 2.4 GiB peak was mostly page cache and
+  unbounded per-connection sorts at the default `work_mem` of the new tuned values' predecessor. These apply to production too (it uses the same base compose file): size them to the host there.
+- **Drawing pipeline queues:** `celery-worker-index` (queue `index`, concurrency `INDEX_CONCURRENCY`=1, 2 GiB) runs a drawing's page index and geometry; `celery-worker` (`ingest,embed`) keeps intake and the light tasks. Priority steps 0/3/6/9
+  on the Redis broker: 0 a person opened the drawing, 3 the verification report needs it, 6 a bulk "Measure all", 9 automatic on intake. The hard limit of the index task is
+  `DRAWING_INDEX_HARD_LIMIT_S` (360 s); a drawing that exceeds the soft limit is marked failed with the reason.
+- **Measuring on demand:** intake only classifies and indexes drawings (status `indexed`: number, title, revision, discipline, type from the AI/rules and a sheet count from a light task). Full extraction starts when someone opens the drawing,
+  when the verification report is requested, by "Measure all" (lead_estimator and above, audited), or automatically for the disciplines on the managing_director's list (Admin > AI: default none).
+  Migration 0039 adds `drawings.measure_priority`, `tenant_ai_settings.intake_auto_measure`, `tender_packages.cost_confirmed_*`, `ai_calls.tokens_cached`. Drawings already routed and never measured stay in whatever status they reached (`queued`/`extracting` ones
+  still run when a worker is up; use "Measure all" for the rest).
+- **AI cost:** `backend/app/ai/pricing.py` has the Qwen rates (USD per million tokens). `qwen3.7-flash`: input 0.03, cached input 0.006, output 0.13, **measured from the 2026-10 Alibaba invoice**.
+  `qwen3.7-plus`: input 0.40, cached 0.08, output 1.20, **UNVERIFIED** (Alibaba's published international price, not yet compared with a bill): the admin AI usage view, the cost estimate and the report all say "unverified" until the first real plus call has been checked.
+  Cached prompt tokens (`usage.prompt_tokens_details.cached_tokens`) are billed at the cached rate; unknown models keep the cautious default (5 / 25). Routing: text classification -> `AI_MODEL_CLASSIFY`, page images and drawing/BOQ vision tasks -> `AI_MODEL_VISION`,
+  matching and pricing reasoning -> `AI_MODEL_REASONING`; `make ai-smoke` now prints the model each task used, flags a mismatch and marks unverified prices.
+  A pack that an external provider would read **does not start (nor resume) until a lead_estimator confirmed its estimated cost** (`GET /tender-packages/{id}/cost-estimate`, `POST .../confirm-cost`, audited); the per-project and monthly budgets stay hard stops.
