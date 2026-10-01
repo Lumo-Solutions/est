@@ -63,6 +63,8 @@ ALL_CLASSES = tuple(c.value for c in DocClass)
 
 
 class DocStatus(StrEnum):
+    # Registered (path, size, sha256) but the bytes have not arrived yet: the resumable upload's first state.
+    PENDING_UPLOAD = "pending_upload"
     RECEIVED = "received"
     PROCESSING = "processing"
     PROPOSED = "proposed"
@@ -75,9 +77,14 @@ class DocStatus(StrEnum):
 
 
 class PackageStatus(StrEnum):
+    # Files are still arriving (registered but not all uploaded).
+    UPLOADING = "uploading"
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    # Operator controls (lead_estimator+): nothing new is started while paused; cancelled is final.
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 class ClassificationSource(StrEnum):
@@ -106,6 +113,8 @@ class Flag(StrEnum):
     RULES_FALLBACK = "rules_fallback"
     # Text in the file tried to instruct the classifier; it was ignored and the file needs a person's check.
     INJECTION_SUSPECTED = "injection_suspected"
+    # Stored but not read automatically: too large, too many pages, or it took longer than the per-file budget.
+    TOO_LARGE = "too_large"
 
 
 # "lead_estimator+" written out (no rank comparison exists in this codebase).

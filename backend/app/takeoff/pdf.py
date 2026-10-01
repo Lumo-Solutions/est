@@ -55,22 +55,91 @@ def index_pdf(data: bytes) -> list[PdfPageInfo]:
                     title_block_candidate_text=candidate,
                 )
             )
+            page.flush_cache()  # a long drawing set must not keep every page's objects alive
     return pages
 
 
-def render_page_png(data: bytes, page_index: int, dpi: int = 150) -> bytes:
-    """Renders one page to PNG for the VLM image path (raster pages, or
-    vector pages where text extraction found no usable title-block text)."""
+_DEFAULT_CAP = "default"
+
+
+def page_size_pt(data: bytes, page_index: int = 0) -> tuple[float, float]:
+    """(width, height) of one page in PDF points, without rendering anything."""
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(BytesIO(data))
     try:
         page = pdf[page_index]
-        bitmap = page.render(scale=dpi / 72)
-        pil_image = bitmap.to_pil()
-        buf = BytesIO()
-        pil_image.save(buf, format="PNG")
-        return buf.getvalue()
+        try:
+            return page.get_size()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+
+
+def render_page_png(data: bytes, page_index: int, dpi: int = 150, *, max_side_px: int | None | str = _DEFAULT_CAP) -> bytes:
+    """Renders one page to PNG for the VLM image path (raster pages, or
+    vector pages where text extraction found no usable title-block text).
+
+    The longest side is capped at `max_side_px` (default: the PDF_RENDER_MAX_PX setting; None = no cap) by lowering
+    the scale, so an A0 sheet cannot allocate a bitmap of hundreds of megabytes. Pages that fit under the cap render
+    exactly as they always did (the AI cache keys on the image bytes). Every pdfium object is closed here."""
+    import pypdfium2 as pdfium
+
+    from app.core.config import get_settings
+
+    cap = get_settings().pdf_render_max_px if max_side_px == _DEFAULT_CAP else max_side_px
+    pdf = pdfium.PdfDocument(BytesIO(data))
+    try:
+        page = pdf[page_index]
+        try:
+            scale = dpi / 72
+            if cap:
+                longest = max(page.get_size()) * scale
+                if longest > cap:
+                    scale *= cap / longest
+            bitmap = page.render(scale=scale)
+            try:
+                pil_image = bitmap.to_pil()
+                try:
+                    buf = BytesIO()
+                    pil_image.save(buf, format="PNG")
+                    return buf.getvalue()
+                finally:
+                    pil_image.close()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+
+
+def render_title_block_png(data: bytes, page_index: int = 0, dpi: int = 170, max_side_px: int = 1_800) -> bytes:
+    """Only the title-block corner (bottom-right ~35% x ~30%, the same region as `crop_title_block_png`), rendered
+    straight from the page with pdfium's crop, so a huge sheet never exists as a full-page bitmap."""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(BytesIO(data))
+    try:
+        page = pdf[page_index]
+        try:
+            w, h = page.get_size()
+            region = (w * 0.35, h * 0.30)
+            scale = min(dpi / 72, max_side_px / max(region))
+            bitmap = page.render(scale=scale, crop=(w * 0.65, 0, 0, h * 0.70))
+            try:
+                pil_image = bitmap.to_pil()
+                try:
+                    buf = BytesIO()
+                    pil_image.save(buf, format="PNG")
+                    return buf.getvalue()
+                finally:
+                    pil_image.close()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
     finally:
         pdf.close()
 

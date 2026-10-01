@@ -26,6 +26,11 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
+    # A worker child is recycled after this many tasks or once it holds this much memory (checked between tasks), so
+    # a leak or one fat file cannot grow a worker without bound. `--max-tasks-per-child` / `--max-memory-per-child` on
+    # the command line (deploy/docker-compose.yml) override these.
+    worker_max_tasks_per_child=settings.celery_max_tasks_per_child,
+    worker_max_memory_per_child=settings.celery_max_memory_per_child_kb,
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
@@ -78,6 +83,11 @@ celery_app.conf.update(
         "reap-stuck-drawings": {
             "task": "app.workers.tasks.maintenance.reap_stuck_drawings",
             "schedule": crontab(minute=0),
+        },
+        # Tender intake: the dispatcher and the sweeper for files abandoned by a dead worker (docs/intake-scale/report.md).
+        "intake-tick": {
+            "task": "app.workers.tasks.tender_intake.intake_tick",
+            "schedule": 30.0,
         },
         "poll-inbound-mailbox": {
             "task": "app.workers.tasks.quotation_ingestion.poll_inbound_mailbox",

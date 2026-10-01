@@ -27,6 +27,11 @@ class TenderPackage(TenantEntity):
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="processing")
     file_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Files the uploader announced (registered up front); NULL for packs made before the resumable upload.
+    expected_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Who paused / cancelled it and when (the audit trail has the full story).
+    paused_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class ProjectDocument(TenantEntity):
@@ -73,6 +78,11 @@ class ProjectDocument(TenantEntity):
     auto_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Scale: when the bytes finished arriving, when the dispatcher last enqueued the file, and how many times a worker
+    # has started it (a file that keeps killing its worker stops being retried and waits for a person).
+    uploaded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class DocumentClassification(TenantEntity):

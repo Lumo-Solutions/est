@@ -140,11 +140,19 @@ async def _reap_stale_jobs_body(session: AsyncSession, tenant_id: str) -> int:
     return len(result.all())
 
 
+async def _reap_stuck_intake_body(session: AsyncSession, tenant_id: str) -> None:
+    from app.services.tender_intake_upload import reap_stuck_documents
+
+    await reap_stuck_documents(session, UUID(tenant_id))
+
+
 @celery_app.task(name="app.workers.tasks.maintenance.reap_stale_jobs")
 def reap_stale_jobs() -> None:
     async def _run() -> None:
         for tenant_id in await _all_tenant_ids():
             await with_worker_session(system_ctx(tenant_id), _reap_stale_jobs_body, tenant_id)
+            # Tender intake files abandoned in `processing` by a dead worker (also swept every 30 s by intake_tick).
+            await with_worker_session(system_ctx(tenant_id), _reap_stuck_intake_body, tenant_id)
 
     run_async(_run)()
 

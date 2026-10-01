@@ -52,6 +52,8 @@ TEXT_SUFFICIENT_CHARS = 150
 TITLE_BLOCK_SUFFICIENT_CHARS = 40
 MIN_READABLE_CHARS = 20
 IMAGE_MAX_SIDE_PX = 1_800
+# A page whose 170 dpi bitmap would be bigger than this (about A1 and up) has only its title-block corner rendered.
+TITLE_BLOCK_FULL_RENDER_MAX_PIXELS = 30_000_000
 # PDFium (behind pypdfium2) is not thread-safe, and pages are rendered from worker threads while AI calls overlap:
 # concurrent renders crash the interpreter. One render at a time, process-wide.
 _PDFIUM_LOCK = threading.Lock()
@@ -197,12 +199,18 @@ def build_images(ext: str, data: bytes, content: DocContent) -> list[bytes]:
     the file has no renderable page."""
     try:
         if ext == "pdf":
-            from app.takeoff.pdf import crop_title_block_png, render_page_png
+            from app.takeoff.pdf import crop_title_block_png, page_size_pt, render_page_png, render_title_block_png
 
             with _PDFIUM_LOCK:
-                images = [_shrink(render_page_png(data, 0, dpi=100))]
+                images = [_shrink(render_page_png(data, 0, dpi=100, max_side_px=None))]
                 if content.vector_density >= DENSE_VECTOR_PRIMITIVES // 2 or content.title_block_text:
-                    images.append(crop_title_block_png(render_page_png(data, 0, dpi=170)))
+                    w, h = page_size_pt(data, 0)
+                    if (w * 170 / 72) * (h * 170 / 72) <= TITLE_BLOCK_FULL_RENDER_MAX_PIXELS:
+                        # Same bytes as ever for ordinary sheets (the AI cache keys on them).
+                        images.append(crop_title_block_png(render_page_png(data, 0, dpi=170, max_side_px=None)))
+                    else:
+                        # A0 and bigger: render only the corner, never the whole sheet at 170 dpi (hundreds of MB).
+                        images.append(render_title_block_png(data, 0, dpi=170, max_side_px=IMAGE_MAX_SIDE_PX))
             return images
         if ext in ("jpg", "jpeg", "png"):
             from PIL import Image
