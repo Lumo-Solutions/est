@@ -345,3 +345,82 @@ def test_build_images_uses_the_corner_render_only_for_very_large_pages(monkeypat
     calls["full"].clear()
     classifier.build_images("pdf", _big_page_pdf(5000, 3500), content)  # far above A1: never a 170 dpi full-page render
     assert 170 not in calls["full"] and calls["corner"] == 1
+
+
+# ------------------------------------------------------------------ CAD exports: pdfplumber cannot afford them
+def _cad_pdf(lines: int) -> bytes:
+    """One A1 sheet with a title block and `lines` line segments (a real drawing has hundreds of thousands)."""
+    import random
+
+    from app.intake.scale_pack import _drawing_pages, _small_pdf_bytes
+
+    rng = random.Random(1)
+    return _small_pdf_bytes(rng, _drawing_pages(rng, "R-101", "ROAD LAYOUT PLAN", "A1", 1, lines))
+
+
+def test_a_dense_cad_sheet_is_read_with_pdfium_and_keeps_its_title_block(monkeypatch):
+    import time
+
+    from app.intake import extract
+
+    monkeypatch.setattr(extract, "HEAVY_PDF_OBJECTS", 3_000)
+    data = _cad_pdf(8_000)
+    used: list[str] = []
+    real = extract._extract_pdf_pdfium
+    monkeypatch.setattr(extract, "_extract_pdf_pdfium", lambda d, c: (used.append("pdfium"), real(d, c))[1])
+    started = time.time()
+    content = extract.extract_content(filename="R-101.pdf", ext="pdf", sniffed="pdf", data=data)
+    assert used == ["pdfium"] and content.error is None and content.pages == 1
+    assert "DRAWING NO: R-101" in content.title_block_text and "ROAD LAYOUT PLAN" in content.text
+    assert content.vector_density >= 3_000 and content.has_text_layer and not content.is_raster
+    assert time.time() - started < 30
+
+
+def test_an_ordinary_pdf_still_goes_through_pdfplumber(monkeypatch):
+    from app.intake import extract
+
+    def boom(*a, **k):
+        raise AssertionError("an ordinary page must not take the CAD path")
+
+    monkeypatch.setattr(extract, "_extract_pdf_pdfium", boom)
+    content = extract.extract_content(filename="R-101.pdf", ext="pdf", sniffed="pdf", data=_cad_pdf(500))
+    assert content.error is None and "DRAWING NO: R-101" in content.title_block_text and 400 <= content.vector_density <= 600
+
+
+def test_the_pdfium_lock_is_shared_by_extraction_and_rendering():
+    from app.intake import classifier, extract
+
+    assert classifier._PDFIUM_LOCK is extract.PDFIUM_LOCK
+
+
+def test_the_drawing_pipeline_reads_a_cad_page_with_pdfium_and_skips_geometry_that_would_need_gigabytes(monkeypatch):
+    from app.takeoff import pdf as pdf_mod
+
+    data = _cad_pdf(8_000)
+    counts = pdf_mod.count_page_objects(data, 1_000)
+    assert counts == [1_001]  # counting stops at the cap + 1: it never walks every object
+    monkeypatch.setattr(pdf_mod, "HEAVY_PAGE_OBJECTS", 3_000)
+    pdfplumber_pages = []
+    real_open = pdf_mod.pdfplumber.open
+
+    class Spy:
+        def __init__(self, pdf):
+            self._pdf = pdf
+
+        def __enter__(self):
+            pdf = self._pdf.__enter__()
+            for page in pdf.pages:
+                real_text = page.extract_text
+                page.extract_text = lambda *a, _t=real_text, **k: (pdfplumber_pages.append(1), _t(*a, **k))[1]
+            return pdf
+
+        def __exit__(self, *exc):
+            return self._pdf.__exit__(*exc)
+
+    monkeypatch.setattr(pdf_mod.pdfplumber, "open", lambda f: Spy(real_open(f)))
+    info = pdf_mod.index_pdf(data)
+    assert len(info) == 1 and "DRAWING NO: R-101" in info[0].raw_text and "R-101" in info[0].title_block_candidate_text
+    assert info[0].width_pt == pytest.approx(1684) and not info[0].is_raster
+    assert pdfplumber_pages == []  # pdfplumber never built the page's 8,000 objects
+    monkeypatch.setattr(pdf_mod, "MAX_GEOMETRY_PAGE_OBJECTS", 3_000)
+    assert pdf_mod.index_pdf_geometry(data) == {"page-1": []}  # too complex to analyse here: left to the vision path

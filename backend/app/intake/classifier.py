@@ -20,7 +20,6 @@ import base64
 import io
 import logging
 import re
-import threading
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -36,6 +35,7 @@ from app.intake.constants import (
     DocClass,
     Flag,
 )
+from app.intake.extract import PDFIUM_LOCK as _PDFIUM_LOCK
 from app.intake.extract import DocContent
 from app.intake.rules import DENSE_VECTOR_PRIMITIVES, RuleOutcome
 from app.takeoff.prompts import load_schema, render_prompt
@@ -54,9 +54,8 @@ MIN_READABLE_CHARS = 20
 IMAGE_MAX_SIDE_PX = 1_800
 # A page whose 170 dpi bitmap would be bigger than this (about A1 and up) has only its title-block corner rendered.
 TITLE_BLOCK_FULL_RENDER_MAX_PIXELS = 30_000_000
-# PDFium (behind pypdfium2) is not thread-safe, and pages are rendered from worker threads while AI calls overlap:
-# concurrent renders crash the interpreter. One render at a time, process-wide.
-_PDFIUM_LOCK = threading.Lock()
+# PDFium (behind pypdfium2) is not thread-safe: one use at a time, process-wide (the lock lives in intake/extract.py,
+# which parses PDFs too).
 
 # Text in a document that tries to steer the classifier. It is never obeyed (the prompt fences the content and the
 # schema has no action fields); seeing it only withholds auto-accept so a person looks at the file.
