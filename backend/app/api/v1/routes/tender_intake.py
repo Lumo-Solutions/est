@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi import Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_session, require_roles
@@ -40,7 +41,7 @@ from app.schemas.tender_intake import (
     TreeItemPage,
     UploadResult,
 )
-from app.services import ai_admin
+from app.services import ai_admin, ai_cost
 from app.services import tender_intake as intake_service
 from app.services import tender_intake_tree
 from app.services import tender_intake_upload as upload_service
@@ -158,6 +159,36 @@ async def upload_document_content_endpoint(
     )
     _dispatch(ctx, package_id)
     return result
+
+
+@router.get("/tender-packages/{package_id}/cost-estimate", response_model=ai_cost.CostEstimateOut)
+async def cost_estimate_endpoint(
+    package_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ai_cost.CostEstimateOut:
+    """What reading this pack with the configured AI provider is expected to cost (files still needing the AI x the
+    average tokens per call seen so far, priced per model), and whether it still waits for confirmation."""
+    return await ai_cost.estimate(session, ctx, settings, package_id)
+
+
+class ConfirmCostIn(BaseModel):
+    # The estimate the person was shown; if it has grown by more than 10 % since, they are asked to look again.
+    accepted_usd: float = Field(ge=0)
+
+
+@router.post("/tender-packages/{package_id}/confirm-cost", response_model=ai_cost.CostEstimateOut)
+async def confirm_cost_endpoint(
+    package_id: UUID,
+    data: ConfirmCostIn,
+    ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ai_cost.CostEstimateOut:
+    out = await ai_cost.confirm(session, ctx, settings, package_id, data.accepted_usd)
+    _dispatch(ctx, package_id)  # the pack may start now
+    return out
 
 
 @router.post("/tender-packages/{package_id}/pause", response_model=PackageControlOut)
@@ -384,7 +415,10 @@ async def tree_items_endpoint(
 
 @router.get("/tender-intake/settings", response_model=IntakeSettingsOut)
 async def intake_settings_endpoint(ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)) -> IntakeSettingsOut:
-    return IntakeSettingsOut(auto_accept_min=await intake_service.get_auto_accept_min(session))
+    return IntakeSettingsOut(
+        auto_accept_min=await intake_service.get_auto_accept_min(session),
+        auto_measure_disciplines=await intake_service.get_auto_measure(session),
+    )
 
 
 @router.put("/admin/intake-settings", response_model=IntakeSettingsOut)
@@ -393,7 +427,14 @@ async def set_intake_settings_endpoint(
     ctx: RequestContext = Depends(require_roles(*CLASS_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> IntakeSettingsOut:
-    return IntakeSettingsOut(auto_accept_min=await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min))
+    if data.auto_accept_min is not None:
+        await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min)
+    if data.auto_measure_disciplines is not None:
+        await intake_service.set_auto_measure(session, ctx, data.auto_measure_disciplines)
+    return IntakeSettingsOut(
+        auto_accept_min=await intake_service.get_auto_accept_min(session),
+        auto_measure_disciplines=await intake_service.get_auto_measure(session),
+    )
 
 
 @router.get("/tender-classes", response_model=list[TenderClassOut])

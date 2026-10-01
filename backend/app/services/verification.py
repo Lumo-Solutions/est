@@ -24,7 +24,7 @@ from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.models.ai import AiCall
 from app.models.boq import BoqLineItem, BoqTolerance
-from app.models.takeoff import DrawingAnnotation, DrawingMeasurement, DrawingSheet, live_drawing_ids
+from app.models.takeoff import Drawing, DrawingAnnotation, DrawingMeasurement, DrawingSheet, live_drawing_ids
 from app.models.taxonomy import TradeNode
 from app.models.verification import VerificationLine, VerificationMapping, VerificationRun
 from app.services import audit
@@ -275,6 +275,15 @@ async def create_run(session: AsyncSession, ctx: RequestContext, project_id: UUI
         session, ctx, action=AuditAction.CREATE, entity_type="verification_run", entity_id=run.id, project_id=project_id,
         payload={"use_ai": use_ai},
     )
+    # The report needs measured drawings: queue the ones intake only indexed, ahead of any bulk measuring.
+    from app.core.enums import DrawingStatus, MeasurePriority
+    from app.services import takeoff as takeoff_service
+
+    pending = await takeoff_service.drawings_matching(
+        session, project_id, disciplines=None, drawing_types=None, drawing_ids=None, statuses=[DrawingStatus.INDEXED.value]
+    )
+    if pending:
+        await takeoff_service.request_measure_many(session, ctx, pending, priority=MeasurePriority.VERIFICATION)
     return run
 
 
@@ -344,6 +353,19 @@ async def run_verification(
         warnings.append("No drawing annotations have been read yet, so quantities can only come from measured geometry. Use 'Read annotations' on the drawings first for better coverage.")
     elif sheets and sum(1 for s in sheets if s != "done") > 0:
         warnings.append(f"Annotations were read for {sum(1 for s in sheets if s == 'done')} of {len(sheets)} sheets.")
+    unmeasured = (
+        await session.execute(
+            select(func.count()).select_from(Drawing).where(
+                Drawing.project_id == project_id, Drawing.archived_at.is_(None),
+                Drawing.status.in_(["indexed", "queued", "uploaded", "converting", "indexing", "extracting", "embedding"]),
+            )
+        )
+    ).scalar_one()
+    if unmeasured:
+        warnings.append(
+            f"{unmeasured} drawing(s) are not measured yet (they were queued when this report was requested): "
+            "run the report again when they are done to include them."
+        )
     if not evidence:
         warnings.append("This project has no measured geometry or annotations yet; every verifiable line will be reported as missing in the drawings.")
 

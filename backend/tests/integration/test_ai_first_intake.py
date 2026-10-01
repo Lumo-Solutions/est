@@ -121,7 +121,8 @@ async def test_confident_ai_classifications_are_accepted_and_routed_without_a_pe
     drawings = {d.id: d for d in (await s.execute(select(Drawing))).scalars()}
     da, db = drawings[uuid.UUID(c101a.routed_ref["drawing_id"])], drawings[uuid.UUID(c101b.routed_ref["drawing_id"])]
     assert (da.discipline_hint, db.supersedes_id) == ("roads_civil", da.id)
-    assert len(celery_calls["ingest"]) == len({d.id for d in drawings.values()}) and all(cd > 0 for _, cd in celery_calls["ingest"])
+    assert celery_calls["ingest"] == []  # routed drawings are indexed, not measured
+    assert len(celery_calls["light"]) == len(drawings) and {d.status for d in drawings.values()} == {"indexed"}
     prefill = await svc.boq_prefill(s, docs["BOQ_Rev0.xlsx"].id)
     assert (prefill.sheet_name, prefill.header_row) == ("BOQ", 3)
     assert prefill.suggested_mapping["item_no_column"] == "Item No" and prefill.suggested_mapping["quantity_column"] == "Qty"
@@ -224,9 +225,9 @@ async def test_needs_check_items_are_confirmed_or_changed_in_one_click(processed
     assert waiting["Scan_0042.pdf"].status_reason == "Confidence is below the auto-accept threshold"
     assert waiting["Scan_0042.pdf"].classified_by == "ai" and waiting["Scan_0042.pdf"].decided_by == "ai"
 
-    before = len(celery_calls["ingest"])
+    before = len(celery_calls["light"])
     scan = await svc.confirm_document(s, lead, docs["Scan_0042.pdf"].id)  # "Confirm"
-    assert (scan.status, scan.routed_kind, scan.confirmed_by) == ("routed", "drawing", lead.user_id) and len(celery_calls["ingest"]) == before + 1
+    assert (scan.status, scan.routed_kind, scan.confirmed_by) == ("routed", "drawing", lead.user_id) and len(celery_calls["light"]) == before + 1
     notes = await svc.reclassify(s, lead, docs["Notes.csv"].id, "correspondence", None, "site notes", confirm=True)  # "Change"
     assert (notes.status, notes.routed_kind, notes.classified_by, notes.doc_class) == ("routed", "register", "user", "correspondence")
     tree = await build_tree(s, processed["project"], ai_available=True, ai_message=None)
@@ -249,9 +250,12 @@ async def test_the_tree_reports_each_stage_a_file_passes_through(rls_session, fa
     await run_worker(rls_session, monkeypatch, est, package)
     tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     status = {i.name: i for i in tree.items}
-    assert status["C-101 Rev A.dxf"].display_status == "extracting"  # the drawing is queued for extraction
+    assert status["C-101 Rev A.dxf"].display_status == "ready"  # classified and indexed; measuring is on demand
     assert status["ITT.pdf"].display_status == "ready" and status["Notes.csv"].display_status == "needs_check"
-    assert tree.summary.drawings_total == 1 and tree.summary.drawings_ready == 0 and tree.summary.in_progress == 1
+    assert tree.summary.drawings_total == 1 and tree.summary.drawings_ready == 1 and tree.summary.in_progress == 0
+    await rls_session.execute(text("UPDATE drawings SET status = 'extracting'"))  # someone opened it: it is being measured
+    tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
+    assert {i.name: i.display_status for i in tree.items}["C-101 Rev A.dxf"] == "extracting" and tree.summary.in_progress == 1
     await rls_session.execute(text("UPDATE drawings SET status = 'ready'"))
     tree = await build_tree(rls_session, project_id, ai_available=True, ai_message=None)
     assert {i.name: i.display_status for i in tree.items}["C-101 Rev A.dxf"] == "ready" and tree.summary.drawings_ready == 1

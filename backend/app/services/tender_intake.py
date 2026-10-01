@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext
-from app.core.enums import AuditAction, BidSettlementStatus, DrawingKind
+from app.core.enums import AuditAction, BidSettlementStatus, DrawingKind, DrawingStatus, MeasurePriority
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.integrations.s3 import get_object_bytes, presign_get_url, put_object_streaming
 from app.intake.boq import suggest_mapping
@@ -591,11 +591,22 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
             session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id, project_id=doc.project_id,
             payload={"event": "restore_from_archive", "source": "tender_intake", "document_id": str(doc.id)},
         )
+    measure_now = False
     if created:
-        await takeoff_service.trigger_ingest(session, ctx, drawing.id, countdown=_INGEST_COUNTDOWN_S)
+        # Intake classifies and indexes only: number, title, revision, discipline, type (from the AI/rules) and the sheet
+        # count (a light task). Measuring is on demand, or automatic for the disciplines the tenant listed.
+        auto = await get_auto_measure(session)
+        measure_now = bool(doc.sub_type and doc.sub_type in auto)
+        if measure_now:
+            await takeoff_service.trigger_ingest(session, ctx, drawing.id, countdown=_INGEST_COUNTDOWN_S, priority=MeasurePriority.AUTO)
+        else:
+            drawing.status = DrawingStatus.INDEXED.value
+            await session.flush()
+            _schedule_light_index(ctx, drawing.id)
     doc.routed_kind = "drawing"
     doc.routed_ref = {
-        "drawing_id": str(drawing.id), "kind": kind, "ingest_started": created, "not_measurable": scanned, "restored": restored,
+        "drawing_id": str(drawing.id), "kind": kind, "ingest_started": measure_now, "indexed_only": created and not measure_now,
+        "not_measurable": scanned, "restored": restored,
     }
 
 
@@ -818,6 +829,22 @@ def _blocked_reason(doc: ProjectDocument, threshold: float) -> str | None:
 
 def would_auto_accept(doc: ProjectDocument, threshold: float) -> bool:
     return doc.status == DocStatus.PROPOSED.value and _blocked_reason(doc, threshold) is None
+
+
+async def get_auto_measure(session: AsyncSession) -> list[str]:
+    """Disciplines measured automatically when intake routes their drawings (default: none)."""
+    value = (await session.execute(select(TenantAiSettings.intake_auto_measure))).scalar_one_or_none()
+    return [str(v) for v in (value or [])]
+
+
+def _schedule_light_index(ctx: RequestContext, drawing_id: UUID) -> None:
+    """The sheet count of an indexed drawing, filled in by a small task (after the request transaction commits)."""
+    from app.workers.tasks.takeoff import index_drawing_light
+
+    try:
+        index_drawing_light.apply_async(args=(str(drawing_id), str(ctx.tenant_id)), countdown=_INGEST_COUNTDOWN_S, priority=9)
+    except Exception:  # noqa: BLE001 -- the count is a nicety; the drawing is routed either way
+        pass
 
 
 async def get_auto_accept_min(session: AsyncSession) -> float:
@@ -1047,6 +1074,28 @@ async def bulk_reclassify(
     return BulkConfirmOut(
         confirmed=changed, failed=failed, skipped=len(ids) - len(docs), results=results, matched=matched, next_cursor=next_cursor
     )
+
+
+async def set_auto_measure(session: AsyncSession, ctx: RequestContext, disciplines: list[str]) -> list[str]:
+    from app.intake.constants import DRAWING_SUB_TYPES
+
+    unknown = sorted(set(disciplines) - set(DRAWING_SUB_TYPES))
+    if unknown:
+        raise ValidationAppError(f"Unknown discipline(s): {', '.join(unknown)}")
+    clean = sorted(set(disciplines))
+    row = (await session.execute(select(TenantAiSettings).where(TenantAiSettings.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    before = [str(v) for v in (row.intake_auto_measure if row is not None else [])]
+    if row is None:
+        session.add(TenantAiSettings(tenant_id=ctx.tenant_id, intake_auto_measure=clean, created_by=ctx.user_id, updated_by=ctx.user_id))
+    else:
+        row.intake_auto_measure = clean
+        row.updated_by = ctx.user_id
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tenant_ai_settings", entity_id=str(ctx.tenant_id),
+        payload={"intake_auto_measure": {"before": before, "after": clean}},
+    )
+    return clean
 
 
 async def set_auto_accept_min(session: AsyncSession, ctx: RequestContext, value: float) -> float:

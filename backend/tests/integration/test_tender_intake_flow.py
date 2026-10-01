@@ -130,7 +130,10 @@ def celery_calls(monkeypatch, postgres_container):
     from app.workers.tasks.takeoff import index_sheets
     from app.workers.tasks.tender_intake import dispatch_intake
 
-    calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": []}
+    from app.workers.tasks.takeoff import index_drawing_light
+
+    calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": [], "light": []}
+    monkeypatch.setattr(index_drawing_light, "apply_async", lambda args=None, countdown=0, **kw: calls["light"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(convert_dwg, "apply_async", lambda args=None, countdown=0, **kw: calls["convert"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(index_sheets, "apply_async", lambda args=None, countdown=0, **kw: calls["ingest"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(dispatch_intake, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
@@ -293,8 +296,9 @@ async def test_bulk_confirm_routes_each_class_builds_lineage_and_flags_the_settl
     assert (da.revision_label, db.revision_label, da.discipline_hint) == ("A", "B", "roads_civil")
     assert da.object_key == a.object_key and da.bucket == a.bucket  # content-addressed, no copy
     assert db.supersedes_id == da.id and b.supersedes_id == a.id and a.routed_ref["superseded_by"] == str(b.id)
-    assert da.status == "queued" and len(celery_calls["ingest"]) == len([d for d in docs.values() if d.routed_kind == "drawing"])
-    assert all(countdown > 0 for _, countdown in celery_calls["ingest"])
+    # Intake classifies and indexes; measuring is on demand (docs/intake-scale/report.md).
+    assert da.status == "indexed" and celery_calls["ingest"] == []
+    assert len(celery_calls["light"]) == len(drawings) and all(countdown > 0 for _, countdown in celery_calls["light"])
     s201a, s201b = docs["Drawings/S-201 Rev A.pdf"], docs["S-201 Rev B.pdf"]
     assert s201b.supersedes_id == s201a.id
 
@@ -373,10 +377,15 @@ async def test_dwg_is_routed_to_a_drawing_and_sent_to_the_converter_not_the_dxf_
     await set_rls_context(rls_session, lead)
     routed = await svc.confirm_document(rls_session, lead, doc.id)
     assert (routed.status, routed.routed_kind) == ("routed", "drawing")
-    assert routed.routed_ref["kind"] == "dwg" and routed.routed_ref["ingest_started"] is True
+    assert routed.routed_ref["kind"] == "dwg" and routed.routed_ref["indexed_only"] is True
     drawing = (await rls_session.execute(select(Drawing))).scalar_one()
-    assert (drawing.kind, drawing.original_filename, drawing.status) == ("dwg", "Site_Plan.dwg", "queued")
-    assert len(celery_calls["convert"]) == 1 and celery_calls["ingest"] == []
+    assert (drawing.kind, drawing.original_filename, drawing.status) == ("dwg", "Site_Plan.dwg", "indexed")
+    assert celery_calls["convert"] == [] and celery_calls["ingest"] == []  # not converted until someone needs it measured
+    from app.services import takeoff as takeoff_service
+
+    assert await takeoff_service.request_measure(rls_session, lead, drawing.id, priority=0) == "queued"
+    await rls_session.refresh(drawing)
+    assert drawing.status == "queued" and len(celery_calls["convert"]) == 1 and celery_calls["ingest"] == []
     assert celery_calls["convert"][0][0][0] == str(drawing.id)
 
 
@@ -398,6 +407,11 @@ async def test_dwg_with_conversion_switched_off_is_flagged_and_parked_needs_conv
     await set_rls_context(rls_session, lead)
     await svc.confirm_document(rls_session, lead, doc.id)
     drawing = (await rls_session.execute(select(Drawing))).scalar_one()
+    assert drawing.status == "indexed"
+    from app.services import takeoff as takeoff_service
+
+    await takeoff_service.request_measure(rls_session, lead, drawing.id, priority=0)  # measuring it parks it with the reason
+    await rls_session.refresh(drawing)
     assert drawing.status == "needs_conversion" and drawing.conversion_reason == "disabled"
     assert celery_calls["convert"] == [] and celery_calls["ingest"] == []
 

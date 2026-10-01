@@ -32,6 +32,10 @@ class TenderPackage(TenantEntity):
     # Who paused / cancelled it and when (the audit trail has the full story).
     paused_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # A pack read by an external AI provider starts only after a lead estimator confirmed the estimated cost.
+    cost_confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    cost_confirmed_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    cost_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
 
 class ProjectDocument(TenantEntity):

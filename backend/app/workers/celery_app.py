@@ -28,7 +28,10 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     # A message a dead worker had taken but not acknowledged comes back after this long (Redis default: an hour). It
     # must exceed the longest task (the hard limits are 300-360 s), so nothing running is ever delivered twice.
-    broker_transport_options={"visibility_timeout": 1800},
+    # Priority queues (Redis emulates them with one list per step): what a person is looking at (0) runs before the
+    # verification report's needs (3), before a bulk "Measure all" (6), before automatic measuring (9).
+    broker_transport_options={"visibility_timeout": 1800, "priority_steps": [0, 3, 6, 9], "queue_order_strategy": "priority"},
+    task_default_priority=6,
     # A worker child is recycled after this many tasks or once it holds this much memory (checked between tasks), so
     # a leak or one fat file cannot grow a worker without bound. `--max-tasks-per-child` / `--max-memory-per-child` on
     # the command line (deploy/docker-compose.yml) override these.
@@ -46,6 +49,7 @@ celery_app.conf.update(
         "app.workers.tasks.takeoff.embed_drawing": {"queue": "embed"},
         "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "index"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
+        "app.workers.tasks.takeoff.index_drawing_light": {"queue": "ingest"},
         # DWG -> DXF conversion (sandboxed ODA converter); own queue/worker so a
         # slow or hostile DWG can never back up DXF/PDF ingestion.
         "app.workers.tasks.dwg.convert_dwg": {"queue": "convert"},

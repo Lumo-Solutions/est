@@ -435,6 +435,13 @@ async def package_progress(session: AsyncSession, project_id: UUID) -> list[Pack
         )
     ).all():
         counts[pid][status] += n
+    from app.core.config import get_settings
+    from app.core.context import current_context
+    from app.services import ai_cost
+
+    external = False
+    if get_settings().ai_provider not in ("local_vllm", "mock") and any(p.cost_confirmed_at is None for p in pkgs):
+        external = await ai_cost.external_ai_in_use(session, current_context(), get_settings())
     out = []
     for p in pkgs:
         c = counts[p.id]
@@ -446,6 +453,10 @@ async def package_progress(session: AsyncSession, project_id: UUID) -> list[Pack
                 id=p.id, label=p.label, status=p.status, created_at=p.created_at,
                 expected_count=p.expected_count if p.expected_count is not None else registered,
                 registered=registered, uploaded=registered - pending, waiting=waiting, pending_upload=pending,
+                awaiting_cost_confirmation=bool(
+                    external and p.cost_confirmed_at is None and p.status in (PackageStatus.PROCESSING.value, PackageStatus.UPLOADING.value, PackageStatus.PAUSED.value)
+                    and (waiting + pending) > 0
+                ),
             )
         )
     return out

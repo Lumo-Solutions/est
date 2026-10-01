@@ -296,6 +296,8 @@ class PackageProgress(BaseModel):
     # Uploaded files that have not been read yet (queued or being read).
     waiting: int
     pending_upload: int
+    # An external AI provider would read it and nobody confirmed the estimated cost yet: it is not started.
+    awaiting_cost_confirmation: bool = False
 
 
 class TreeOut(BaseModel):
@@ -368,9 +370,12 @@ class PackageControlOut(BaseModel):
 
 
 class IntakeSettingsIn(BaseModel):
-    auto_accept_min: float = Field(ge=0.5, le=1.0)
+    auto_accept_min: float | None = Field(default=None, ge=0.5, le=1.0)
+    # Disciplines whose drawings are measured automatically when intake routes them (default: none).
+    auto_measure_disciplines: list[str] | None = None
 
 
 class IntakeSettingsOut(BaseModel):
     auto_accept_min: float
     default_auto_accept_min: float = 0.85
+    auto_measure_disciplines: list[str] = []

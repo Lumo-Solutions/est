@@ -332,6 +332,9 @@ async def resume_package(session: AsyncSession, ctx: RequestContext, package_id:
     package = await _package_for_control(session, ctx, package_id)
     if package.status != PackageStatus.PAUSED.value:
         raise ConflictError(f"A {package.status} pack is not paused")
+    from app.services import ai_cost
+
+    await ai_cost.require_confirmed(session, ctx, get_settings(), package_id)  # external AI: the estimate is confirmed first
     package.status, package.paused_at = PackageStatus.PROCESSING.value, None
     await session.flush()
     status = await refresh_package_status(session, package_id)
@@ -390,6 +393,7 @@ _CLAIM_SQL = text(
           AND (d.queued_at IS NULL OR d.queued_at < now() - make_interval(secs => :requeue))
           AND d.attempts < :max_attempts
           AND p.status NOT IN ('paused', 'cancelled')
+          AND (p.cost_confirmed_at IS NOT NULL OR :free)
           AND (CAST(:package AS uuid) IS NULL OR d.package_id = CAST(:package AS uuid))
           AND (d.duplicate_of_id IS NULL OR EXISTS (
                 SELECT 1 FROM project_documents o
@@ -418,11 +422,18 @@ async def claim_for_dispatch(session: AsyncSession, tenant_id: UUID, *, package_
     room = settings.intake_dispatch_limit - int(inflight)
     if room <= 0:
         return []
+    # A pack that would be read by an external AI provider starts only once a lead estimator confirmed its estimated cost.
+    free = True
+    if settings.ai_provider not in ("local_vllm", "mock"):
+        from app.core.context import system_context
+        from app.services import ai_cost
+
+        free = not await ai_cost.external_ai_in_use(session, system_context(tenant_id), settings)
     rows = await session.execute(
         _CLAIM_SQL,
         {
             "tenant": tenant_id, "requeue": settings.intake_requeue_after_s, "max_attempts": settings.intake_max_attempts,
-            "package": package_id, "n": room,
+            "package": package_id, "n": room, "free": free,
         },
     )
     return [r[0] for r in rows.all()]

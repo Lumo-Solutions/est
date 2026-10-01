@@ -55,6 +55,8 @@ class ProviderResult:
     tokens_in: int = 0
     tokens_out: int = 0
     model: str = ""
+    # Prompt tokens the provider served from its cache (a subset of tokens_in), billed at the cached rate.
+    tokens_cached: int = 0
 
 
 class AIProvider:

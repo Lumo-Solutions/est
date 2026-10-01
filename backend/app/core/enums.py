@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import StrEnum, IntEnum
 
 
 class Role(StrEnum):
@@ -139,7 +139,18 @@ class DrawingKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class MeasurePriority(IntEnum):
+    """Lower runs first (Celery priority steps 0/3/6/9 on the Redis broker)."""
+
+    INTERACTIVE = 0  # a person opened the drawing
+    VERIFICATION = 3  # the verification report needs it
+    BULK = 6  # "Measure all: roads, drainage"
+    AUTO = 9  # configured to measure automatically on intake
+
+
 class DrawingStatus(StrEnum):
+    # Classified and indexed by intake (number, title, revision, discipline, type, sheet count); not measured.
+    INDEXED = "indexed"
     UPLOADED = "uploaded"
     QUEUED = "queued"
     CONVERTING = "converting"
