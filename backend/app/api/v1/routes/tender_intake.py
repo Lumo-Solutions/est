@@ -365,6 +365,7 @@ async def tree_items_endpoint(
     folder: str | None = None,
     include_subfolders: bool = False,
     has_class: bool | None = None,
+    exclude_flags: list[str] = Query(default=[]),
     q: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -375,7 +376,7 @@ async def tree_items_endpoint(
     doc_filter = DocFilter(
         package_id=package_id, doc_class=doc_class, discipline=discipline, drawing_type=drawing_type,
         display_status=display_status, decided_by=decided_by, flag=flag, folder=folder, include_subfolders=include_subfolders,
-        has_class=has_class, q=q,
+        has_class=has_class, exclude_flags=exclude_flags, q=q,
     )
     items, total = await tender_intake_tree.list_tree_items(session, project_id, doc_filter, limit=limit, offset=offset)
     return TreeItemPage(items=items, total=total, limit=limit, offset=offset)

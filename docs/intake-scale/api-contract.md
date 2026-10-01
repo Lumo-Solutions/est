@@ -54,7 +54,8 @@ registered files that came back `uploaded`/`rejected` before any upload.
     with `status` one of `uploading | processing | ready | failed | paused | cancelled`.
 * `GET /projects/{projectId}/tender-documents/items` -> `{ items: TreeItem[], total, limit, offset }`. Query params
   (all optional): `package_id, doc_class, discipline, drawing_type, display_status, decided_by, flag, folder,
-  include_subfolders, has_class, q, limit (<=500, default 100), offset`.
+  include_subfolders, has_class, exclude_flags (repeat the param: `exclude_flags=conflict&exclude_flags=injection_suspected`), q,
+  limit (<=500, default 100), offset`.
   * `doc_class | discipline | drawing_type` accept the literal `none` for "not set".
   * `folder=''` is the top level; `folder=A/B` is exactly that folder; add `include_subfolders=true` for its subtree.
   * `display_status`: `queued | reading | classified | extracting | ready | needs_check | failed | excluded`
