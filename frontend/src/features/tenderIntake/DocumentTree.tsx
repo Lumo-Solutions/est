@@ -8,29 +8,32 @@ import { ChangeClassDialog } from './ChangeClassDialog'
 import { EMPTY_CHOICE, type ChoiceBody, type ClassChoice } from './classChoice'
 import { DocumentRow, type RowActions } from './DocumentRow'
 import { EvidenceModal } from './EvidenceModal'
-import { useBulkReclassify, useExclude, useReclassifyDocument, useRerun, useTenderClasses } from './api'
+import { useBulkReclassify, useExclude, useInvalidateIntake, useReclassifyDocument, useRerun, useTenderClasses, useTenderItems } from './api'
 import {
   DECIDED_BY_OPTIONS,
   DISPLAY_STATUSES,
-  GROUP_PAGE_SIZE,
   NOT_CLASSIFIED_LABEL,
   NO_CLASS_FILTER,
   NO_FILTERS,
+  buildFolderNodes,
+  buildTypeNodes,
+  capList,
   classLabeler,
   classOptions,
   defaultExpanded,
   displayStatusLabel,
-  filterItems,
-  groupByFolder,
-  groupByType,
   isFiltering,
+  toDocFilter,
   type GroupMode,
   type TreeFilters,
   type TreeNode,
 } from './treeLib'
-import type { TreeItem } from './types'
+import type { DocFilter, FolderCount, GroupCount, TreeItem, TreeSummary } from './types'
+import { useDebounced } from './useDebounced'
+import { VirtualRows } from './VirtualRows'
 
 const BULK_MAX = 1000
+const SEARCH_DEBOUNCE_MS = 250
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Request failed')
 
 function FilterSelect({ id, label, value, onChange, children }: { id: string; label: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) {
@@ -46,85 +49,156 @@ function FilterSelect({ id, label, value, onChange, children }: { id: string; la
   )
 }
 
-// Tri-state checkbox for a group header: every file, some files, or none selected.
-function GroupCheckbox({ label, ids, selected, onToggle }: { label: string; ids: string[]; selected: ReadonlySet<string>; onToggle: (ids: string[], on: boolean) => void }) {
-  const ref = useRef<HTMLInputElement>(null)
-  const n = ids.reduce((c, id) => c + (selected.has(id) ? 1 : 0), 0)
-  const all = ids.length > 0 && n === ids.length
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = n > 0 && !all
-  }, [n, all])
+/** A whole group (or every match of the filters), selected server-side: only its filter and count are kept. */
+interface GroupSelection {
+  key: string
+  label: string
+  filter: DocFilter
+  count: number
+  classHint: string
+}
+
+type ChangeTarget =
+  | { kind: 'single'; item: TreeItem }
+  | { kind: 'ids'; items: TreeItem[] }
+  | { kind: 'group'; group: GroupSelection }
+
+interface Pending {
+  target: ChangeTarget
+  body: ChoiceBody
+}
+
+type ItemsQuery = ReturnType<typeof useTenderItems>
+
+// The pages of one server-side list in a virtualised, scrollable box.
+function ItemPages({
+  query,
+  label,
+  canAct,
+  selected,
+  showFolder,
+  actions,
+}: {
+  query: ItemsQuery
+  label: string
+  canAct: boolean
+  selected: ReadonlySet<string>
+  showFolder: boolean
+  actions: RowActions
+}) {
+  const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
+  const total = query.data?.pages[0]?.total ?? 0
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  if (query.isError) {
+    return (
+      <p role="alert" className="py-2 text-sm text-danger">
+        {msg(query.error)}
+      </p>
+    )
+  }
+  if (query.isLoading) return <p className="py-2 text-sm text-ink-2">Loading files...</p>
+  if (items.length === 0) return null
   return (
-    <input
-      ref={ref}
-      type="checkbox"
-      aria-label={label}
-      checked={all}
-      onChange={(e) => onToggle(ids, e.target.checked)}
-      className="h-4 w-4 shrink-0 accent-brand"
+    <VirtualRows
+      label={label}
+      items={items}
+      total={total}
+      hasMore={Boolean(hasNextPage)}
+      loadingMore={isFetchingNextPage}
+      onLoadMore={loadMore}
+      getKey={(i) => i.id}
+      renderRow={(item) => <DocumentRow item={item} canAct={canAct} selected={selected.has(item.id)} showFolder={showFolder} actions={actions} />}
     />
   )
 }
 
-interface Pending {
-  targets: TreeItem[]
-  body: ChoiceBody
-  bulk: boolean
+// Mounted only while its group is open, so a collapsed group costs nothing and an open one fetches its own files.
+function GroupFiles({ projectId, node, ...rest }: { projectId: string; node: TreeNode; canAct: boolean; selected: ReadonlySet<string>; showFolder: boolean; actions: RowActions }) {
+  const query = useTenderItems(projectId, node.listFilter)
+  return <ItemPages query={query} label={`${node.label} files`} {...rest} />
 }
 
-// The organised document tree: every file grouped by type (class, then discipline and drawing type
-// for drawings) or by the folders it was uploaded in, with search, filters, row actions and bulk
-// change-class. Collapsed groups render nothing and long groups page in 100 at a time, so a
-// 300-file tender stays responsive.
-export function DocumentTree({ projectId, items, canConfirm }: { projectId: string; items: TreeItem[]; canConfirm: boolean }) {
+// The organised document tree. The server sends counts only: groups are built from them, a group fetches its own
+// files (100 a page, virtualised) when opened, and search and the filters run server-side as one flat list.
+export function DocumentTree({
+  projectId,
+  summary,
+  groups,
+  folders,
+  canConfirm,
+}: {
+  projectId: string
+  summary: TreeSummary
+  groups: GroupCount[]
+  folders: FolderCount[]
+  canConfirm: boolean
+}) {
   const { data: classes = [] } = useTenderClasses()
   const reclassify = useReclassifyDocument(projectId)
-  const bulkReclassify = useBulkReclassify(projectId)
+  const bulkReclassify = useBulkReclassify(projectId, { quiet: true })
+  const invalidateIntake = useInvalidateIntake(projectId)
   const exclude = useExclude(projectId)
   const rerun = useRerun(projectId)
 
   const [mode, setMode] = useState<GroupMode>('type')
-  const [filters, setFilters] = useState<TreeFilters>(NO_FILTERS)
+  const [typed, setTyped] = useState<TreeFilters>(NO_FILTERS)
   const [openOverride, setOpenOverride] = useState<Record<string, boolean>>({})
-  const [limits, setLimits] = useState<Record<string, number>>({})
-  const [selectedRaw, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [selectedItems, setSelectedItems] = useState<ReadonlyMap<string, TreeItem>>(new Map())
+  const [groupSel, setGroupSel] = useState<GroupSelection | null>(null)
   const [evidenceItem, setEvidenceItem] = useState<TreeItem | null>(null)
   const [excludeItem, setExcludeItem] = useState<TreeItem | null>(null)
-  const [changeTargets, setChangeTargets] = useState<{ items: TreeItem[]; bulk: boolean } | null>(null)
+  const [changeTarget, setChangeTarget] = useState<ChangeTarget | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [failures, setFailures] = useState<string[]>([])
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [progress, setProgress] = useState<{ changed: number; total: number } | null>(null)
+  const cancelRef = useRef(false)
+
+  // The search box applies after a short pause; the selects apply at once.
+  const debouncedQ = useDebounced(typed.q, SEARCH_DEBOUNCE_MS)
+  const appliedQ = typed.q.trim() === '' ? '' : debouncedQ
+  const filters = useMemo<TreeFilters>(() => ({ ...typed, q: appliedQ }), [typed, appliedQ])
+  const filtering = isFiltering(filters)
+  const serverFilter = useMemo(() => toDocFilter(filters), [filters])
+  const flat = useTenderItems(projectId, serverFilter, { enabled: filtering })
+  const flatTotal = flat.data?.pages[0]?.total
 
   const classLabel = useMemo(() => classLabeler(classes), [classes])
   const options = useMemo(() => classOptions(classes), [classes])
-  const filtering = isFiltering(filters)
-  const visible = useMemo(() => filterItems(items, filters), [items, filters])
-  const nodes = useMemo(() => (mode === 'type' ? groupByType(visible, classLabel) : groupByFolder(visible)), [mode, visible, classLabel])
-  const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
-  // Ignore selected ids that are filtered out or gone (a poll or reclassify moved them).
-  const visibleIds = useMemo(() => new Set(visible.map((i) => i.id)), [visible])
-  const selected = useMemo(() => new Set([...selectedRaw].filter((id) => visibleIds.has(id))), [selectedRaw, visibleIds])
+  const nodes = useMemo(() => (mode === 'type' ? buildTypeNodes(groups, classLabel) : buildFolderNodes(folders)), [mode, groups, folders, classLabel])
+  const selectedIds = useMemo(() => new Set(selectedItems.keys()), [selectedItems])
 
-  const setFilter = (patch: Partial<TreeFilters>) => setFilters((f) => ({ ...f, ...patch }))
-  const isOpen = (n: TreeNode) => openOverride[n.key] ?? defaultExpanded(n, mode, { filtering, total: items.length })
+  const setFilter = (patch: Partial<TreeFilters>) => setTyped((f) => ({ ...f, ...patch }))
+  const isOpen = (n: TreeNode) => openOverride[n.key] ?? defaultExpanded(n, mode, { total: summary.total })
 
-  const toggleIds = useCallback((ids: string[], on: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      for (const id of ids) {
-        if (on) next.add(id)
-        else next.delete(id)
-      }
+  const toggleItem = useCallback((item: TreeItem, on: boolean) => {
+    setGroupSel(null)
+    setSelectedItems((prev) => {
+      const next = new Map(prev)
+      if (on) next.set(item.id, item)
+      else next.delete(item.id)
       return next
     })
   }, [])
+  const toggleGroup = (sel: GroupSelection, on: boolean) => {
+    setSelectedItems(new Map())
+    setGroupSel(on ? sel : null)
+  }
+  const clearSelection = () => {
+    setSelectedItems(new Map())
+    setGroupSel(null)
+  }
 
   const handlers = {
-    onSelect: (id: string, on: boolean) => toggleIds([id], on),
+    onSelect: toggleItem,
     onView: (item: TreeItem) => setEvidenceItem(item),
-    onChange: (item: TreeItem) => setChangeTargets({ items: [item], bulk: false }),
+    onChange: (item: TreeItem) => setChangeTarget({ kind: 'single', item }),
     onExclude: (item: TreeItem) => setExcludeItem(item),
     onRerun: (item: TreeItem) => {
       setActionError(null)
@@ -138,7 +212,7 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
   })
   const actions = useMemo<RowActions>(
     () => ({
-      onSelect: (id, on) => latest.current.onSelect(id, on),
+      onSelect: (i, on) => latest.current.onSelect(i, on),
       onView: (i) => latest.current.onView(i),
       onChange: (i) => latest.current.onChange(i),
       onExclude: (i) => latest.current.onExclude(i),
@@ -147,68 +221,134 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
     [],
   )
 
-  const runChange = async ({ targets, body, bulk }: Pending) => {
+  // Bulk change of class: chunks of ids, or a cursor loop over a whole group, stoppable after the current chunk.
+  const runBulk = async (target: Exclude<ChangeTarget, { kind: 'single' }>, body: ChoiceBody) => {
     setActionError(null)
     setStatusMsg(null)
     setFailures([])
-    if (!bulk) {
-      const item = targets[0]
-      reclassify.mutate(
-        { id: item.id, ...body, confirm: true },
-        { onError: (e) => setActionError(`Could not change the class of ${item.name}: ${msg(e)}`) },
-      )
-      return
-    }
     setBulkBusy(true)
-    let confirmed = 0
+    cancelRef.current = false
+    const names = new Map<string, string>(target.kind === 'ids' ? target.items.map((i) => [i.id, i.name]) : [])
+    let total = target.kind === 'ids' ? target.items.length : target.group.count
+    let changed = 0
     let failed = 0
     let skipped = 0
+    let stopped = false
     const fails: string[] = []
-    const ids = targets.map((t) => t.id)
+    setProgress({ changed, total })
+    const tally = (r: Awaited<ReturnType<typeof bulkReclassify.mutateAsync>>) => {
+      changed += r.confirmed
+      failed += r.failed
+      skipped += r.skipped
+      for (const x of r.results) if (!x.ok && x.error) fails.push(`${names.get(x.id) ?? x.id}: ${x.error}`)
+      setProgress({ changed, total })
+    }
     try {
-      for (let i = 0; i < ids.length; i += BULK_MAX) {
-        const r = await bulkReclassify.mutateAsync({ document_ids: ids.slice(i, i + BULK_MAX), ...body, confirm: true })
-        confirmed += r.confirmed
-        failed += r.failed
-        skipped += r.skipped
-        for (const x of r.results) if (!x.ok && x.error) fails.push(`${byId.get(x.id)?.name ?? x.id}: ${x.error}`)
+      if (target.kind === 'ids') {
+        const ids = target.items.map((t) => t.id)
+        for (let i = 0; i < ids.length; i += BULK_MAX) {
+          if (cancelRef.current) {
+            stopped = true
+            break
+          }
+          tally(await bulkReclassify.mutateAsync({ document_ids: ids.slice(i, i + BULK_MAX), ...body, confirm: true }))
+        }
+      } else {
+        let cursor: string | null = null
+        let first = true
+        do {
+          if (cancelRef.current) {
+            stopped = true
+            break
+          }
+          const r: Awaited<ReturnType<typeof bulkReclassify.mutateAsync>> = await bulkReclassify.mutateAsync({ filter: target.group.filter, cursor, ...body, confirm: true })
+          if (first && r.matched != null) total = r.matched
+          first = false
+          tally(r)
+          const next: string | null = r.next_cursor ?? null
+          if (next === cursor) break
+          cursor = next
+        } while (cursor)
       }
     } catch (e) {
       fails.push(msg(e))
     } finally {
       setBulkBusy(false)
+      setProgress(null)
+      invalidateIntake()
     }
-    setStatusMsg(`Changed ${confirmed}, failed ${failed}${skipped > 0 ? `, skipped ${skipped}` : ''}`)
+    setStatusMsg(
+      `Changed ${changed} of ${total}${failed > 0 ? `, failed ${failed}` : ''}${skipped > 0 ? `, skipped ${skipped}` : ''}${stopped ? '. Stopped before the rest.' : ''}`,
+    )
     setFailures(fails)
-    setSelected(new Set())
+    clearSelection()
   }
 
-  // A routed drawing that stops being a drawing leaves the takeoff: ask first.
+  const runChange = ({ target, body }: Pending) => {
+    if (target.kind === 'single') {
+      setActionError(null)
+      setStatusMsg(null)
+      setFailures([])
+      reclassify.mutate(
+        { id: target.item.id, ...body, confirm: true },
+        { onError: (e) => setActionError(`Could not change the class of ${target.item.name}: ${msg(e)}`) },
+      )
+      return
+    }
+    void runBulk(target, body)
+  }
+
+  // A routed drawing that stops being a drawing leaves the takeoff: ask first. For a whole group the server decides
+  // which files those are, so ask whenever the group could hold drawings.
+  const leavesDrawings = (target: ChangeTarget, body: ChoiceBody): boolean => {
+    if (body.doc_class === 'drawing') return false
+    if (target.kind === 'single') return target.item.routed_kind === 'drawing'
+    if (target.kind === 'ids') return target.items.some((t) => t.routed_kind === 'drawing')
+    return target.group.classHint === 'drawing' || target.group.classHint === 'mixed'
+  }
   const applyChange = (body: ChoiceBody) => {
-    if (!changeTargets) return
-    const next: Pending = { targets: changeTargets.items, body, bulk: changeTargets.bulk }
-    setChangeTargets(null)
-    const leaving = next.targets.filter((t) => t.routed_kind === 'drawing' && body.doc_class !== 'drawing')
-    if (leaving.length > 0) setPending(next)
-    else void runChange(next)
+    if (!changeTarget) return
+    const next: Pending = { target: changeTarget, body }
+    setChangeTarget(null)
+    if (leavesDrawings(changeTarget, body)) setPending(next)
+    else runChange(next)
   }
 
-  const leavingCount = pending ? pending.targets.filter((t) => t.routed_kind === 'drawing').length : 0
-  const only = changeTargets && changeTargets.items.length === 1 ? changeTargets.items[0] : null
+  const pendingMessage = (p: Pending): string => {
+    if (p.target.kind === 'group') {
+      return `Some of the ${p.target.group.count} files in ${p.target.group.label} may be drawings. Any drawing leaves the takeoff. Their measurements are archived, not deleted.`
+    }
+    const n = p.target.kind === 'single' ? 1 : p.target.items.filter((t) => t.routed_kind === 'drawing').length
+    return `${n} ${n === 1 ? 'drawing leaves' : 'drawings leave'} the takeoff. Their measurements are archived, not deleted.`
+  }
+
+  const only = changeTarget?.kind === 'single' ? changeTarget.item : null
+  const targetCount = !changeTarget ? 0 : changeTarget.kind === 'single' ? 1 : changeTarget.kind === 'ids' ? changeTarget.items.length : changeTarget.group.count
   const initial: ClassChoice = only
     ? { doc_class: only.doc_class ?? '', discipline: only.discipline ?? '', drawing_type: only.drawing_type ?? '' }
     : EMPTY_CHOICE
 
+  const startChangeSelected = () => {
+    if (groupSel) setChangeTarget({ kind: 'group', group: groupSel })
+    else setChangeTarget({ kind: 'ids', items: [...selectedItems.values()] })
+  }
+  const selectedCount = groupSel ? groupSel.count : selectedItems.size
+
   const renderNode = (node: TreeNode): React.ReactNode => {
     const open = isOpen(node)
-    const limit = limits[node.key] ?? GROUP_PAGE_SIZE
-    const shown = node.items.slice(0, limit)
-    const hidden = node.items.length - shown.length
     return (
       <div key={node.key} role="group" aria-label={`${node.label}, ${node.count} ${node.count === 1 ? 'file' : 'files'}`}>
         <div className="flex items-center gap-2 py-1.5">
           {canConfirm && (
-            <GroupCheckbox label={`Select all ${node.count} in ${node.label}`} ids={node.ids} selected={selected} onToggle={toggleIds} />
+            <input
+              type="checkbox"
+              aria-label={`Select all ${node.count} in ${node.label}`}
+              checked={groupSel?.key === node.key}
+              onChange={(e) =>
+                toggleGroup({ key: node.key, label: node.label, filter: node.selectFilter, count: node.count, classHint: node.classHint }, e.target.checked)
+              }
+              className="h-4 w-4 shrink-0 accent-brand"
+            />
           )}
           <button
             type="button"
@@ -226,19 +366,8 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
         {open && (
           <div className="ml-2 border-l border-row-rule pl-3">
             {node.children.map(renderNode)}
-            {shown.length > 0 && (
-              <ul aria-label={`${node.label} files`} className="divide-y divide-row-rule">
-                {shown.map((item) => (
-                  <DocumentRow key={item.id} item={item} canAct={canConfirm} selected={selected.has(item.id)} showFolder={mode === 'type'} actions={actions} />
-                ))}
-              </ul>
-            )}
-            {hidden > 0 && (
-              <div className="py-2">
-                <Button variant="secondary" size="sm" onClick={() => setLimits((l) => ({ ...l, [node.key]: limit + GROUP_PAGE_SIZE }))}>
-                  Show {Math.min(hidden, GROUP_PAGE_SIZE)} more ({hidden} not shown)
-                </Button>
-              </div>
+            {node.listFilter && (
+              <GroupFiles projectId={projectId} node={node} canAct={canConfirm} selected={selectedIds} showFolder={mode === 'type'} actions={actions} />
             )}
           </div>
         )}
@@ -258,6 +387,9 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
       {label}
     </button>
   )
+
+  const failureView = capList(failures, 20)
+  const matchLabel = `${flatTotal ?? 0} ${flatTotal === 1 ? 'file matches' : 'files match'}`
 
   return (
     <Card className="mt-6">
@@ -280,13 +412,13 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
           <input
             id="tree-search"
             type="search"
-            value={filters.q}
+            value={typed.q}
             onChange={(e) => setFilter({ q: e.target.value })}
             placeholder="Name, folder, number or title"
             className={controlClasses}
           />
         </div>
-        <FilterSelect id="tree-class" label="Class" value={filters.docClass} onChange={(v) => setFilter({ docClass: v })}>
+        <FilterSelect id="tree-class" label="Class" value={typed.docClass} onChange={(v) => setFilter({ docClass: v })}>
           <option value="">All classes</option>
           {options.map((c) => (
             <option key={c.code} value={c.code}>
@@ -295,7 +427,7 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
           ))}
           <option value={NO_CLASS_FILTER}>{NOT_CLASSIFIED_LABEL}</option>
         </FilterSelect>
-        <FilterSelect id="tree-status" label="Status" value={filters.status} onChange={(v) => setFilter({ status: v })}>
+        <FilterSelect id="tree-status" label="Status" value={typed.status} onChange={(v) => setFilter({ status: v })}>
           <option value="">All statuses</option>
           {DISPLAY_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -303,7 +435,7 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
             </option>
           ))}
         </FilterSelect>
-        <FilterSelect id="tree-decided" label="Decided by" value={filters.decidedBy} onChange={(v) => setFilter({ decidedBy: v })}>
+        <FilterSelect id="tree-decided" label="Decided by" value={typed.decidedBy} onChange={(v) => setFilter({ decidedBy: v })}>
           <option value="">Anyone</option>
           {DECIDED_BY_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -315,27 +447,39 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <p aria-live="polite" className="text-sm text-ink-2">
-          {filtering ? `${visible.length} of ${items.length} files match` : `${items.length} ${items.length === 1 ? 'file' : 'files'}`}
+          {filtering
+            ? flatTotal === undefined
+              ? 'Searching...'
+              : matchLabel
+            : `${summary.total} ${summary.total === 1 ? 'file' : 'files'}`}
         </p>
-        {filtering && (
-          <Button variant="secondary" size="sm" onClick={() => setFilters(NO_FILTERS)}>
+        {isFiltering(typed) && (
+          <Button variant="secondary" size="sm" onClick={() => setTyped(NO_FILTERS)}>
             Clear filters
           </Button>
         )}
       </div>
 
-      {canConfirm && selected.size > 0 && (
+      {canConfirm && selectedCount > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-card bg-brand-subtle px-4 py-2">
-          <span className="text-sm font-medium text-ink">{selected.size} selected</span>
-          <Button
-            size="sm"
-            loading={bulkBusy}
-            onClick={() => setChangeTargets({ items: [...selected].map((id) => byId.get(id)).filter((i): i is TreeItem => Boolean(i)), bulk: true })}
-          >
-            Change class for {selected.size} {selected.size === 1 ? 'file' : 'files'}
+          <span className="text-sm font-medium text-ink">
+            {groupSel ? `All ${groupSel.count} in ${groupSel.label} selected` : `${selectedCount} selected`}
+          </span>
+          <Button size="sm" loading={bulkBusy} onClick={startChangeSelected}>
+            Change class for {selectedCount} {selectedCount === 1 ? 'file' : 'files'}
           </Button>
-          <Button variant="secondary" size="sm" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
+          <Button variant="secondary" size="sm" disabled={bulkBusy} onClick={clearSelection}>
             Clear selection
+          </Button>
+        </div>
+      )}
+      {progress && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p role="status" className="text-sm text-ink">
+            Changed {progress.changed} of {progress.total}
+          </p>
+          <Button variant="secondary" size="sm" onClick={() => (cancelRef.current = true)}>
+            Cancel
           </Button>
         </div>
       )}
@@ -344,11 +488,12 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
           {statusMsg}
         </p>
       )}
-      {failures.length > 0 && (
+      {failureView.shown.length > 0 && (
         <ul role="alert" className="mt-2 space-y-1 text-sm text-danger">
-          {failures.map((f, i) => (
+          {failureView.shown.map((f, i) => (
             <li key={`${i}-${f}`}>{f}</li>
           ))}
+          {failureView.more > 0 && <li>and {failureView.more} more</li>}
         </ul>
       )}
       {actionError && (
@@ -358,42 +503,53 @@ export function DocumentTree({ projectId, items, canConfirm }: { projectId: stri
       )}
 
       <div className="mt-3">
-        {visible.length === 0 ? (
-          <p className="py-4 text-base text-ink-2">{filtering ? 'No files match your search or filters.' : 'No documents yet.'}</p>
+        {filtering ? (
+          <>
+            {canConfirm && flatTotal !== undefined && flatTotal > 0 && (
+              <label className="mb-2 flex items-center gap-2 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={groupSel?.key === 'filtered'}
+                  onChange={(e) => toggleGroup({ key: 'filtered', label: 'the matching files', filter: serverFilter, count: flatTotal, classHint: 'mixed' }, e.target.checked)}
+                  className="h-4 w-4 shrink-0 accent-brand"
+                />
+                Select all {flatTotal} matching files
+              </label>
+            )}
+            <ItemPages query={flat} label="Matching files" canAct={canConfirm} selected={selectedIds} showFolder actions={actions} />
+            {flatTotal === 0 && <p className="py-4 text-base text-ink-2">No files match your search or filters.</p>}
+          </>
+        ) : nodes.length === 0 ? (
+          <p className="py-4 text-base text-ink-2">No documents yet.</p>
         ) : (
           nodes.map(renderNode)
         )}
       </div>
 
-      <EvidenceModal
-        documentId={evidenceItem?.id ?? null}
-        filename={evidenceItem?.name ?? ''}
-        classes={classes}
-        onClose={() => setEvidenceItem(null)}
-      />
+      <EvidenceModal documentId={evidenceItem?.id ?? null} filename={evidenceItem?.name ?? ''} classes={classes} onClose={() => setEvidenceItem(null)} />
       <ChangeClassDialog
-        open={changeTargets !== null}
+        open={changeTarget !== null}
         title={only ? `Change class of ${only.name}` : 'Change class'}
         description={
           only
             ? 'The file is sorted under the new class straight away.'
-            : `New class for ${changeTargets?.items.length ?? 0} selected files. They are sorted under it straight away.`
+            : `New class for ${targetCount} selected files. They are sorted under it straight away.`
         }
         options={options}
         initial={initial}
-        onCancel={() => setChangeTargets(null)}
+        onCancel={() => setChangeTarget(null)}
         onApply={applyChange}
       />
       <ConfirmModal
         open={pending !== null}
         title="Take this out of the takeoff?"
-        message={`${leavingCount} ${leavingCount === 1 ? 'drawing leaves' : 'drawings leave'} the takeoff. Their measurements are archived, not deleted.`}
+        message={pending ? pendingMessage(pending) : ''}
         confirmLabel="Change class"
         onCancel={() => setPending(null)}
         onConfirm={() => {
           const p = pending
           setPending(null)
-          if (p) void runChange(p)
+          if (p) runChange(p)
         }}
       />
       <TextPromptModal

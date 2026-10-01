@@ -1,11 +1,11 @@
 import { memo } from 'react'
 import { Badge } from '../../components/Badge'
-import { confidenceTone, flagLabel, formatConfidence } from './lib'
-import { decidedByInfo, displayStatusLabel, displayStatusTone, folderSegments, formatUnitType, visibleFlags } from './treeLib'
+import { confidenceTone, formatConfidence } from './lib'
+import { decidedByInfo, displayStatusLabel, displayStatusTone, flagText, folderSegments, formatUnitType, visibleFlags } from './treeLib'
 import type { TreeItem } from './types'
 
 export interface RowActions {
-  onSelect: (id: string, selected: boolean) => void
+  onSelect: (item: TreeItem, selected: boolean) => void
   onView: (item: TreeItem) => void
   onChange: (item: TreeItem) => void
   onExclude: (item: TreeItem) => void
@@ -45,14 +45,14 @@ export const DocumentRow = memo(function DocumentRow({
   const checkable = item.display_status !== 'excluded'
 
   return (
-    <li className="flex flex-wrap items-start gap-x-3 gap-y-1 py-2">
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-1 py-2">
       {canAct && (
         <input
           type="checkbox"
           aria-label={`Select ${item.name}`}
           checked={selected}
           disabled={!checkable}
-          onChange={(e) => actions.onSelect(item.id, e.target.checked)}
+          onChange={(e) => actions.onSelect(item, e.target.checked)}
           className="mt-1 h-4 w-4 shrink-0 accent-brand"
         />
       )}
@@ -89,7 +89,7 @@ export const DocumentRow = memo(function DocumentRow({
         {decided && <Badge tone={decided.tone}>{decided.label}</Badge>}
         {visibleFlags(item).map(({ flag, tone }) => (
           <Badge key={flag} tone={tone}>
-            {flagLabel(flag)}
+            {flagText(flag)}
           </Badge>
         ))}
       </div>
@@ -116,6 +116,6 @@ export const DocumentRow = memo(function DocumentRow({
           </button>
         )}
       </div>
-    </li>
+    </div>
   )
 })
