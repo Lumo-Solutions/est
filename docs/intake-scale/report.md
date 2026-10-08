@@ -147,21 +147,105 @@ BOQ xlsx/csv/pdf, specs, docx, addenda, 100 duplicates, junk, 8 zips), mock prov
 * Peak memory per container (docker stats, 3 s samples): ingest worker 1,417 MiB of 1.5 GiB, index worker 1,677 MiB of 2 GiB, backend 474 MiB of 1 GiB,
   vlm 357 MiB, email 230, quotation 220, convert 212, beat 143; unlimited: Postgres 2,442, SeaweedFS 1,933, Keycloak 498. Nothing was OOM-killed.
 * Time: intake reading ran at about 40-60 files/min with 2 children (about 40 min for 2,051 files once uploaded). **The drawing pipeline did not finish**:
-  with one index child, 114 of 898 drawings were `ready` (183 extracting, 601 queued) when the run was stopped, because the host ran out of memory
-  (Claude Code reaped two background pollers). Total wall clock is therefore not a meaningful number (the sampler recorded 3.5 h including idle time).
+  with one index child, 114 of 898 drawings were `ready` (183 extracting, 601 queued) when the run was stopped. (First attributed to host memory; that was wrong, see section 7.) Total wall clock is therefore not a meaningful number (the sampler recorded 3.5 h including idle time).
 
 Bugs the runs found and fixed (all with tests): CAD PDFs in pdfplumber (above); a stalled upload held a DB transaction and blocked backend reload (idle timeout);
 copies registered in a later batch attached to another copy instead of the root and stayed pending (recursive release); rejected junk kept a pack
 "uploading" for ever; the dispatcher's uuid parameter; an addendum routed before its drawing; index tasks starving intake (own queue).
 
-## Not done / open (stated plainly)
+## 7. Why the drawing run showed 114 of 898 (diagnosis, re-run on 8 Oct)
 
-* **Your crashed packs were NOT resumed with the real provider, and nothing was merged.** There are two: project `103` pack `661d42e3` (560 files, the 07:04
-  crash) and project `102` pack `948b4c0f` (1,588 files, 2.7 GB, uploaded yesterday and stuck in processing). Both are **paused** (so nothing touches them) and
-  every worker is stopped. The 1,588-file pack is fully uploaded and only needs reading; the 560-file one also needs the rest of the folder re-dropped.
-  Resume = start the stack with your normal AI provider, press Resume on each pack. The real run will spend provider money (the 9 earlier calls cost $0.70, vision calls ~$0.08 each).
-* Incident I caused and reversed: when I first started the workers they were on the mock provider and read 132 files of pack `948b4c0f` (44 classified by mock,
-  38 parked as too large, 10 rejected). I reset the 44 mock-classified files to `received` (their classification rows deleted; the audit trail keeps the entries).
-* e2e (mocked and real-backend) were not re-run after the UI changes: `intake-scale.spec.ts` is written, `tender-intake.spec.ts` / `ai-first-intake.spec.ts` were only
-  adapted for the new `/tree` shape and will need UI-assertion updates.
-* Unit (705), integration (313 + new) and API (107) suites passed separately before the last fixes; the last fixes were re-run on the intake files only.
+**The earlier explanation (host out of memory) was wrong.** The run was slow and was stopped while it was still working; it kept
+going afterwards: the same project now holds 858 `ready`, 21 `failed` and 19 others (898 drawings). Its job table
+(`extraction_jobs`) gives the time per stage:
+
+| stage | jobs | avg | median | p95 | max | total job time |
+|---|---|---|---|---|---|---|
+| `index_sheets` (index worker, 1 child) | 858 | 31.3 s | 15.0 s | 111 s | 250 s | **7.5 h** |
+| `embed_sheet` | 858 | 4.6 s | 3.1 s | 14 s | 42 s | 1.1 h |
+| `extract_geometry` | 858 | 2.4 s | 1.2 s | 8 s | 15 s | 0.6 h |
+| `extract_title_block` | 3,033 | 1.0 s | 0.8 s | 2.5 s | 21 s | 0.9 h |
+| `finalize` | 858 | 13 ms | | | | |
+
+**Cause, in order of weight**
+
+1. **Throughput of one worker child.** Reading the pages of a drawing (`index_sheets`: text, objects, page renders) is CPU-bound
+   (the index container sits at about 120 % CPU) and takes about 4 s per sheet for small sheets and up to 13 s per sheet for the
+   3-8 sheet CAD plans. With concurrency 1, 898 drawings are 7.5-8 hours of work however the host behaves. Nothing was hung.
+2. **Queue order made it look worse than it was.** `extract_geometry_measurements` is routed to the *same* `index` queue, and the
+   queue is first-in-first-out within a priority. A drawing's geometry task is only sent when its `index_sheets` ends, so it goes
+   to the back of the line, behind every `index_sheets` still waiting. All drawings get indexed first and are finished afterwards
+   (breadth first): `ready` stays flat while `extracting` grows. Seen in the broker: the priority-6 queue held 101 `index_sheets`
+   and 22 geometry tasks in arrival order. That is the "114 ready, 183 extracting, 601 queued" picture: the 114 were the drawings
+   that went through before the backlog built up.
+3. **Long drawing sets hit the 300 s limit** (39-55 pages) and fail with a time-out; each holds the one child for 5 minutes.
+4. By design the auto-measure list uses the lowest priority (9), so its drawings finish after everything a person asked for.
+5. Memory was not the limit (peaks below).
+
+**Small reproduction** (mock AI provider, project `REPRO-1`, 320-file pack = 143 drawings, auto-measure ON for `roads_civil`,
+then "Measure all" for the other seven disciplines, the path a lead estimator uses):
+
+* Upload and reading of 320 files: about 8 minutes (7 files refused as junk). Intake created 143 drawings as `indexed` and started
+  measuring only the 18 `roads_civil` ones: **auto-measure behaves as designed.**
+* Index time per drawing, first 59 finished: **avg 37 s, median 28 s, max 203 s**. Drawings of 1-2 sheets average 7 s (4.2 s per
+  sheet), of 3-8 sheets 66 s (13 s per sheet). Embedding 3.3 s, geometry 2.5 s, title block 0.8 s on average.
+* The last drawing reached `ready` at 09:54 and **none did for the next 42 minutes** while 59 `index_sheets` ran (at the end:
+  ready 7, extracting 51, queued 82, failed 3): the index backlog has to drain before geometry runs.
+* Two long sets failed on the 300 s limit; their `error_message` is raw SQLAlchemy text instead of the "took longer than 300
+  seconds" sentence, because the limit fired inside a flush (see "Open").
+* **Peak memory** (docker stats, 3 s samples, whole run): index worker 1,258 MiB of 2 GiB, default worker 1,161 MiB of 1.5 GiB,
+  backend 711 MiB, Postgres 2,333 MiB (unlimited), SeaweedFS 880 MiB, Keycloak 492, vlm 353, email 228, quotation 217, convert 205,
+  beat 147. Nothing near a limit, nothing killed. The host had 3.8 GB free of 15.9 GB with the Docker VM capped at 7.7 GB.
+* I stopped the run at 59 of 143 indexed (about 1 h 15 min in; the remaining 82 drawings / 420 sheets needed another hour or more
+  and would have blocked the other specs on the shared workers), purged the repro's own index queue, deleted the `REPRO-1` project
+  and reset the auto-measure list to none. The poll log is `docs/intake-scale/repro-poll.log`.
+
+**What would fix it** (not done; your decision): (a) send a drawing's continuation (geometry, finalize) one priority step above its
+own `index_sheets`, so a drawing finishes before the next one starts (depth first; `ready` then climbs steadily); (b) a second
+index child (`INDEX_CONCURRENCY=2` needs about 1.3 GB more; set it only after sizing the Docker VM at 10 GB); (c) a higher soft
+limit or a per-sheet budget for long sets. (a) is a few lines in `index_sheets` plus its priority tests.
+
+## 8. Tests (8 Oct, one suite at a time, final state)
+
+| suite | result |
+|---|---|
+| backend unit | 719 passed |
+| backend integration | 337 passed (one earlier run had 1 failure, a load-related flake of `test_every_readable_file...`; it passed 3 of 3 repeats and in the clean full re-run) |
+| backend API | 113 passed |
+| frontend tsc -b / build | clean / built |
+| vitest | 307 passed (41 files) |
+| oxlint | 0 errors (warnings that were already there) |
+| mocked Playwright | 5 passed |
+| real-backend, `--workers=1`, each alone | intake-scale 2 passed (+1 skipped: the opt-in 2,000-file test, needs `SCALE_PROJECT`); ai-first-intake 4; tender-intake 4; ai-walkthrough 2; project-pages 8; layout-widths 1 |
+
+The tests for the new behaviour exist and pass: no auto-measure on intake (`test_intake_routes_drawings_as_indexed_and_starts_no_measurement`),
+the auto-measure list at the lowest priority, on demand when opened (idempotent, bumps a queued bulk request), bulk measure by
+discipline / type with audit and lead-only (`test_measure_all_picks_by_discipline...`, `test_bulk_measure_is_lead_only...`), priority
+order against a real Redis broker (`test_celery_runs_the_urgent_message_first...`), cost estimate and confirm (`test_the_estimate_is_...`,
+`test_a_pack_on_an_external_provider_does_not_start_until...`, API `test_cost_estimate_and_confirmation_are_lead_only`), cached-token
+pricing (`test_ai_pricing_qwen.py`, API usage view).
+
+**Failures found and how they were fixed**
+
+* Product bug (fixed, with a regression test): **a later revision read before its predecessor never got `revision_of`.** Files are
+  read in parallel now, so Rev B could be classified before Rev A, and the flag was only looked for among files already read. A file
+  now also flags the later revisions that were read before it (`tender_intake_processing._flag_revision`).
+* Specs that predated the new behaviour, updated. tender-intake: the upload list shows a few rows, macro workbooks are refused at
+  registration and have no row, the folder list is virtualised, search / bulk wording changed, "Save" matched two buttons.
+  ai-walkthrough and tender-intake: drawings are measured on request. ai-first-intake: poll for a consistent tree snapshot.
+  intake-scale: wait on the server's uploaded count, not the panel's (which also counts refused files).
+
+## Open (stated plainly)
+
+* **Merged to master locally, not pushed.** MFA is left off (`DEV_DISABLE_MFA=true`, as in `deploy/.env`).
+* **The two crashed packs are still not resumed**: project `102` pack `948b4c0f` (1,588 files) and project `103` pack `661d42e3`
+  (560 files) are `paused` and untouched (checked after the stack started and after the tests). Resuming means pressing Resume
+  with the real provider; the new flow shows the cost estimate and asks for confirmation first.
+* The drawing-queue ordering of section 7 is diagnosed, not changed.
+* **Bug, not fixed:** when the 300 s limit fires inside a database flush, the drawing's `error_message` is SQLAlchemy's "transaction
+  has been rolled back ..." text (or a bare `CancelledError`) instead of the intended "took longer than 300 seconds" sentence,
+  because `_record_index_failure` only recognises a bare `SoftTimeLimitExceeded`.
+* The 2,000-file Playwright test is opt-in (`SCALE_PROJECT`) and was not run; the synthetic proof run of section 6 stands.
+* Postgres (peak 2.3 GB) and SeaweedFS are the largest consumers; size the Docker VM at 10 GB (the `.wslconfig` is documented in
+  `docs/deploy-deltas.md`, not applied on this machine).
+* Earlier incident, reversed: a few mock-provider reads of pack `948b4c0f`; those 44 files were reset to `received`.
