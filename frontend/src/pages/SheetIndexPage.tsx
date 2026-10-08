@@ -8,10 +8,12 @@ import { SkeletonRows } from '../components/Skeleton'
 import { AiStatusNotice } from '../features/ai/AiStatusNotice'
 import { useAiStatus } from '../features/ai/api'
 import { AnnotationList } from '../features/drawings/AnnotationList'
+import { MeasurementBadge } from '../features/drawings/MeasurementBadge'
 import {
   drawingDownloadHref,
   useAnnotations,
   useDrawing,
+  useMeasureOnOpen,
   useReadAnnotations,
   useRetryIngest,
   useSheets,
@@ -67,6 +69,8 @@ export function SheetIndexPage() {
   const { data: sheets, isLoading, isError, error } = useSheets(drawingId, true)
   const { hasRole } = useAuth()
   const retryIngest = useRetryIngest(projectId, drawingId)
+  const canMeasure = hasRole(..._RETRY_ROLES)
+  const measure = useMeasureOnOpen(drawing, canMeasure)
   const { data: aiStatus } = useAiStatus()
   const { data: annotationPage } = useAnnotations(projectId, drawingId)
   const readAnnotations = useReadAnnotations(projectId, drawingId)
@@ -131,6 +135,33 @@ export function SheetIndexPage() {
           )}
         </p>
       )}
+      {drawing?.measurement && (
+        <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted">
+          Measurement: <MeasurementBadge state={drawing.measurement} errorMessage={drawing.error_message} />
+          {drawing.measurement === 'failed' && canMeasure && (
+            <button
+              type="button"
+              onClick={() => measure.mutate()}
+              disabled={measure.isPending}
+              className="rounded text-xs text-muted underline hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 disabled:opacity-50"
+            >
+              {measure.isPending ? 'Retrying…' : 'Retry measuring'}
+            </button>
+          )}
+        </p>
+      )}
+      {(drawing?.measurement === 'indexed' || drawing?.measurement === 'queued' || drawing?.measurement === 'measuring') && (
+        <p role="status" className="mt-2 text-sm text-ink">
+          {canMeasure || drawing.measurement !== 'indexed'
+            ? 'Measuring this drawing now...'
+            : 'This drawing has not been measured yet. An estimator can open it to start measuring.'}
+        </p>
+      )}
+      {measure.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {measure.error.message}
+        </p>
+      )}
       {drawing && drawing.kind === 'dwg' && (
         <p data-testid="dwg-provenance" className="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-muted">
           {drawing.converted_from_dwg && <Badge tone="info">Converted from DWG</Badge>}
@@ -177,7 +208,7 @@ export function SheetIndexPage() {
           {error.message}
         </p>
       )}
-      {sheets && sheets.length === 0 && (
+      {sheets && sheets.length === 0 && drawing?.measurement !== 'indexed' && drawing?.measurement !== 'queued' && drawing?.measurement !== 'measuring' && (
         <p className="mt-4 text-sm text-muted">
           No sheets indexed yet -- extraction may still be running.
         </p>

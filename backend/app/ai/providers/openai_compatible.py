@@ -69,7 +69,21 @@ class OpenAICompatibleProvider(AIProvider):
             tokens_in=int(usage.get("prompt_tokens") or 0),
             tokens_out=int(usage.get("completion_tokens") or 0),
             model=body.get("model") or req.model,
+            tokens_cached=_cached_tokens(usage),
         )
+
+
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    """Prompt tokens served from the provider's cache. Qwen / OpenAI-compatible: usage.prompt_tokens_details.cached_tokens
+    (some gateways put `cached_tokens` or `prompt_cache_hit_tokens` at the top level)."""
+    details = usage.get("prompt_tokens_details") or {}
+    raw = details.get("cached_tokens") if isinstance(details, dict) else None
+    if raw is None:
+        raw = usage.get("cached_tokens", usage.get("prompt_cache_hit_tokens"))
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:

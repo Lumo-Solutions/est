@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext
-from app.core.enums import AuditAction, BidSettlementStatus, DrawingKind
+from app.core.enums import AuditAction, BidSettlementStatus, DrawingKind, DrawingStatus, MeasurePriority
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.integrations.s3 import get_object_bytes, presign_get_url, put_object_streaming
 from app.intake.boq import suggest_mapping
@@ -57,6 +57,7 @@ from app.schemas.tender_intake import (
     BoqPrefillOut,
     BulkConfirmOut,
     ConfirmItemResult,
+    DocFilter,
     TenderClassOut,
     TenderClassUpdate,
 )
@@ -75,11 +76,13 @@ _BULK_BLOCKING_FLAGS = {
 }
 # Flags that keep an AI classification from being accepted without a person, whatever its confidence.
 _AUTO_ACCEPT_BLOCKING_FLAGS = {Flag.CONFLICT.value, Flag.INJECTION_SUSPECTED.value, Flag.MODEL_UNAVAILABLE.value}
+AUTO_ACCEPT_BLOCKING_FLAGS = frozenset(_AUTO_ACCEPT_BLOCKING_FLAGS)
 # Which file types each class can actually be routed from (routing raises for anything else).
 _ROUTABLE_EXTS = {
     DocClass.DRAWING.value: {"dxf", "pdf", "dwg", "jpg", "jpeg", "png"},
     DocClass.BOQ.value: {"xlsx", "csv", "xls", "pdf"},
 }
+ROUTABLE_EXTS = _ROUTABLE_EXTS
 DEFAULT_AUTO_ACCEPT_MIN = 0.85
 _REF = re.compile(r"^([A-Z]{1,4}-\d{2,5}(?:-\d{1,3})?)(?:\s+Rev\s+(\S+))?$", re.I)
 
@@ -102,7 +105,10 @@ async def _add_files(
         earlier = (
             await session.execute(
                 select(ProjectDocument)
-                .where(ProjectDocument.project_id == package.project_id, ProjectDocument.sha256 == sha)
+                .where(
+                    ProjectDocument.project_id == package.project_id, ProjectDocument.sha256 == sha,
+                    ProjectDocument.status != DocStatus.PENDING_UPLOAD.value,
+                )
                 .order_by(ProjectDocument.created_at, ProjectDocument.id)
                 .limit(1)
             )
@@ -118,7 +124,7 @@ async def _add_files(
             object_key=earlier.object_key if earlier is not None else key, size_bytes=len(data),
             status=DocStatus.RECEIVED.value, duplicate_of_id=earlier.id if earlier is not None else None,
             flags=[Flag.DUPLICATE.value] if earlier is not None else [],
-            archive_path=f"{folder}/{name}"[:1024] if folder else None,
+            archive_path=f"{folder}/{name}"[:1024] if folder else None, uploaded_at=datetime.now(timezone.utc),
         )
         session.add(doc)
         await session.flush()
@@ -182,14 +188,35 @@ async def list_packages(session: AsyncSession, project_id: UUID) -> list[TenderP
     return list(result.scalars().all())
 
 
-async def refresh_package_status(session: AsyncSession, package_id: UUID) -> None:
+async def refresh_package_status(session: AsyncSession, package_id: UUID) -> str:
+    """Works the pack's status out from its documents: uploading while files are still arriving, processing while any
+    is waiting or being read, then ready (or failed when nothing was usable). A paused or cancelled pack keeps that
+    status (an operator decided it). Returns the status."""
     package = await get_package(session, package_id)
-    rows = (await session.execute(select(ProjectDocument.status).where(ProjectDocument.package_id == package_id))).scalars().all()
-    if any(s in (DocStatus.RECEIVED.value, DocStatus.PROCESSING.value) for s in rows):
-        return
-    live = [s for s in rows if s != DocStatus.ARCHIVE.value]
-    package.status = PackageStatus.FAILED.value if live and all(s in (DocStatus.FAILED.value, DocStatus.REJECTED.value) for s in live) else PackageStatus.READY.value
-    await session.flush()
+    if package.status in (PackageStatus.PAUSED.value, PackageStatus.CANCELLED.value):
+        return package.status
+    counts = {
+        status: n
+        for status, n in (
+            await session.execute(
+                select(ProjectDocument.status, func.count()).where(ProjectDocument.package_id == package_id).group_by(ProjectDocument.status)
+            )
+        ).all()
+    }
+    # `expected_count` is informational (files the drop announced; some are refused at registration and never become
+    # rows): only files registered and still waiting for bytes keep a pack in "uploading".
+    if counts.get(DocStatus.PENDING_UPLOAD.value, 0) > 0:
+        new = PackageStatus.UPLOADING.value
+    elif counts.get(DocStatus.RECEIVED.value, 0) + counts.get(DocStatus.PROCESSING.value, 0) > 0:
+        new = PackageStatus.PROCESSING.value
+    else:
+        live = {s: n for s, n in counts.items() if s != DocStatus.ARCHIVE.value}
+        unusable = {DocStatus.FAILED.value, DocStatus.REJECTED.value}
+        new = PackageStatus.FAILED.value if live and set(live) <= unusable else PackageStatus.READY.value
+    if package.status != new:
+        package.status = new
+        await session.flush()
+    return new
 
 
 # -------------------------------------------------------------------- documents
@@ -393,16 +420,15 @@ async def request_rerun(session: AsyncSession, ctx: RequestContext, document_id:
     previous = doc.status
     doc.status = DocStatus.RECEIVED.value
     doc.error_message = None
+    doc.queued_at, doc.attempts = None, 0
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
         payload={"event": "rerun", "from": previous},
     )
-    from app.workers.tasks.tender_intake import rerun_document
+    from app.workers.tasks.tender_intake import dispatch_intake
 
-    rerun_document.apply_async(
-        args=(str(doc.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles)), countdown=3
-    )
+    dispatch_intake.apply_async(args=(str(ctx.tenant_id), str(doc.package_id)), countdown=3)
     return doc
 
 
@@ -496,12 +522,18 @@ async def _resolve_target(session: AsyncSession, project_id: UUID, reference: st
 
 async def _resolve_open_links(session: AsyncSession, project_id: UUID) -> None:
     result = await session.execute(
-        select(AddendumLink).where(AddendumLink.project_id == project_id, AddendumLink.resolved.is_(False))
+        select(AddendumLink, Addendum.withdrawn_at)
+        .join(Addendum, Addendum.id == AddendumLink.addendum_id)
+        .where(AddendumLink.project_id == project_id, AddendumLink.resolved.is_(False))
     )
-    for link in result.scalars().all():
+    for link, withdrawn_at in result.all():
         target = await _resolve_target(session, project_id, link.reference_text)
         if target is not None:
             link.target_document_id, link.resolved = target.id, True
+            if link.action == "supersedes" and withdrawn_at is None:
+                # Files are read one by one, so an addendum can be routed before the drawing it supersedes: the mark
+                # that `_route_addendum` puts on an existing target is put on a late one here, whatever the order.
+                target.routed_ref = {**target.routed_ref, "superseded_by_addendum": str(link.addendum_id)}
     await session.flush()
 
 
@@ -524,6 +556,12 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
     if doc.ext not in ("dxf", "pdf", "dwg"):
         raise ConflictError(f"A .{doc.ext} file cannot be routed as a drawing")
     is_dwg = doc.ext == "dwg"
+    max_bytes = get_settings().max_upload_size_bytes
+    if doc.ext == "pdf" and doc.size_bytes > max_bytes:
+        raise ConflictError(
+            f"This PDF is {doc.size_bytes // (1024 * 1024)} MB; the takeoff reads drawings up to {max_bytes // (1024 * 1024)} MB. "
+            "Split it into smaller PDFs (for example one per sheet set) and upload those."
+        )
     # A DWG is routed like any drawing: the convert worker turns it into a DXF
     # and then runs the normal pipeline (or parks it in needs_conversion with a
     # reason when the converter is off/missing -- see app/workers/tasks/dwg.py).
@@ -553,11 +591,22 @@ async def _route_drawing(session: AsyncSession, ctx: RequestContext, doc: Projec
             session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id, project_id=doc.project_id,
             payload={"event": "restore_from_archive", "source": "tender_intake", "document_id": str(doc.id)},
         )
+    measure_now = False
     if created:
-        await takeoff_service.trigger_ingest(session, ctx, drawing.id, countdown=_INGEST_COUNTDOWN_S)
+        # Intake classifies and indexes only: number, title, revision, discipline, type (from the AI/rules) and the sheet
+        # count (a light task). Measuring is on demand, or automatic for the disciplines the tenant listed.
+        auto = await get_auto_measure(session)
+        measure_now = bool(doc.sub_type and doc.sub_type in auto)
+        if measure_now:
+            await takeoff_service.trigger_ingest(session, ctx, drawing.id, countdown=_INGEST_COUNTDOWN_S, priority=MeasurePriority.AUTO)
+        else:
+            drawing.status = DrawingStatus.INDEXED.value
+            await session.flush()
+            _schedule_light_index(ctx, drawing.id)
     doc.routed_kind = "drawing"
     doc.routed_ref = {
-        "drawing_id": str(drawing.id), "kind": kind, "ingest_started": created, "not_measurable": scanned, "restored": restored,
+        "drawing_id": str(drawing.id), "kind": kind, "ingest_started": measure_now, "indexed_only": created and not measure_now,
+        "not_measurable": scanned, "restored": restored,
     }
 
 
@@ -782,6 +831,22 @@ def would_auto_accept(doc: ProjectDocument, threshold: float) -> bool:
     return doc.status == DocStatus.PROPOSED.value and _blocked_reason(doc, threshold) is None
 
 
+async def get_auto_measure(session: AsyncSession) -> list[str]:
+    """Disciplines measured automatically when intake routes their drawings (default: none)."""
+    value = (await session.execute(select(TenantAiSettings.intake_auto_measure))).scalar_one_or_none()
+    return [str(v) for v in (value or [])]
+
+
+def _schedule_light_index(ctx: RequestContext, drawing_id: UUID) -> None:
+    """The sheet count of an indexed drawing, filled in by a small task (after the request transaction commits)."""
+    from app.workers.tasks.takeoff import index_drawing_light
+
+    try:
+        index_drawing_light.apply_async(args=(str(drawing_id), str(ctx.tenant_id)), countdown=_INGEST_COUNTDOWN_S, priority=9)
+    except Exception:  # noqa: BLE001 -- the count is a nicety; the drawing is routed either way
+        pass
+
+
 async def get_auto_accept_min(session: AsyncSession) -> float:
     value = (await session.execute(select(TenantAiSettings.intake_auto_accept_min))).scalar_one_or_none()
     return float(value) if value is not None else DEFAULT_AUTO_ACCEPT_MIN
@@ -816,20 +881,32 @@ async def auto_accept_document(session: AsyncSession, ctx: RequestContext, docum
 async def bulk_confirm(
     session: AsyncSession, ctx: RequestContext, project_id: UUID, *, package_id: UUID | None = None,
     document_ids: list[UUID] | None = None, min_confidence: float | None = None,
+    doc_filter: DocFilter | None = None, cursor: str | None = None,
 ) -> BulkConfirmOut:
-    """Explicit ids: confirms exactly those (the reviewer chose them). Otherwise: only
-    proposals at or above the confidence minimum that carry no conflict/low-confidence/
-    duplicate/model-unavailable flag. Each document runs in its own savepoint, so one that
-    fails to route does not undo the others."""
+    """Explicit ids: confirms exactly those (the reviewer chose them). A `doc_filter`: confirms the files that match
+    it, server-side and in chunks (`intake_bulk_chunk` per call; the caller repeats with `next_cursor` until it is
+    None), so "confirm all" covers every matching file and not just the ones on screen. Otherwise: only proposals
+    at or above the confidence minimum that carry no conflict/low-confidence/duplicate/model-unavailable flag. Each
+    document runs in its own savepoint, so one that fails to route does not undo the others."""
     await assert_can_see_project(session, ctx, project_id)
     settings = get_settings()
-    stmt = select(ProjectDocument).where(ProjectDocument.project_id == project_id)
-    if document_ids is not None:
-        stmt = stmt.where(ProjectDocument.id.in_(document_ids))
+    matched: int | None = None
+    next_cursor: str | None = None
+    if doc_filter is not None:
+        from app.services import tender_intake_tree
+
+        ids, next_cursor, matched = await tender_intake_tree.filter_ids(
+            session, project_id, doc_filter, limit=settings.intake_bulk_chunk, cursor=cursor
+        )
+        stmt = select(ProjectDocument).where(ProjectDocument.project_id == project_id, ProjectDocument.id.in_(ids))
     else:
-        stmt = stmt.where(ProjectDocument.status == DocStatus.PROPOSED.value)
-        if package_id:
-            stmt = stmt.where(ProjectDocument.package_id == package_id)
+        stmt = select(ProjectDocument).where(ProjectDocument.project_id == project_id)
+        if document_ids is not None:
+            stmt = stmt.where(ProjectDocument.id.in_(document_ids))
+        else:
+            stmt = stmt.where(ProjectDocument.status == DocStatus.PROPOSED.value)
+            if package_id:
+                stmt = stmt.where(ProjectDocument.package_id == package_id)
     docs = list((await session.execute(stmt)).scalars().all())
 
     minimum = settings.intake_bulk_confirm_min if min_confidence is None else min_confidence
@@ -840,7 +917,7 @@ async def bulk_confirm(
         if d.status != DocStatus.PROPOSED.value:
             results.append(ConfirmItemResult(id=d.id, ok=False, status=d.status, error=f"not proposed ({d.status})"))
             skipped += 1
-        elif document_ids is None and (
+        elif doc_filter is None and document_ids is None and (
             (d.confidence or 0) < minimum or _BULK_BLOCKING_FLAGS & set(d.flags)
         ):
             skipped += 1
@@ -860,9 +937,14 @@ async def bulk_confirm(
             failed += 1
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="tender_package", entity_id=package_id, project_id=project_id,
-        payload={"event": "bulk_confirm", "confirmed": confirmed, "failed": failed, "skipped": skipped, "min_confidence": minimum},
+        payload={
+            "event": "bulk_confirm", "confirmed": confirmed, "failed": failed, "skipped": skipped, "min_confidence": minimum,
+            "by_filter": doc_filter.model_dump(mode="json", exclude_none=True) if doc_filter is not None else None,
+        },
     )
-    return BulkConfirmOut(confirmed=confirmed, failed=failed, skipped=skipped, results=results)
+    return BulkConfirmOut(
+        confirmed=confirmed, failed=failed, skipped=skipped, results=results, matched=matched, next_cursor=next_cursor
+    )
 
 
 # ------------------------------------------------------------ registers / views
@@ -947,14 +1029,28 @@ async def update_class(session: AsyncSession, ctx: RequestContext, code: str, da
 
 # ------------------------------------------------------------------ bulk reclassify, intake settings
 async def bulk_reclassify(
-    session: AsyncSession, ctx: RequestContext, project_id: UUID, document_ids: list[UUID], doc_class: str,
+    session: AsyncSession, ctx: RequestContext, project_id: UUID, document_ids: list[UUID] | None, doc_class: str,
     sub_type: str | None, drawing_type: str | None, note: str | None, confirm: bool,
+    *, doc_filter: DocFilter | None = None, cursor: str | None = None,
 ) -> BulkConfirmOut:
-    """Change the class of several documents at once. Each runs in its own savepoint, so one that cannot be
+    """Change the class of several documents at once: explicit ids, or every file matching a filter (server-side, a
+    chunk per call, the caller repeats with `next_cursor`). Each runs in its own savepoint, so one that cannot be
     routed under the new class does not undo the others."""
     await assert_can_see_project(session, ctx, project_id)
+    matched: int | None = None
+    next_cursor: str | None = None
+    if doc_filter is not None:
+        from app.services import tender_intake_tree
+
+        ids, next_cursor, matched = await tender_intake_tree.filter_ids(
+            session, project_id, doc_filter, limit=get_settings().intake_bulk_chunk, cursor=cursor
+        )
+    elif document_ids:
+        ids = document_ids
+    else:
+        raise ValidationAppError("Give document_ids or a filter")
     docs = list(
-        (await session.execute(select(ProjectDocument).where(ProjectDocument.project_id == project_id, ProjectDocument.id.in_(document_ids)))).scalars().all()
+        (await session.execute(select(ProjectDocument).where(ProjectDocument.project_id == project_id, ProjectDocument.id.in_(ids)))).scalars().all()
     )
     results: list[ConfirmItemResult] = []
     changed = failed = 0
@@ -970,9 +1066,36 @@ async def bulk_reclassify(
             failed += 1
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="tender_package", entity_id=None, project_id=project_id,
-        payload={"event": "bulk_reclassify", "doc_class": doc_class, "changed": changed, "failed": failed, "confirm": confirm},
+        payload={
+            "event": "bulk_reclassify", "doc_class": doc_class, "changed": changed, "failed": failed, "confirm": confirm,
+            "by_filter": doc_filter.model_dump(mode="json", exclude_none=True) if doc_filter is not None else None,
+        },
     )
-    return BulkConfirmOut(confirmed=changed, failed=failed, skipped=len(document_ids) - len(docs), results=results)
+    return BulkConfirmOut(
+        confirmed=changed, failed=failed, skipped=len(ids) - len(docs), results=results, matched=matched, next_cursor=next_cursor
+    )
+
+
+async def set_auto_measure(session: AsyncSession, ctx: RequestContext, disciplines: list[str]) -> list[str]:
+    from app.intake.constants import DRAWING_SUB_TYPES
+
+    unknown = sorted(set(disciplines) - set(DRAWING_SUB_TYPES))
+    if unknown:
+        raise ValidationAppError(f"Unknown discipline(s): {', '.join(unknown)}")
+    clean = sorted(set(disciplines))
+    row = (await session.execute(select(TenantAiSettings).where(TenantAiSettings.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    before = [str(v) for v in (row.intake_auto_measure if row is not None else [])]
+    if row is None:
+        session.add(TenantAiSettings(tenant_id=ctx.tenant_id, intake_auto_measure=clean, created_by=ctx.user_id, updated_by=ctx.user_id))
+    else:
+        row.intake_auto_measure = clean
+        row.updated_by = ctx.user_id
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tenant_ai_settings", entity_id=str(ctx.tenant_id),
+        payload={"intake_auto_measure": {"before": before, "after": clean}},
+    )
+    return clean
 
 
 async def set_auto_accept_min(session: AsyncSession, ctx: RequestContext, value: float) -> float:

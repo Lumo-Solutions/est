@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select, text
+from sqlalchemy import String, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext
-from app.core.enums import AuditAction, DrawingKind, DrawingStatus
+from app.core.enums import AuditAction, DrawingKind, DrawingStatus, MeasurePriority
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.integrations import dwg_converter
 from app.integrations.embeddings import get_embedder
@@ -364,7 +364,33 @@ async def list_drawings(session: AsyncSession, project_id: UUID) -> list[Drawing
     return list(result.scalars().all())
 
 
-async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id: UUID, *, countdown: int = 0) -> list[str]:
+# What a person reads for a drawing's measurement: indexed / queued / measuring / measured / failed (+ the reason).
+_MEASUREMENT_OF = {
+    DrawingStatus.INDEXED.value: "indexed",
+    DrawingStatus.UPLOADED.value: "queued",
+    DrawingStatus.QUEUED.value: "queued",
+    DrawingStatus.CONVERTING.value: "measuring",
+    DrawingStatus.INDEXING.value: "measuring",
+    DrawingStatus.EXTRACTING.value: "measuring",
+    DrawingStatus.EMBEDDING.value: "measuring",
+    DrawingStatus.READY.value: "measured",
+    DrawingStatus.PARTIAL.value: "measured",
+    DrawingStatus.FAILED.value: "failed",
+    DrawingStatus.NEEDS_CONVERSION.value: "failed",
+}
+MEASUREMENT_STATES = ("indexed", "queued", "measuring", "measured", "failed")
+
+
+def measurement_state(status: str) -> str:
+    return _MEASUREMENT_OF.get(status, "queued")
+
+
+async def trigger_ingest(
+    session: AsyncSession, ctx: RequestContext, drawing_id: UUID, *, countdown: int = 0,
+    priority: int = MeasurePriority.INTERACTIVE,
+) -> list[str]:
+    """Starts the full pipeline (page index, per-sheet extraction, embedding, measurements) for one drawing at
+    `priority` (0 = a person is looking at it ... 9 = automatic; lower runs first)."""
     from app.workers.tasks.takeoff import index_sheets
 
     drawing = await get_drawing(session, drawing_id)
@@ -389,11 +415,12 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
         return []
 
     drawing.status = DrawingStatus.QUEUED.value
+    drawing.measure_priority = int(priority)
     drawing.error_message = None
     await session.flush()
     await audit.record(
         session, ctx, action=AuditAction.UPDATE, entity_type="drawing", entity_id=drawing.id,
-        project_id=drawing.project_id, payload={"status": "queued"},
+        project_id=drawing.project_id, payload={"status": "queued", "priority": int(priority)},
     )
 
     args = (str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles))
@@ -401,15 +428,95 @@ async def trigger_ingest(session: AsyncSession, ctx: RequestContext, drawing_id:
         from app.workers.tasks.dwg import convert_dwg
 
         # convert_dwg hands over to index_sheets itself once the DXF exists.
-        task = convert_dwg.apply_async(args=args, countdown=countdown) if countdown else convert_dwg.delay(*args)
+        task = convert_dwg.apply_async(args=args, countdown=countdown, priority=int(priority))
         return [task.id]
-    if countdown:
-        # A caller that creates the drawing in the same request (tender intake) gives the
-        # request transaction time to commit before the worker looks for the row.
-        task = index_sheets.apply_async(args=args, countdown=countdown)
-    else:
-        task = index_sheets.delay(*args)
+    # countdown: a caller that creates the drawing in the same request gives the request transaction time to commit
+    # before the worker looks for the row.
+    task = index_sheets.apply_async(args=args, kwargs={"priority": int(priority)}, countdown=countdown, priority=int(priority))
     return [task.id]
+
+
+async def request_measure(
+    session: AsyncSession, ctx: RequestContext, drawing_id: UUID, *, priority: int = MeasurePriority.INTERACTIVE
+) -> str:
+    """Measure this drawing if it has not been (and is not being) measured: what opening it in the takeoff, the
+    verification report and a bulk "Measure all" call. Never raises for a drawing that is already on its way. Returns the
+    resulting state: queued | measuring | measured | skipped. A drawing already waiting at a lower priority is queued
+    again at the higher one (the worker ignores the stale low-priority message when it arrives)."""
+    drawing = await get_drawing(session, drawing_id)
+    if drawing.archived_at is not None:
+        return "skipped"
+    status = drawing.status
+    if status in (DrawingStatus.READY.value, DrawingStatus.PARTIAL.value):
+        return "measured"
+    if status in (DrawingStatus.INDEXING.value, DrawingStatus.EXTRACTING.value, DrawingStatus.EMBEDDING.value, DrawingStatus.CONVERTING.value):
+        return "measuring"
+    if status in (DrawingStatus.QUEUED.value, DrawingStatus.UPLOADED.value):
+        if drawing.measure_priority is not None and int(priority) < drawing.measure_priority:
+            from app.workers.tasks.takeoff import index_sheets
+
+            drawing.measure_priority = int(priority)
+            await session.flush()
+            if not drawing.is_dwg:
+                index_sheets.apply_async(
+                    args=(str(drawing.id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles)),
+                    kwargs={"priority": int(priority)}, priority=int(priority), countdown=2,
+                )
+        return "queued"
+    # indexed / failed / needs_conversion: start (or restart) it.
+    await trigger_ingest(session, ctx, drawing_id, countdown=2, priority=priority)
+    return "skipped" if drawing.status == DrawingStatus.NEEDS_CONVERSION.value else "queued"
+
+
+async def request_measure_many(
+    session: AsyncSession, ctx: RequestContext, drawing_ids: list[UUID], *, priority: int
+) -> dict[str, int]:
+    out = {"queued": 0, "measuring": 0, "measured": 0, "skipped": 0}
+    for drawing_id in drawing_ids:
+        out[await request_measure(session, ctx, drawing_id, priority=priority)] += 1
+    return out
+
+
+async def measurement_summary(session: AsyncSession, project_id: UUID) -> dict:
+    """Counts of the project's (non-archived) drawings per measurement state, in total and per discipline."""
+    rows = (
+        await session.execute(
+            select(Drawing.discipline_hint, Drawing.status, func.count())
+            .where(Drawing.project_id == project_id, Drawing.archived_at.is_(None))
+            .group_by(Drawing.discipline_hint, Drawing.status)
+        )
+    ).all()
+    total: dict[str, int] = dict.fromkeys(MEASUREMENT_STATES, 0)
+    by_discipline: dict[str, dict[str, int]] = {}
+    for discipline, status, n in rows:
+        state = measurement_state(status)
+        total[state] += n
+        by_discipline.setdefault(discipline or "none", dict.fromkeys(MEASUREMENT_STATES, 0))[state] += n
+    return {"total": total, "by_discipline": by_discipline}
+
+
+async def drawings_matching(
+    session: AsyncSession, project_id: UUID, *, disciplines: list[str] | None, drawing_types: list[str] | None,
+    drawing_ids: list[UUID] | None, only_unmeasured: bool = True, statuses: list[str] | None = None,
+) -> list[UUID]:
+    """Ids of the project's drawings to measure: by discipline and/or drawing type (both taken from the tender
+    document the drawing came from) or an explicit list. Measured and in-flight drawings are left out."""
+    from app.models.tender_intake import ProjectDocument
+
+    stmt = select(Drawing.id).where(Drawing.project_id == project_id, Drawing.archived_at.is_(None))
+    if drawing_ids:
+        stmt = stmt.where(Drawing.id.in_(drawing_ids))
+    if disciplines:
+        stmt = stmt.where(Drawing.discipline_hint.in_(disciplines))
+    if drawing_types:
+        typed = select(ProjectDocument.routed_ref["drawing_id"].astext).where(
+            ProjectDocument.project_id == project_id, ProjectDocument.routed_kind == "drawing",
+            ProjectDocument.doc_metadata["drawing_type"].astext.in_(drawing_types),
+        )
+        stmt = stmt.where(func.cast(Drawing.id, String).in_(typed))
+    if only_unmeasured:
+        stmt = stmt.where(Drawing.status.in_(statuses or [DrawingStatus.INDEXED.value, DrawingStatus.FAILED.value, DrawingStatus.NEEDS_CONVERSION.value]))
+    return list((await session.execute(stmt.order_by(Drawing.created_at, Drawing.id))).scalars().all())
 
 
 async def list_jobs(session: AsyncSession, drawing_id: UUID) -> list[ExtractionJob]:

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     ai_monthly_budget_usd: float | None = Field(default=None, alias="AI_MONTHLY_BUDGET_USD")
     ai_project_budget_usd: float | None = Field(default=None, alias="AI_PROJECT_BUDGET_USD")
     ai_rate_limit_per_min: int = Field(default=120, alias="AI_RATE_LIMIT_PER_MIN")
+    # Celery worker hygiene (see app/workers/celery_app.py): recycle a child after this many tasks / this much memory (KiB).
+    celery_max_tasks_per_child: int = Field(default=50, alias="CELERY_MAX_TASKS_PER_CHILD")
+    celery_max_memory_per_child_kb: int = Field(default=700_000, alias="CELERY_MAX_MEMORY_PER_CHILD_KB")
     ai_stale_rate_months: int = Field(default=12, alias="AI_STALE_RATE_MONTHS")
     embedding_backend: str = Field(default="onnx", alias="EMBEDDING_BACKEND")
     embedding_model: str = Field(default="BAAI/bge-small-en-v1.5", alias="EMBEDDING_MODEL")
@@ -192,26 +195,59 @@ class Settings(BaseSettings):
     )
     quotation_max_pdf_pages: int = Field(default=60, alias="QUOTATION_MAX_PDF_PAGES")
 
-    # --- tender document intake (docs/tender-intake-plan.md) ---
-    intake_max_file_size_bytes: int = Field(default=60 * 1024 * 1024, alias="INTAKE_MAX_FILE_SIZE_BYTES")
-    intake_max_request_bytes: int = Field(default=300 * 1024 * 1024, alias="INTAKE_MAX_REQUEST_BYTES")
-    intake_max_files_per_request: int = Field(default=300, alias="INTAKE_MAX_FILES_PER_REQUEST")
+    # --- tender document intake (docs/tender-intake-plan.md, docs/intake-scale/report.md) ---
+    # Upload: a file larger than this is refused at registration. A file above `intake_max_process_bytes` is stored
+    # but not read by the worker: it lands in "Needs your check: too large" for a person to classify.
+    intake_max_file_size_bytes: int = Field(default=250 * 1024 * 1024, alias="INTAKE_MAX_FILE_SIZE_BYTES")
+    intake_max_process_bytes: int = Field(default=40 * 1024 * 1024, alias="INTAKE_MAX_PROCESS_BYTES")
+    # The legacy multipart endpoints (small packs, scripts) buffer their files; these keep that bounded.
+    intake_max_request_bytes: int = Field(default=100 * 1024 * 1024, alias="INTAKE_MAX_REQUEST_BYTES")
+    intake_max_files_per_request: int = Field(default=50, alias="INTAKE_MAX_FILES_PER_REQUEST")
+    # A pack (one upload) may hold at most this many files; the registration says so clearly when it would not fit.
+    intake_max_files_per_pack: int = Field(default=3_000, alias="INTAKE_MAX_FILES_PER_PACK")
+    # Files per registration request of the resumable upload.
+    intake_register_batch: int = Field(default=500, alias="INTAKE_REGISTER_BATCH")
+    # The streaming upload buffers at most one part of this size per request (S3 multipart).
+    intake_upload_part_bytes: int = Field(default=8 * 1024 * 1024, alias="INTAKE_UPLOAD_PART_BYTES")
+    # A streamed upload that sends nothing for this long is abandoned (a closed tab or a dropped network leaves a
+    # half-open connection that would otherwise hold a database connection and a transaction forever).
+    intake_upload_idle_s: int = Field(default=60, alias="INTAKE_UPLOAD_IDLE_S")
     intake_max_pdf_pages: int = Field(default=800, alias="INTAKE_MAX_PDF_PAGES")
     intake_zip_max_entries: int = Field(default=1_000, alias="INTAKE_ZIP_MAX_ENTRIES")
-    intake_zip_max_total_bytes: int = Field(default=500 * 1024 * 1024, alias="INTAKE_ZIP_MAX_TOTAL_BYTES")
+    intake_zip_max_total_bytes: int = Field(default=250 * 1024 * 1024, alias="INTAKE_ZIP_MAX_TOTAL_BYTES")
     intake_zip_max_ratio: int = Field(default=100, alias="INTAKE_ZIP_MAX_RATIO")
     intake_zip_max_depth: int = Field(default=2, alias="INTAKE_ZIP_MAX_DEPTH")
     # Per-document processing budget inside the worker (checked between stages).
     intake_doc_timeout_s: int = Field(default=60, alias="INTAKE_DOC_TIMEOUT_S")
+    # One Celery task per file: soft limit (the file is parked as "needs check") and hard limit (the child is killed).
+    intake_task_soft_limit_s: int = Field(default=240, alias="INTAKE_TASK_SOFT_LIMIT_S")
+    intake_task_hard_limit_s: int = Field(default=300, alias="INTAKE_TASK_HARD_LIMIT_S")
     # Stage 1 winner at or above this (and not conflicted) skips the model.
     intake_rules_confident: float = Field(default=0.85, alias="INTAKE_RULES_CONFIDENT")
     # Bulk-confirm only takes proposals at or above this.
     intake_bulk_confirm_min: float = Field(default=0.85, alias="INTAKE_BULK_CONFIRM_MIN")
-    # AI-first intake: documents are read (extract + AI call) in groups of this size, this many AI calls at a time.
-    intake_ai_batch_size: int = Field(default=16, alias="INTAKE_AI_BATCH_SIZE")
-    intake_ai_concurrency: int = Field(default=4, alias="INTAKE_AI_CONCURRENCY")
-    # This many AI failures in a row (no success between) stop AI calls for the rest of the run: rules decide.
+    # Documents confirmed per request by a filter-based bulk confirm / reclassify (the UI repeats until done).
+    intake_bulk_chunk: int = Field(default=100, alias="INTAKE_BULK_CHUNK")
+    # AI calls: at most this many at a time inside one worker process; rate limiting itself is AI_RATE_LIMIT_PER_MIN.
+    intake_ai_concurrency: int = Field(default=2, alias="INTAKE_AI_CONCURRENCY")
+    # A rate-limited call waits for the next minute window and retries this many times before the file falls back to rules.
+    intake_ai_rate_limit_retries: int = Field(default=6, alias="INTAKE_AI_RATE_LIMIT_RETRIES")
+    # This many AI failures in a row (no success between) open the breaker for `intake_ai_breaker_s`: rules decide.
     intake_ai_max_consecutive_failures: int = Field(default=3, alias="INTAKE_AI_MAX_CONSECUTIVE_FAILURES")
+    intake_ai_breaker_s: int = Field(default=120, alias="INTAKE_AI_BREAKER_S")
+    # Dispatch: files are enqueued from the database, never more than this many queued or running at once.
+    intake_dispatch_limit: int = Field(default=40, alias="INTAKE_DISPATCH_LIMIT")
+    # A file queued this long ago without starting is enqueued again (the broker lost it).
+    intake_requeue_after_s: int = Field(default=600, alias="INTAKE_REQUEUE_AFTER_S")
+    # A file in `processing` this long without a heartbeat is treated as abandoned by a dead worker.
+    intake_stuck_after_s: int = Field(default=360, alias="INTAKE_STUCK_AFTER_S")
+    intake_max_attempts: int = Field(default=3, alias="INTAKE_MAX_ATTEMPTS")
+    # The drawing pipeline's page index (one task per drawing): a PDF that takes longer than this is marked failed with a
+    # reason ("split it"), and the child is killed at the hard limit, instead of starving the worker.
+    drawing_index_soft_limit_s: int = Field(default=300, alias="DRAWING_INDEX_SOFT_LIMIT_S")
+    drawing_index_hard_limit_s: int = Field(default=360, alias="DRAWING_INDEX_HARD_LIMIT_S")
+    # PDF page images made for the drawing pipeline (VLM) are capped at this longest side, in pixels.
+    pdf_render_max_px: int = Field(default=5000, alias="PDF_RENDER_MAX_PX")
 
     # Set (alongside a literal APP_ENV=production) only by
     # deploy/docker-compose.prod.yml, for backend/every worker/beat.

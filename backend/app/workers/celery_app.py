@@ -26,17 +26,30 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
+    # A message a dead worker had taken but not acknowledged comes back after this long (Redis default: an hour). It
+    # must exceed the longest task (the hard limits are 300-360 s), so nothing running is ever delivered twice.
+    # Priority queues (Redis emulates them with one list per step): what a person is looking at (0) runs before the
+    # verification report's needs (3), before a bulk "Measure all" (6), before automatic measuring (9).
+    broker_transport_options={"visibility_timeout": 1800, "priority_steps": [0, 3, 6, 9], "queue_order_strategy": "priority"},
+    task_default_priority=6,
+    # A worker child is recycled after this many tasks or once it holds this much memory (checked between tasks), so
+    # a leak or one fat file cannot grow a worker without bound. `--max-tasks-per-child` / `--max-memory-per-child` on
+    # the command line (deploy/docker-compose.yml) override these.
+    worker_max_tasks_per_child=settings.celery_max_tasks_per_child,
+    worker_max_memory_per_child=settings.celery_max_memory_per_child_kb,
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
     task_routes={
-        "app.workers.tasks.takeoff.index_sheets": {"queue": "ingest"},
+        # The page index and geometry of a drawing are the heaviest PDF work: own queue, own worker (celery-worker-index).
+        "app.workers.tasks.takeoff.index_sheets": {"queue": "index"},
         "app.workers.tasks.takeoff.extract_sheet": {"queue": "vlm"},
         "app.workers.tasks.takeoff.embed_drawing": {"queue": "embed"},
-        "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "ingest"},
+        "app.workers.tasks.takeoff.extract_geometry_measurements": {"queue": "index"},
         "app.workers.tasks.takeoff.finalize_drawing": {"queue": "ingest"},
+        "app.workers.tasks.takeoff.index_drawing_light": {"queue": "ingest"},
         # DWG -> DXF conversion (sandboxed ODA converter); own queue/worker so a
         # slow or hostile DWG can never back up DXF/PDF ingestion.
         "app.workers.tasks.dwg.convert_dwg": {"queue": "convert"},
@@ -78,6 +91,11 @@ celery_app.conf.update(
         "reap-stuck-drawings": {
             "task": "app.workers.tasks.maintenance.reap_stuck_drawings",
             "schedule": crontab(minute=0),
+        },
+        # Tender intake: the dispatcher and the sweeper for files abandoned by a dead worker (docs/intake-scale/report.md).
+        "intake-tick": {
+            "task": "app.workers.tasks.tender_intake.intake_tick",
+            "schedule": 30.0,
         },
         "poll-inbound-mailbox": {
             "task": "app.workers.tasks.quotation_ingestion.poll_inbound_mailbox",

@@ -36,7 +36,7 @@ interface TreeItem {
 }
 interface Tree {
   items: TreeItem[]
-  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: string[]; auto_accept_min: number }
+  summary: { total: number; needs_check: number; in_progress: number; packages_processing: number; drawings_total: number; drawings_ready: number; boq_documents: { id: string; name: string }[]; auto_accept_min: number }
 }
 
 function writeDemoPack(): string {
@@ -57,10 +57,23 @@ async function login(browser: Browser, user: string, pass: string): Promise<Page
   return page
 }
 
+async function getItems(page: Page, projectId: string): Promise<TreeItem[]> {
+  const out: TreeItem[] = []
+  for (let offset = 0; ; offset += 500) {
+    const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/items?limit=500&offset=${offset}`)
+    expect(res.ok(), await res.text()).toBeTruthy()
+    const body = (await res.json()) as { items: TreeItem[]; total: number }
+    out.push(...body.items)
+    if (out.length >= body.total) return out
+  }
+}
+
+// The tree endpoint returns counts only (summary, groups, folders, packs); the files are paged from /items.
 async function getTree(page: Page, projectId: string): Promise<Tree> {
   const res = await page.request.get(`/api/v1/projects/${projectId}/tender-documents/tree`)
   expect(res.ok(), await res.text()).toBeTruthy()
-  return (await res.json()) as Tree
+  const counts = (await res.json()) as Omit<Tree, 'items'>
+  return { ...counts, items: await getItems(page, projectId) }
 }
 
 async function waitForTree(page: Page, projectId: string, done: (t: Tree) => boolean, message: string, timeout = 240_000): Promise<Tree> {
@@ -180,18 +193,31 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     const filed = byName(await getTree(lead, state.projectId), 'Site visit notes.pdf')
     expect(filed).toMatchObject({ doc_class: 'correspondence', classified_by: 'user', decided_by: 'user', routed_kind: 'register', display_status: 'ready' })
 
-    // ---- 6. the drawings were routed to extraction on their own and reach ready
-    const ready = await waitForTree(lead, state.projectId, (t) => t.summary.drawings_total === 3 && t.summary.drawings_ready === 3, 'three drawings ready', 360_000)
+    // ---- 6. intake only classified and indexed the drawings; measuring is on demand
+    const indexed = await getTree(lead, state.projectId)
+    const drawingItems = indexed.items.filter((i) => i.doc_class === 'drawing')
+    expect(drawingItems).toHaveLength(3)
+    const drawingState = async (id: string) => (await (await lead.request.get(`/api/v1/drawings/${id}`)).json()) as { status: string; measurement: string }
+    for (const item of drawingItems) expect(await drawingState(item.drawing_id!)).toMatchObject({ status: 'indexed', measurement: 'indexed' })
+    await expect(lead.getByRole('heading', { name: 'Drawings to measure' })).toBeVisible({ timeout: 45_000 })
+    // Opening one drawing measures it now (what the takeoff page does) ...
+    const opened = await lead.request.post(`/api/v1/drawings/${drawingItems[0].drawing_id}/measure`, { headers: await csrfHeaders(lead) })
+    expect(opened.status()).toBe(202)
+    // ... and "Measure all" queues the rest behind it (lead_estimator and above).
+    const bulk = await lead.request.post(`/api/v1/projects/${state.projectId}/drawings/measure`, {
+      headers: await csrfHeaders(lead),
+      data: { disciplines: ['roads_civil', 'landscape', 'stormwater'] },
+    })
+    expect(bulk.status()).toBe(202)
+    expect(await bulk.json()).toMatchObject({ matched: 2 })
+    const ready = await waitForTree(lead, state.projectId, (t) => t.summary.drawings_total === 3 && t.summary.drawings_ready === 3 && t.summary.in_progress === 0, 'three drawings measured', 420_000)
     expect(ready.summary.needs_check).toBe(0)
-    await expect(lead.getByText('3 of 3 drawings ready')).toBeVisible({ timeout: 30_000 })
-    for (const item of ready.items.filter((i) => i.doc_class === 'drawing')) {
-      const res = await lead.request.get(`/api/v1/drawings/${item.drawing_id}`)
-      expect(((await res.json()) as { status: string }).status).toBe('ready')
-    }
+    for (const item of drawingItems) await expect.poll(async () => (await drawingState(item.drawing_id!)).measurement, { timeout: 420_000, intervals: [3_000] }).toBe('measured')
+    await expect(lead.getByText('3 of 3 drawings ready')).toBeVisible({ timeout: 60_000 })
 
     // ---- 7. the Excel BOQ is ready to import: the wizard opens pre-filled; the dry run is still the user's to run
     const boq = byName(ready, 'BOQ Rev 0.xlsx')
-    expect(ready.summary.boq_documents).toContain(boq.id)
+    expect(ready.summary.boq_documents.map((d) => d.id)).toContain(boq.id)
     await lead.getByLabel('BOQ document').selectOption({ label: 'BOQ Rev 0.xlsx' })
     await lead.getByRole('link', { name: 'Import BOQ' }).click()
     await expect(lead).toHaveURL(new RegExp(`/projects/${state.projectId}/boq/import\\?document=${boq.id}`))
@@ -228,7 +254,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     await expect(confirm).toContainText('measurements are archived, not deleted')
     await confirm.getByRole('button', { name: 'Change class' }).click()
 
-    const after = await waitForTree(lead, state.projectId, (t) => byName(t, sheet.name).doc_class === 'specification' && byName(t, sheet.name).display_status === 'ready', 'reclassified')
+    const after = await waitForTree(lead, state.projectId, (t) => byName(t, sheet.name).doc_class === 'specification' && byName(t, sheet.name).display_status === 'ready' && t.summary.drawings_total === 2, 'reclassified')
     expect(byName(after, sheet.name)).toMatchObject({ classified_by: 'user', decided_by: 'user', routed_kind: 'register', drawing_id: null, discipline: null, drawing_type: null })
     expect(after.summary.drawings_total).toBe(2)
     expect(await listed()).not.toContain(drawingId) // out of the takeoff

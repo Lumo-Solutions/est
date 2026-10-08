@@ -318,7 +318,7 @@ async def test_soft_failures_only_stop_the_ai_after_a_run_of_them(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rate_limits_are_retried_then_reported_without_stopping_the_run(monkeypatch):
+async def test_rate_limits_wait_for_the_next_window_then_report_without_stopping_the_run(monkeypatch):
     sleeps: list[float] = []
 
     async def no_sleep(seconds):
@@ -327,7 +327,9 @@ async def test_rate_limits_are_retried_then_reported_without_stopping_the_run(mo
     monkeypatch.setattr(processing.asyncio, "sleep", no_sleep)
     run = processing.AiRun(SETTINGS)
     model, why, _ = await read_with(monkeypatch, run, AIRateLimited("slow down"))
-    assert model is None and why == "the AI rate limit was reached" and run.stopped_reason is None and len(sleeps) == 3
+    assert model is None and why == "the AI rate limit was reached" and run.stopped_reason is None
+    # It waited for the next rate-limit window each time (never longer than the window plus jitter), as often as configured.
+    assert len(sleeps) == SETTINGS.intake_ai_rate_limit_retries and all(0 < s <= 65 for s in sleeps)
 
 
 @pytest.mark.asyncio

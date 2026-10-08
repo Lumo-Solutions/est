@@ -121,6 +121,17 @@ services:
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
       MIGRATOR_DB_USER: ${MIGRATOR_DB_USER:-installtec_migrator}
       MIGRATOR_DB_PASSWORD: ${MIGRATOR_DB_PASSWORD:-${DB_PASSWORD}}
+    # Tuned for a 10 GB Docker VM (docs/deploy-deltas.md): NO hard mem_limit on purpose -- an OOM-killed database is worse
+    # than a busy one -- so memory is bounded by these settings instead. shared_buffers is the main fixed cost; work_mem
+    # is per sort/hash per connection (keep it modest: 100 connections x a few nodes x 16 MB is the worst case).
+    command: >
+      postgres
+      -c shared_buffers=${PG_SHARED_BUFFERS:-768MB}
+      -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-3GB}
+      -c work_mem=${PG_WORK_MEM:-16MB}
+      -c maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-256MB}
+      -c max_connections=${PG_MAX_CONNECTIONS:-100}
+    shm_size: 256mb
     volumes:
       - pgdata:/var/lib/postgresql/data
       # --- addition: run extension/role/keycloak-db bootstrap SQL on first init ---
@@ -152,6 +163,8 @@ services:
     container_name: installtec_seaweedfs
     # --- addition: -s3.config enables SigV4 auth instead of fully anonymous S3 ---
     command: "server -dir=/data -s3 -s3.config=/etc/seaweedfs/s3.json"
+    # Peak measured while storing a 3.4 GB pack: 1.9 GiB; this leaves headroom (override with SEAWEEDFS_MEM_LIMIT).
+    mem_limit: ${SEAWEEDFS_MEM_LIMIT:-2560m}
     volumes:
       - swdata:/data
       - ./seaweedfs/s3-identities.json:/etc/seaweedfs/s3.json:ro
@@ -365,6 +378,21 @@ services:
       - QUOTATION_MAX_ATTACHMENT_SIZE_BYTES=${QUOTATION_MAX_ATTACHMENT_SIZE_BYTES:-15728640}
       - QUOTATION_MAX_PDF_PAGES=${QUOTATION_MAX_PDF_PAGES:-60}
       - DWG_CONVERSION_ENABLED=${DWG_CONVERSION_ENABLED:-}
+      # --- tender intake at scale (docs/intake-scale/report.md, docs/deploy-deltas.md) ---
+      - INTAKE_MAX_FILES_PER_PACK=${INTAKE_MAX_FILES_PER_PACK:-3000}
+      - INTAKE_MAX_FILE_SIZE_BYTES=${INTAKE_MAX_FILE_SIZE_BYTES:-262144000}
+      - INTAKE_MAX_PROCESS_BYTES=${INTAKE_MAX_PROCESS_BYTES:-41943040}
+      - INTAKE_DISPATCH_LIMIT=${INTAKE_DISPATCH_LIMIT:-40}
+      - INTAKE_AI_CONCURRENCY=${INTAKE_AI_CONCURRENCY:-2}
+      - INTAKE_TASK_SOFT_LIMIT_S=${INTAKE_TASK_SOFT_LIMIT_S:-240}
+      - INTAKE_TASK_HARD_LIMIT_S=${INTAKE_TASK_HARD_LIMIT_S:-300}
+      - PDF_RENDER_MAX_PX=${PDF_RENDER_MAX_PX:-5000}
+      - CELERY_MAX_TASKS_PER_CHILD=${CELERY_MAX_TASKS_PER_CHILD:-50}
+      - CELERY_MAX_MEMORY_PER_CHILD_KB=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000}
+    # Containment: a runaway process is killed and restarted ALONE (Docker OOM-kills the container) instead of
+    # starving the whole WSL2 VM and Windows with it. Dev values for a 16 GB laptop; override in deploy/.env.
+    mem_limit: ${BACKEND_MEM_LIMIT:-1g}
+    cpus: ${BACKEND_CPUS:-2}
     ports:
       - "8001:8000"
     depends_on:
@@ -385,7 +413,11 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker
-    command: celery -A app.workers.celery_app worker -Q ingest,embed -c 4 -l info
+    # Concurrency, recycling and limits are configuration, not code: one child reads one file at a time, so memory is
+    # about INGEST_CONCURRENCY x one file. A child is replaced after N tasks or when it holds too much memory.
+    command: celery -A app.workers.celery_app worker -Q ingest,embed -c ${INGEST_CONCURRENCY:-2} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
+    mem_limit: ${INGEST_MEM_LIMIT:-1536m}
+    cpus: ${INGEST_CPUS:-2}
     # --- addition: the `embed` queue runs OnnxEmbedder (embeddings.py),
     # which needs the same /models volume as backend -- see the comment on
     # the backend service above.
@@ -410,13 +442,41 @@ services:
       retries: 3
       start_period: 20s
 
+  # The drawing pipeline's page index and geometry (`index` queue): the heaviest PDF work in the system, kept off the
+  # `ingest` worker so one monster drawing can only ever starve (or be OOM-killed with) this container, never intake.
+  celery-worker-index:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: installtec_celery_worker_index
+    command: celery -A app.workers.celery_app worker -Q index -c ${INDEX_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
+    mem_limit: ${INDEX_MEM_LIMIT:-2g}
+    cpus: ${INDEX_CPUS:-1.5}
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
   celery-worker-vlm:
     build:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker_vlm
-    command: celery -A app.workers.celery_app worker -Q vlm -c 2 -l info
+    # Own queue, concurrency 1 on dev (vision calls are slow, and each one holds a rendered page).
+    command: celery -A app.workers.celery_app worker -Q vlm -c ${VLM_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
     environment: *backend-env
+    mem_limit: ${VLM_MEM_LIMIT:-1g}
+    cpus: ${VLM_CPUS:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -445,8 +505,10 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker_email
-    command: celery -A app.workers.celery_app worker -Q email -c 2 -l info
+    command: celery -A app.workers.celery_app worker -Q email -c ${EMAIL_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
     environment: *backend-env
+    mem_limit: ${EMAIL_MEM_LIMIT:-384m}
+    cpus: ${EMAIL_CPUS:-0.5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -476,9 +538,10 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker_quotation
-    command: celery -A app.workers.celery_app worker -Q quotation -c 2 -l info
+    command: celery -A app.workers.celery_app worker -Q quotation -c ${QUOTATION_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
     environment: *backend-env
-    mem_limit: 512m
+    mem_limit: ${QUOTATION_MEM_LIMIT:-512m}
+    cpus: ${QUOTATION_CPUS:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -507,11 +570,12 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     container_name: installtec_celery_worker_convert
-    command: celery -A app.workers.celery_app worker -Q convert -c 1 -l info
+    command: celery -A app.workers.celery_app worker -Q convert -c 1 --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
     environment: *backend-env
     volumes:
       - dwgspool:/spool
-    mem_limit: 512m
+    mem_limit: ${CONVERT_MEM_LIMIT:-512m}
+    cpus: ${CONVERT_CPUS:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -570,6 +634,8 @@ services:
     # 'celerybeat-schedule'" until this was found while verifying this item.
     command: celery -A app.workers.celery_app beat -l info --schedule=/tmp/celerybeat-schedule
     environment: *backend-env
+    mem_limit: ${BEAT_MEM_LIMIT:-256m}
+    cpus: ${BEAT_CPUS:-0.5}
     depends_on:
       postgres:
         condition: service_healthy

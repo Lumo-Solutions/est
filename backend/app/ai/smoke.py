@@ -13,7 +13,9 @@ import time
 import uuid
 
 from app.ai.gateway import AIGateway
+from app.ai.pricing import is_unverified
 from app.ai.provider import CLASSIFY, EXTRACT, MATCH_RANK, VISION
+from app.ai.registry import resolve_model
 from app.ai.store import MemoryStore
 from app.core.config import get_settings
 from app.core.context import system_context
@@ -57,7 +59,12 @@ async def run_smoke() -> int:
         started = time.monotonic()
         try:
             res = await gw.run(task=f"smoke_{task}", kind=kind, system=system, user=user, schema=load_schema(schema_file), max_tokens=800)
-            print(f"OK    {task:<22} {int((time.monotonic() - started) * 1000):>6} ms  model={res.model}  est. ${res.cost_usd:.5f}")
+            expected = resolve_model(settings, gw.provider.name, kind)
+            routed = "" if (expected in res.model or res.model in expected) else f"  <-- ROUTING: expected {expected}"
+            unverified = "  (price UNVERIFIED)" if is_unverified(res.model) else ""
+            print(f"OK    {task:<22} {int((time.monotonic() - started) * 1000):>6} ms  model={res.model}  est. ${res.cost_usd:.5f}{unverified}{routed}")
+            if routed:
+                failures += 1
         except Exception as exc:  # noqa: BLE001
             failures += 1
             print(f"FAIL  {task:<22} {type(exc).__name__}: {exc}")

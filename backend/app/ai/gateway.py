@@ -227,10 +227,10 @@ class AIGateway:
             )
             raise
         latency = int((time.monotonic() - started) * 1000)
-        cost = estimate_cost_usd(provider.name, model, result.tokens_in, result.tokens_out)
+        cost = estimate_cost_usd(provider.name, model, result.tokens_in, result.tokens_out, result.tokens_cached)
         call_id = await self.store.record(
             ctx,
-            CallRecord(status="ok", response=result.data, tokens_in=result.tokens_in,
+            CallRecord(status="ok", response=result.data, tokens_in=result.tokens_in, tokens_cached=result.tokens_cached,
                        tokens_out=result.tokens_out, cost_usd=cost, latency_ms=latency, **base),
         )
         if provider.external:

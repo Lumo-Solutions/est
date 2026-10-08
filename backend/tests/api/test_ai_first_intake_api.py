@@ -22,7 +22,7 @@ async def test_only_the_managing_director_changes_the_threshold_and_everyone_can
     def as_(role: Role):
         return authed_client(frozenset({role.value}))
 
-    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85}
+    assert (await as_(Role.MANAGING_DIRECTOR).get("/api/v1/tender-intake/settings")).json() == {"auto_accept_min": 0.85, "default_auto_accept_min": 0.85, "auto_measure_disciplines": []}
     for role in ROLES_BELOW_MD:
         assert (await as_(role).put("/api/v1/admin/intake-settings", json={"auto_accept_min": 0.9})).status_code == 403, role
         assert (await as_(role).get("/api/v1/tender-intake/settings")).status_code == 200, role
@@ -92,7 +92,10 @@ async def test_the_document_tree_is_visible_to_project_members_only_and_counts_w
     tree = await estimator.get(f"/api/v1/projects/{project_id}/tender-documents/tree")
     assert tree.status_code == 200, tree.text
     body = tree.json()
-    by_name = {i["name"]: i for i in body["items"]}
+    assert "items" not in body  # counts only: the files come from /items, a page at a time
+    page = await estimator.get(f"/api/v1/projects/{project_id}/tender-documents/items")
+    assert page.status_code == 200 and page.json()["total"] == 3
+    by_name = {i["name"]: i for i in page.json()["items"]}
     assert by_name["waits.pdf"]["display_status"] == "needs_check" and by_name["done.pdf"]["display_status"] == "ready"
     assert by_name["queued.pdf"]["display_status"] == "queued"
     summary = body["summary"]
@@ -101,7 +104,8 @@ async def test_the_document_tree_is_visible_to_project_members_only_and_counts_w
 
     outsider = authed_client(frozenset({Role.ESTIMATOR.value}))
     hidden = await outsider.get(f"/api/v1/projects/{project_id}/tender-documents/tree")
-    assert hidden.status_code == 200 and hidden.json()["items"] == []  # RLS: a non-member sees nothing
+    assert hidden.status_code == 200 and hidden.json()["summary"]["total"] == 0  # RLS: a non-member sees nothing
+    assert (await outsider.get(f"/api/v1/projects/{project_id}/tender-documents/items")).json()["items"] == []
 
 
 async def test_unknown_project_gives_an_empty_tree(authed_client):

@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.context import RequestContext
 from app.core.errors import ConflictError, ForbiddenError, ValidationAppError
 from app.db.rls import set_rls_context
@@ -84,16 +85,58 @@ def mock_model(postgres_container):
     set_gateway_override(None)
 
 
+async def drive_worker(session, monkeypatch, ctx: RequestContext, tenant_id: uuid.UUID, *, rounds: int = 400) -> dict:
+    """The real worker, one file per task, on the test session: the dispatcher claims files (bounded, honouring paused
+    packs) and `process_one` reads each, round after round, until nothing is left to claim (zip members and retries
+    included). Every `with_worker_session` sets the RLS context of the ctx it is given, like a worker session does."""
+    from app.workers.tasks import tender_intake as worker
+
+    async def fake_with_worker_session(c, body, *args):
+        await set_rls_context(session, c)
+        try:
+            return await body(session, *args)
+        finally:
+            await set_rls_context(session, ctx)
+
+    queued: list[uuid.UUID] = []
+    batch: list[uuid.UUID] = []
+    stats = {"rounds": 0, "peak_in_flight": 0, "processed": 0}
+
+    def enqueue(ids, tenant):
+        queued.extend(ids)
+        # Claimed (queued_at set) and not yet read: what the dispatcher keeps bounded.
+        stats["peak_in_flight"] = max(stats["peak_in_flight"], len(queued) + len(batch))
+        return []
+
+    monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
+    monkeypatch.setattr(worker, "enqueue_documents", enqueue)
+    for _ in range(rounds):
+        await worker.dispatch_for_tenant(tenant_id)
+        batch[:] = list(queued)
+        queued[:] = []
+        if not batch:
+            break
+        stats["rounds"] += 1
+        while batch:
+            await worker.process_one(tenant_id, batch.pop(0))
+            stats["processed"] += 1
+    await set_rls_context(session, ctx)
+    return stats
+
+
 @pytest.fixture
 def celery_calls(monkeypatch, postgres_container):
     from app.workers.tasks.dwg import convert_dwg
     from app.workers.tasks.takeoff import index_sheets
-    from app.workers.tasks.tender_intake import rerun_document
+    from app.workers.tasks.tender_intake import dispatch_intake
 
-    calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": []}
+    from app.workers.tasks.takeoff import index_drawing_light
+
+    calls: dict[str, list] = {"ingest": [], "rerun": [], "convert": [], "light": []}
+    monkeypatch.setattr(index_drawing_light, "apply_async", lambda args=None, countdown=0, **kw: calls["light"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(convert_dwg, "apply_async", lambda args=None, countdown=0, **kw: calls["convert"].append((args, countdown)) or type("T", (), {"id": "t"})())
     monkeypatch.setattr(index_sheets, "apply_async", lambda args=None, countdown=0, **kw: calls["ingest"].append((args, countdown)) or type("T", (), {"id": "t"})())
-    monkeypatch.setattr(rerun_document, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
+    monkeypatch.setattr(dispatch_intake, "apply_async", lambda args=None, countdown=0, **kw: calls["rerun"].append((args, countdown)))
     return calls
 
 
@@ -201,6 +244,22 @@ async def test_every_readable_file_goes_to_the_ai_once_and_only_scans_get_images
     assert copy.doc_class == "drawing" and copy.doc_metadata["same_file_as"] == str(docs["C-101 Rev A.dxf"].id)
 
 
+async def test_a_later_revision_read_before_its_predecessor_is_still_flagged(ingested):
+    """Files are read in parallel: Rev B can be classified before Rev A. When A lands it flags B."""
+    from app.services.tender_intake_processing import _flag_revision
+
+    s = ingested["session"]
+    docs = await _by_name(s)
+    a, b = docs["C-101 Rev A.dxf"], docs["C-101 Rev B.dxf"]
+    b.flags = [f for f in b.flags if f != "revision_of"]  # as if B had been read when A was not classified yet
+    b.doc_metadata = {k: v for k, v in b.doc_metadata.items() if k != "revision_of_document_id"}
+    await s.flush()
+    flags: list[str] = []
+    await _flag_revision(s, a, flags, {})
+    assert flags == []  # A is the earliest revision: it is not a revision of anything
+    assert "revision_of" in b.flags and b.doc_metadata["revision_of_document_id"] == str(a.id)
+
+
 async def test_revision_of_flag_and_paging_search(ingested):
     s = ingested["session"]
     docs = await _by_name(s)
@@ -253,8 +312,9 @@ async def test_bulk_confirm_routes_each_class_builds_lineage_and_flags_the_settl
     assert (da.revision_label, db.revision_label, da.discipline_hint) == ("A", "B", "roads_civil")
     assert da.object_key == a.object_key and da.bucket == a.bucket  # content-addressed, no copy
     assert db.supersedes_id == da.id and b.supersedes_id == a.id and a.routed_ref["superseded_by"] == str(b.id)
-    assert da.status == "queued" and len(celery_calls["ingest"]) == len([d for d in docs.values() if d.routed_kind == "drawing"])
-    assert all(countdown > 0 for _, countdown in celery_calls["ingest"])
+    # Intake classifies and indexes; measuring is on demand (docs/intake-scale/report.md).
+    assert da.status == "indexed" and celery_calls["ingest"] == []
+    assert len(celery_calls["light"]) == len(drawings) and all(countdown > 0 for _, countdown in celery_calls["light"])
     s201a, s201b = docs["Drawings/S-201 Rev A.pdf"], docs["S-201 Rev B.pdf"]
     assert s201b.supersedes_id == s201a.id
 
@@ -333,10 +393,15 @@ async def test_dwg_is_routed_to_a_drawing_and_sent_to_the_converter_not_the_dxf_
     await set_rls_context(rls_session, lead)
     routed = await svc.confirm_document(rls_session, lead, doc.id)
     assert (routed.status, routed.routed_kind) == ("routed", "drawing")
-    assert routed.routed_ref["kind"] == "dwg" and routed.routed_ref["ingest_started"] is True
+    assert routed.routed_ref["kind"] == "dwg" and routed.routed_ref["indexed_only"] is True
     drawing = (await rls_session.execute(select(Drawing))).scalar_one()
-    assert (drawing.kind, drawing.original_filename, drawing.status) == ("dwg", "Site_Plan.dwg", "queued")
-    assert len(celery_calls["convert"]) == 1 and celery_calls["ingest"] == []
+    assert (drawing.kind, drawing.original_filename, drawing.status) == ("dwg", "Site_Plan.dwg", "indexed")
+    assert celery_calls["convert"] == [] and celery_calls["ingest"] == []  # not converted until someone needs it measured
+    from app.services import takeoff as takeoff_service
+
+    assert await takeoff_service.request_measure(rls_session, lead, drawing.id, priority=0) == "queued"
+    await rls_session.refresh(drawing)
+    assert drawing.status == "queued" and len(celery_calls["convert"]) == 1 and celery_calls["ingest"] == []
     assert celery_calls["convert"][0][0][0] == str(drawing.id)
 
 
@@ -358,6 +423,11 @@ async def test_dwg_with_conversion_switched_off_is_flagged_and_parked_needs_conv
     await set_rls_context(rls_session, lead)
     await svc.confirm_document(rls_session, lead, doc.id)
     drawing = (await rls_session.execute(select(Drawing))).scalar_one()
+    assert drawing.status == "indexed"
+    from app.services import takeoff as takeoff_service
+
+    await takeoff_service.request_measure(rls_session, lead, drawing.id, priority=0)  # measuring it parks it with the reason
+    await rls_session.refresh(drawing)
     assert drawing.status == "needs_conversion" and drawing.conversion_reason == "disabled"
     assert celery_calls["convert"] == [] and celery_calls["ingest"] == []
 
@@ -398,8 +468,9 @@ async def test_reclassify_edit_exclude_rerun_and_disabled_class(ingested, celery
 
     scan = docs["Scan_0042.pdf"]
     rerun = await svc.request_rerun(s, lead, scan.id)
-    assert rerun.status == "received" and len(celery_calls["rerun"]) == 1
-    assert celery_calls["rerun"][0][0][0] == str(scan.id)
+    assert rerun.status == "received" and rerun.queued_at is None and rerun.attempts == 0
+    assert len(celery_calls["rerun"]) == 1  # the dispatcher is asked to run; it claims the file from the database
+    assert celery_calls["rerun"][0][0] == (str(ingested["tenant"]), str(scan.package_id))
     with pytest.raises(ConflictError):
         await svc.request_rerun(s, lead, docs["bomb.zip"].id)  # rejected by safety: cannot be re-run
 
@@ -416,11 +487,6 @@ async def test_worker_glue_isolates_a_failing_document_and_finalises_the_package
     files = [f for f in build_pack() if f.name in ("ITT.pdf", "Conditions_of_Contract.pdf", "Notes.csv")]
     package, ids = await svc.create_package(rls_session, est, project_id, [(f.name, f.data) for f in files])
 
-    async def fake_with_worker_session(ctx, body, *args):
-        await set_rls_context(rls_session, ctx)
-        return await body(rls_session, *args)
-
-    monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
     real = processing.process_document
 
     async def flaky(session, ctx, document_id, prepared=None, run=None):
@@ -430,10 +496,12 @@ async def test_worker_glue_isolates_a_failing_document_and_finalises_the_package
         return await real(session, ctx, document_id, prepared, run)
 
     monkeypatch.setattr(worker.processing, "process_document", flaky)
-    await worker._process_package(est, str(package.id), None)
+    await drive_worker(rls_session, monkeypatch, est, tenant_id)
 
     docs = await _by_name(rls_session)
+    # A failure is retried (the dispatcher picks the file up again) and, after INTAKE_MAX_ATTEMPTS, parked as failed.
     assert docs["ITT.pdf"].status == "failed" and "boom" in docs["ITT.pdf"].error_message
+    assert docs["ITT.pdf"].attempts == get_settings().intake_max_attempts
     # The contract is a confident AI classification: accepted and routed to the register without a person.
     assert (docs["Conditions_of_Contract.pdf"].status, docs["Conditions_of_Contract.pdf"].auto_accepted) == ("routed", True)
     assert docs["Notes.csv"].status == "proposed"  # nothing in it says what it is: waits for a person

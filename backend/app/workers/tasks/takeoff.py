@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from celery import chord, group
-from celery.exceptions import Retry
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -353,18 +353,92 @@ async def _index_sheets_body(session: AsyncSession, drawing_id: str, task_id: st
         await _finish_job(session, job, ok=True, error=None, started_at=t0)
         return sheet_ids
     except Exception as exc:  # noqa: BLE001 -- persisted below, then re-raised for Celery retry bookkeeping
+        message = str(exc)
         drawing.status = DrawingStatus.FAILED.value
-        drawing.error_message = str(exc)
+        drawing.error_message = message
         await session.flush()
-        await _finish_job(session, job, ok=False, error=str(exc), started_at=t0)
+        await _finish_job(session, job, ok=False, error=message, started_at=t0)
         raise
+
+
+async def _should_index(session: AsyncSession, drawing_id: str) -> bool:
+    status = (await session.execute(select(Drawing.status).where(Drawing.id == UUID(drawing_id)))).scalar_one_or_none()
+    return status not in (
+        DrawingStatus.EXTRACTING.value, DrawingStatus.EMBEDDING.value, DrawingStatus.READY.value, DrawingStatus.PARTIAL.value, None,
+    )
+
+
+async def _record_index_failure_body(session: AsyncSession, drawing_id: str, message: str) -> None:
+    drawing = (await session.execute(select(Drawing).where(Drawing.id == UUID(drawing_id)))).scalar_one()
+    if drawing.status in (DrawingStatus.INDEXING.value, DrawingStatus.QUEUED.value):
+        drawing.status = DrawingStatus.FAILED.value
+        drawing.error_message = message[:2000]
+        await session.flush()
+
+
+async def _record_index_failure(drawing_id: str, tenant_id: str, exc: BaseException) -> None:
+    message = str(exc) or type(exc).__name__
+    if isinstance(exc, SoftTimeLimitExceeded):
+        message = (
+            f"Reading this file took longer than {get_settings().drawing_index_soft_limit_s} seconds (too many pages or "
+            "drawing objects). Split it into smaller PDFs and upload those."
+        )
+    try:
+        await with_worker_session(system_ctx(tenant_id), _record_index_failure_body, drawing_id, message)
+    except Exception:  # noqa: BLE001 -- the hourly reaper is the backstop
+        pass
+
+
+async def _index_light_body(session: AsyncSession, drawing_id: str) -> None:
+    drawing = (await session.execute(select(Drawing).where(Drawing.id == UUID(drawing_id)))).scalar_one_or_none()
+    if drawing is None or drawing.status != DrawingStatus.INDEXED.value or drawing.sheet_count is not None or drawing.is_dwg:
+        return  # measured meanwhile, or a DWG (counted after conversion, when it is measured)
+    data = await get_object_bytes(drawing.measure_object_key)
+    if drawing.measure_kind == DrawingKind.DXF.value:
+        drawing.sheet_count = len(dxf_mod.index_dxf(data))
+    else:
+        import pypdfium2 as pdfium
+
+        from app.takeoff.pdf import PDFIUM_LOCK
+
+        with PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(data)
+            try:
+                drawing.sheet_count = len(doc)
+            finally:
+                doc.close()
+
+
+@celery_app.task(name="app.workers.tasks.takeoff.index_drawing_light", soft_time_limit=120, time_limit=150)
+def index_drawing_light(drawing_id: str, tenant_id: str) -> None:
+    """Intake's indexing of a drawing: its sheet count, nothing else (no text extraction, no geometry, no AI). A failure
+    is harmless: the drawing stays `indexed` and the count is simply unknown."""
+
+    async def _run() -> None:
+        try:
+            await with_worker_session(system_ctx(tenant_id), _index_light_body, drawing_id)
+        except Exception:  # noqa: BLE001
+            return
+
+    run_async(_run)()
+
+
+def _limit(name: str, default: int) -> int:
+    try:
+        return getattr(get_settings(), name)
+    except Exception:  # noqa: BLE001 -- decorating a task must not need a full environment
+        return default
 
 
 @celery_app.task(
     bind=True, name="app.workers.tasks.takeoff.index_sheets",
     autoretry_for=(ConnectionError,), retry_backoff=True, retry_jitter=True, max_retries=5,
+    soft_time_limit=_limit("drawing_index_soft_limit_s", 300), time_limit=_limit("drawing_index_hard_limit_s", 360),
 )
-def index_sheets(self, drawing_id: str, tenant_id: str, actor_user_id: str | None, actor_roles: list[str] | None = None) -> None:
+def index_sheets(
+    self, drawing_id: str, tenant_id: str, actor_user_id: str | None, actor_roles: list[str] | None = None,
+    priority: int = 6,
+) -> None:
     # actor_roles matters: build_worker_context() only sets is_system=True
     # (bypassing every RLS write policy) when actor_user_id is None. With a
     # real actor_user_id but no roles, the extraction_jobs INSERT's
@@ -373,11 +447,19 @@ def index_sheets(self, drawing_id: str, tenant_id: str, actor_user_id: str | Non
     ctx = build_worker_context(tenant_id, actor_user_id, actor_roles)
 
     async def _run() -> None:
-        sheet_ids = await with_worker_session(ctx, _index_sheets_body, drawing_id, self.request.id)
-        header = [extract_sheet.si(sid, tenant_id) for sid in sheet_ids]
-        header.append(embed_drawing.si(drawing_id, tenant_id))
-        header.append(extract_geometry_measurements.si(drawing_id, tenant_id))
-        chord(group(header), finalize_drawing.si(drawing_id, tenant_id)).apply_async()
+        if not await with_worker_session(ctx, _should_index, drawing_id):
+            return  # a duplicate message (the drawing was bumped to a higher priority and is already past indexing)
+        try:
+            sheet_ids = await with_worker_session(ctx, _index_sheets_body, drawing_id, self.request.id)
+        except BaseException as exc:  # noqa: BLE001 -- recorded durably below, then re-raised
+            # The body's own session is rolled back by the re-raise, so the failure is written from a fresh one: without
+            # this a drawing whose indexing timed out stayed "indexing" until the hourly reaper.
+            await _record_index_failure(drawing_id, tenant_id, exc)
+            raise
+        header = [extract_sheet.si(sid, tenant_id).set(priority=priority) for sid in sheet_ids]
+        header.append(embed_drawing.si(drawing_id, tenant_id).set(priority=priority))
+        header.append(extract_geometry_measurements.si(drawing_id, tenant_id).set(priority=priority))
+        chord(group(header), finalize_drawing.si(drawing_id, tenant_id).set(priority=priority)).apply_async(priority=priority)
 
     run_async(_run)()
 

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from io import BytesIO
 
 import pdfplumber
 
 from app.takeoff.geometry.entities import GeometricEntity
+
+# PDFium (behind pypdfium2) is not thread-safe: one use at a time, process-wide (shared with the intake's reads).
+PDFIUM_LOCK = threading.Lock()
+# A page with more drawing objects than this is a CAD export: pdfplumber builds a Python object for each one (a real 8 MB
+# A0 sheet with 750,000 took 163 s and 3 GB), so such a page is read with PDFium instead.
+HEAVY_PAGE_OBJECTS = 20_000
+# Above this many objects a page is not analysed for vector geometry at all (it would need gigabytes): it has no
+# geometry entities and is measured through the vision path like a scan.
+MAX_GEOMETRY_PAGE_OBJECTS = 150_000
 
 # A page with fewer than this many extracted characters and no title-block
 # candidate text is treated as raster (scanned) rather than vector.
@@ -32,14 +42,71 @@ def _title_block_region_text(page: "pdfplumber.page.Page") -> str:
     return cropped.extract_text() or ""
 
 
+def count_page_objects(data: bytes, cap: int) -> list[int]:
+    """Drawing objects per page, each counted only up to `cap` + 1 (so the cost stays about that of opening the file)."""
+    import pypdfium2 as pdfium
+
+    counts: list[int] = []
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(data)
+        try:
+            for i in range(len(doc)):
+                page = doc[i]
+                try:
+                    n = 0
+                    for _ in page.get_objects():
+                        n += 1
+                        if n > cap:
+                            break
+                    counts.append(n)
+                finally:
+                    page.close()
+        finally:
+            doc.close()
+    return counts
+
+
+def _pdfium_page_info(data: bytes, index: int) -> PdfPageInfo:
+    """`PdfPageInfo` for one page read with PDFium (for the pages pdfplumber cannot afford)."""
+    import pypdfium2 as pdfium
+
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(data)
+        try:
+            page = doc[index]
+            try:
+                w, h = page.get_size()
+                textpage = page.get_textpage()
+                try:
+                    text = textpage.get_text_range() or ""
+                    candidate = textpage.get_text_bounded(left=w * 0.65, bottom=0, right=w, top=h * 0.30) or ""
+                finally:
+                    textpage.close()
+            finally:
+                page.close()
+        finally:
+            doc.close()
+    if not candidate:
+        candidate = text[-500:] if text else ""
+    return PdfPageInfo(
+        index=index, width_pt=float(w), height_pt=float(h), raw_text=text, is_raster=len(text.strip()) < _RASTER_CHAR_THRESHOLD,
+        title_block_candidate_text=candidate,
+    )
+
+
 def index_pdf(data: bytes) -> list[PdfPageInfo]:
     """Vector PDF page indexing: size, full-page text, and a title-block
     candidate region. Scanned/raster pages are flagged (is_raster=True) for
     the VLM image path in takeoff/titleblock.py rather than OCR'd here
-    (deferred -- see docs/architecture.md)."""
+    (deferred -- see docs/architecture.md). A CAD-export page (more than
+    HEAVY_PAGE_OBJECTS drawing objects) is read with PDFium, the rest with pdfplumber."""
     pages: list[PdfPageInfo] = []
+    heavy = [n > HEAVY_PAGE_OBJECTS for n in count_page_objects(data, HEAVY_PAGE_OBJECTS)]
     with pdfplumber.open(BytesIO(data)) as pdf:
         for i, page in enumerate(pdf.pages):
+            if i < len(heavy) and heavy[i]:
+                pages.append(_pdfium_page_info(data, i))
+                continue
             text = page.extract_text() or ""
             candidate = _title_block_region_text(page)
             if not candidate:
@@ -55,22 +122,99 @@ def index_pdf(data: bytes) -> list[PdfPageInfo]:
                     title_block_candidate_text=candidate,
                 )
             )
+            page.flush_cache()  # a long drawing set must not keep every page's objects alive
     return pages
 
 
-def render_page_png(data: bytes, page_index: int, dpi: int = 150) -> bytes:
-    """Renders one page to PNG for the VLM image path (raster pages, or
-    vector pages where text extraction found no usable title-block text)."""
+_DEFAULT_CAP = "default"
+
+
+def _default_render_cap() -> int:
+    """PDF_RENDER_MAX_PX; the built-in default when no settings are loaded (tools and unit tests)."""
+    try:
+        from app.core.config import get_settings
+
+        return get_settings().pdf_render_max_px
+    except Exception:  # noqa: BLE001 -- settings need a full environment; a render must not
+        return 5000
+
+
+def page_size_pt(data: bytes, page_index: int = 0) -> tuple[float, float]:
+    """(width, height) of one page in PDF points, without rendering anything."""
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(BytesIO(data))
     try:
         page = pdf[page_index]
-        bitmap = page.render(scale=dpi / 72)
-        pil_image = bitmap.to_pil()
-        buf = BytesIO()
-        pil_image.save(buf, format="PNG")
-        return buf.getvalue()
+        try:
+            return page.get_size()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+
+
+def render_page_png(data: bytes, page_index: int, dpi: int = 150, *, max_side_px: int | None | str = _DEFAULT_CAP) -> bytes:
+    """Renders one page to PNG for the VLM image path (raster pages, or
+    vector pages where text extraction found no usable title-block text).
+
+    The longest side is capped at `max_side_px` (default: the PDF_RENDER_MAX_PX setting; None = no cap) by lowering
+    the scale, so an A0 sheet cannot allocate a bitmap of hundreds of megabytes. Pages that fit under the cap render
+    exactly as they always did (the AI cache keys on the image bytes). Every pdfium object is closed here."""
+    import pypdfium2 as pdfium
+
+    cap = _default_render_cap() if max_side_px == _DEFAULT_CAP else max_side_px
+    pdf = pdfium.PdfDocument(BytesIO(data))
+    try:
+        page = pdf[page_index]
+        try:
+            scale = dpi / 72
+            if cap:
+                longest = max(page.get_size()) * scale
+                if longest > cap:
+                    scale *= cap / longest
+            bitmap = page.render(scale=scale)
+            try:
+                pil_image = bitmap.to_pil()
+                try:
+                    buf = BytesIO()
+                    pil_image.save(buf, format="PNG")
+                    return buf.getvalue()
+                finally:
+                    pil_image.close()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+
+
+def render_title_block_png(data: bytes, page_index: int = 0, dpi: int = 170, max_side_px: int = 1_800) -> bytes:
+    """Only the title-block corner (bottom-right ~35% x ~30%, the same region as `crop_title_block_png`), rendered
+    straight from the page with pdfium's crop, so a huge sheet never exists as a full-page bitmap."""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(BytesIO(data))
+    try:
+        page = pdf[page_index]
+        try:
+            w, h = page.get_size()
+            region = (w * 0.35, h * 0.30)
+            scale = min(dpi / 72, max_side_px / max(region))
+            bitmap = page.render(scale=scale, crop=(w * 0.65, 0, 0, h * 0.70))
+            try:
+                pil_image = bitmap.to_pil()
+                try:
+                    buf = BytesIO()
+                    pil_image.save(buf, format="PNG")
+                    return buf.getvalue()
+                finally:
+                    pil_image.close()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
     finally:
         pdf.close()
 
@@ -190,10 +334,14 @@ def index_pdf_geometry(data: bytes, rules: list[PdfLayerRule] | None = None) -> 
     """
     rules = rules or []
     result: dict[str, list[GeometricEntity]] = {}
+    too_complex = [n > MAX_GEOMETRY_PAGE_OBJECTS for n in count_page_objects(data, MAX_GEOMETRY_PAGE_OBJECTS)]
 
     with pdfplumber.open(BytesIO(data)) as pdf:
         for i, page in enumerate(pdf.pages):
             page_label = f"page-{i + 1}"
+            if i < len(too_complex) and too_complex[i]:
+                result[page_label] = []  # too many objects to analyse here: left to the vision path
+                continue
             text = page.extract_text() or ""
             if len(text.strip()) < _RASTER_CHAR_THRESHOLD:
                 result[page_label] = []
@@ -235,5 +383,6 @@ def index_pdf_geometry(data: bytes, rules: list[PdfLayerRule] | None = None) -> 
                 if len(verts) >= 2:
                     geoms.append(GeometricEntity("lwpolyline", layer, f"curve-{idx}", verts))
             result[page_label] = geoms
+            page.flush_cache()
 
     return result

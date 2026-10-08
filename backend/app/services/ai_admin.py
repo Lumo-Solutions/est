@@ -9,6 +9,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.gateway import AIGateway
+from app.ai.pricing import is_unverified
 from app.ai.store import DbStore, _month_start
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -132,6 +133,7 @@ async def usage(session: AsyncSession, ctx: RequestContext, settings: Settings, 
                 func.sum(case((AiCall.status == "error", 1), else_=0)),
                 func.sum(case((AiCall.status == "blocked", 1), else_=0)),
                 func.coalesce(func.sum(AiCall.tokens_in), 0),
+                func.coalesce(func.sum(AiCall.tokens_cached), 0),
                 func.coalesce(func.sum(AiCall.tokens_out), 0),
                 func.coalesce(func.sum(case((AiCall.status == "ok", AiCall.cost_usd), else_=0)), 0),
             )
@@ -155,7 +157,8 @@ async def usage(session: AsyncSession, ctx: RequestContext, settings: Settings, 
         rows=[
             AiUsageRow(
                 task=r[0], provider=r[1], model=r[2], calls=r[3], cached=int(r[4] or 0), errors=int(r[5] or 0),
-                blocked=int(r[6] or 0), tokens_in=int(r[7]), tokens_out=int(r[8]), cost_usd=float(r[9]),
+                blocked=int(r[6] or 0), tokens_in=int(r[7]), tokens_cached=int(r[8]), tokens_out=int(r[9]), cost_usd=float(r[10]),
+                rate_verified=r[1] in ("local_vllm", "mock") or not is_unverified(r[2]),
             )
             for r in rows
         ],

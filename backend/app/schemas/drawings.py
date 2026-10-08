@@ -3,9 +3,30 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from app.schemas.common import ORMModel
+
+
+class MeasureRequest(BaseModel):
+    """Which drawings a bulk "Measure all" covers: by discipline and/or drawing type, or an explicit list."""
+
+    disciplines: list[str] | None = None
+    drawing_types: list[str] | None = None
+    drawing_ids: list[UUID] | None = None
+
+
+class MeasureOut(BaseModel):
+    matched: int
+    queued: int
+    measuring: int
+    measured: int
+    skipped: int
+
+
+class MeasurementSummaryOut(BaseModel):
+    total: dict[str, int]
+    by_discipline: dict[str, dict[str, int]]
 
 
 class DrawingOut(ORMModel):
@@ -29,6 +50,14 @@ class DrawingOut(ORMModel):
     converted_at: datetime | None = None
     conversion_ms: int | None = None
     conversion_reason: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def measurement(self) -> str:
+        """indexed | queued | measuring | measured | failed (the reason, for failed, is `error_message`)."""
+        from app.services.takeoff import measurement_state
+
+        return measurement_state(self.status)
 
 
 class DrawingSheetOut(ORMModel):

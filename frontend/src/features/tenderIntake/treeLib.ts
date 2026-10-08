@@ -7,11 +7,13 @@ import {
   LEGACY_DISCIPLINES,
   disciplineLabel,
   drawingTypeLabel,
+  flagLabel,
   humanize,
 } from './lib'
-import type { TenderClass, TreeItem, TreeSummary } from './types'
+import type { DocFilter, FolderCount, GroupCount, TenderClass, TreeItem, TreeSummary } from './types'
 
-// Pure logic for the project document tree: grouping, folder tree, filtering, labels.
+// Pure logic for the project document tree. The server owns the file lists and the counts; this builds the group
+// nodes from the counts and maps a node (or the search filters) to the DocFilter that lists its files.
 
 export type GroupMode = 'type' | 'folder'
 
@@ -19,13 +21,20 @@ export interface TreeNode {
   key: string
   label: string
   depth: number
-  /** Files directly in this group (leaf groups). */
-  items: TreeItem[]
-  children: TreeNode[]
   /** Files in this group and everything below it. */
   count: number
-  /** Ids of every file in this group and below (for the group checkbox). */
-  ids: string[]
+  /** Files directly in this group (leaf groups, or a folder's own files). */
+  directCount: number
+  children: TreeNode[]
+  /** Lists this node's own files; null when it has none directly (it only holds sub-groups). */
+  listFilter: DocFilter | null
+  /** Selects everything in this group and below (the group checkbox). */
+  selectFilter: DocFilter
+  /**
+   * The class the files may have: a class code, 'none' (no class), or 'mixed' (a folder: any class). Decides whether
+   * changing the class could take drawings out of the takeoff.
+   */
+  classHint: string
 }
 
 export const NOT_CLASSIFIED_LABEL = 'Not classified yet'
@@ -90,6 +99,7 @@ export function decidedByInfo(item: TreeItem): { key: DecidedBy; label: string; 
 }
 
 const FLAG_TONE: Record<string, BadgeTone> = {
+  too_large: 'warning',
   conflict: 'danger',
   injection_suspected: 'danger',
   low_confidence: 'warning',
@@ -104,9 +114,21 @@ export function visibleFlags(item: TreeItem): { flag: string; tone: BadgeTone }[
   return item.flags.filter((f) => !HIDDEN_FLAGS.has(f)).map((flag) => ({ flag, tone: FLAG_TONE[flag] ?? 'neutral' }))
 }
 
-/** "Confirm all shown" skips files whose class needs a person's eyes. */
-export const isBulkConfirmable = (item: TreeItem) =>
-  !item.flags.includes('conflict') && !item.flags.includes('injection_suspected')
+/** The label of a flag badge ("Too large" is newer than the shared flagLabel). */
+export function flagText(flag: string): string {
+  return flag === 'too_large' ? 'Too large' : flagLabel(flag)
+}
+
+/**
+ * "Confirm all" in Needs your check: every file that has a proposed class, except those whose class needs a person's
+ * eyes (a conflict or suspicious text). Server-side, so it covers every matching file, not the rows on screen.
+ */
+export const CONFIRM_ALL_FILTER: DocFilter = {
+  display_status: 'needs_check',
+  has_class: true,
+  exclude_flags: ['conflict', 'injection_suspected'],
+}
+export const NEEDS_CHECK_FILTER: DocFilter = { display_status: 'needs_check' }
 
 export function formatUnitType(u: string): string {
   const m = /^type[\s_-]*(\d+)$/i.exec(u.trim())
@@ -138,35 +160,9 @@ export function classLabeler(classes: TenderClass[]): (code: string) => string {
   return (code) => tenant.get(code) ?? DEFAULT_CLASS_LABELS[code] ?? humanize(code)
 }
 
-// ---------------------------------------------------------------- sorting and nodes
+// ---------------------------------------------------------------- nodes from counts
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
-const byName = (a: TreeItem, b: TreeItem) => collator.compare(a.name, b.name) || a.id.localeCompare(b.id)
-const byNumber = (a: TreeItem, b: TreeItem) =>
-  collator.compare(a.document_number || a.name, b.document_number || b.name) || byName(a, b)
-
-function makeNode(key: string, label: string, depth: number, items: TreeItem[], children: TreeNode[]): TreeNode {
-  return {
-    key,
-    label,
-    depth,
-    items,
-    children,
-    count: items.length + children.reduce((n, c) => n + c.count, 0),
-    ids: [...items.map((i) => i.id), ...children.flatMap((c) => c.ids)],
-  }
-}
-
-function bucket<T>(list: T[], keyOf: (t: T) => string | null): Map<string | null, T[]> {
-  const m = new Map<string | null, T[]>()
-  for (const t of list) {
-    const k = keyOf(t)
-    const arr = m.get(k)
-    if (arr) arr.push(t)
-    else m.set(k, [t])
-  }
-  return m
-}
 
 /** Known codes in their standard order, then unknown codes alphabetically. */
 function orderedKeys(present: Iterable<string>, standard: readonly string[]): string[] {
@@ -176,8 +172,21 @@ function orderedKeys(present: Iterable<string>, standard: readonly string[]): st
   return [...known, ...unknown]
 }
 
-function drawingNodes(items: TreeItem[], parentKey: string): TreeNode[] {
-  const byDiscipline = bucket(items, (i) => i.discipline || null)
+const sumCounts = (rows: GroupCount[]) => rows.reduce((n, r) => n + r.count, 0)
+
+function groupBy(rows: GroupCount[], keyOf: (r: GroupCount) => string | null): Map<string | null, GroupCount[]> {
+  const m = new Map<string | null, GroupCount[]>()
+  for (const r of rows) {
+    const k = keyOf(r)
+    const arr = m.get(k)
+    if (arr) arr.push(r)
+    else m.set(k, [r])
+  }
+  return m
+}
+
+function drawingNodes(rows: GroupCount[], parentKey: string): TreeNode[] {
+  const byDiscipline = groupBy(rows, (r) => r.discipline || null)
   const disciplines = orderedKeys(
     [...byDiscipline.keys()].filter((k): k is string => k !== null),
     [...DRAWING_DISCIPLINES, ...LEGACY_DISCIPLINES],
@@ -186,39 +195,135 @@ function drawingNodes(items: TreeItem[], parentKey: string): TreeNode[] {
   const build = (code: string | null) => {
     const inDiscipline = byDiscipline.get(code) ?? []
     const dKey = `${parentKey}/disc:${code ?? 'none'}`
-    const byType = bucket(inDiscipline, (i) => i.drawing_type || null)
+    const dFilter: DocFilter = { doc_class: 'drawing', discipline: code ?? NO_CLASS_FILTER }
+    const byType = groupBy(inDiscipline, (r) => r.drawing_type || null)
+    const typeNode = (t: string | null): TreeNode => {
+      const count = sumCounts(byType.get(t) ?? [])
+      const filter: DocFilter = { ...dFilter, drawing_type: t ?? NO_CLASS_FILTER }
+      return {
+        key: `${dKey}/type:${t ?? 'none'}`,
+        label: t ? drawingTypeLabel(t) : 'Type not set',
+        depth: 2,
+        count,
+        directCount: count,
+        children: [],
+        listFilter: filter,
+        selectFilter: filter,
+        classHint: 'drawing',
+      }
+    }
     const types = orderedKeys(
       [...byType.keys()].filter((k): k is string => k !== null),
       DRAWING_TYPES,
     )
-    const typeNodes = types.map((t) =>
-      makeNode(`${dKey}/type:${t}`, drawingTypeLabel(t), 2, [...(byType.get(t) ?? [])].sort(byNumber), []),
-    )
-    if (byType.has(null)) {
-      typeNodes.push(makeNode(`${dKey}/type:none`, 'Type not set', 2, [...(byType.get(null) ?? [])].sort(byNumber), []))
-    }
-    nodes.push(makeNode(dKey, code ? disciplineLabel(code) : 'Discipline not set', 1, [], typeNodes))
+    const children = types.map(typeNode)
+    if (byType.has(null)) children.push(typeNode(null))
+    nodes.push({
+      key: dKey,
+      label: code ? disciplineLabel(code) : 'Discipline not set',
+      depth: 1,
+      count: sumCounts(inDiscipline),
+      directCount: 0,
+      children,
+      listFilter: null,
+      selectFilter: dFilter,
+      classHint: 'drawing',
+    })
   }
   for (const d of disciplines) build(d)
   if (byDiscipline.has(null)) build(null)
   return nodes
 }
 
-/** Class -> (drawings only) discipline -> drawing type. Classless files go last under "Not classified yet". */
-export function groupByType(items: TreeItem[], classLabel: (code: string) => string): TreeNode[] {
-  const byClass = bucket(items, (i) => i.doc_class || null)
+/**
+ * "By document type" from the server's group counts: class -> (drawings only) discipline -> drawing type, counts
+ * rolled up. Files with no class go last under "Not classified yet". Zero-count rows are dropped.
+ */
+export function buildTypeNodes(groups: GroupCount[], classLabel: (code: string) => string): TreeNode[] {
+  const rows = groups.filter((g) => g.count > 0)
+  const byClass = groupBy(rows, (r) => r.doc_class || null)
   const codes = orderedKeys(
     [...byClass.keys()].filter((k): k is string => k !== null),
     CLASS_ORDER,
   )
-  const nodes = codes.map((code) => {
+  const nodes: TreeNode[] = codes.map((code) => {
     const inClass = byClass.get(code) ?? []
     const key = `class:${code}`
-    if (code === 'drawing') return makeNode(key, classLabel(code), 0, [], drawingNodes(inClass, key))
-    return makeNode(key, classLabel(code), 0, [...inClass].sort(byName), [])
+    const filter: DocFilter = { doc_class: code }
+    const count = sumCounts(inClass)
+    const label = classLabel(code)
+    if (code === 'drawing') {
+      return { key, label, depth: 0, count, directCount: 0, children: drawingNodes(inClass, key), listFilter: null, selectFilter: filter, classHint: code }
+    }
+    return { key, label, depth: 0, count, directCount: count, children: [], listFilter: filter, selectFilter: filter, classHint: code }
   })
   const none = byClass.get(null)
-  if (none) nodes.push(makeNode('class:none', NOT_CLASSIFIED_LABEL, 0, [...none].sort(byName), []))
+  if (none) {
+    const filter: DocFilter = { doc_class: NO_CLASS_FILTER }
+    const count = sumCounts(none)
+    nodes.push({ key: 'class:none', label: NOT_CLASSIFIED_LABEL, depth: 0, count, directCount: count, children: [], listFilter: filter, selectFilter: filter, classHint: 'none' })
+  }
+  return nodes
+}
+
+export const NO_FOLDER_LABEL = 'Top level (no folder)'
+
+interface FolderBuild {
+  name: string
+  path: string
+  direct: number
+  children: Map<string, FolderBuild>
+}
+
+/**
+ * "Original folders" from the folder -> direct file count map: the folder tree with counts rolled up. A folder's own
+ * files are listed with `folder` (exact); its checkbox selects the subtree with `include_subfolders`. Files with no
+ * folder go in one group at the end.
+ */
+export function buildFolderNodes(folders: FolderCount[]): TreeNode[] {
+  const root: FolderBuild = { name: '', path: '', direct: 0, children: new Map() }
+  for (const f of folders) {
+    if (f.count <= 0) continue
+    const segs = f.folder.replace(/\\/g, '/').split('/').filter(Boolean)
+    let cur = root
+    for (const seg of segs) {
+      let next = cur.children.get(seg)
+      if (!next) {
+        next = { name: seg, path: cur.path ? `${cur.path}/${seg}` : seg, direct: 0, children: new Map() }
+        cur.children.set(seg, next)
+      }
+      cur = next
+    }
+    cur.direct += f.count
+  }
+  const convert = (f: FolderBuild, depth: number): TreeNode => {
+    const children = [...f.children.values()].sort((a, b) => collator.compare(a.name, b.name)).map((c) => convert(c, depth + 1))
+    return {
+      key: `folder:${f.path}`,
+      label: f.name,
+      depth,
+      count: f.direct + children.reduce((n, c) => n + c.count, 0),
+      directCount: f.direct,
+      children,
+      listFilter: f.direct > 0 ? { folder: f.path } : null,
+      selectFilter: { folder: f.path, include_subfolders: true },
+      classHint: 'mixed',
+    }
+  }
+  const nodes = [...root.children.values()].sort((a, b) => collator.compare(a.name, b.name)).map((c) => convert(c, 0))
+  if (root.direct > 0) {
+    nodes.push({
+      key: 'folder:',
+      label: NO_FOLDER_LABEL,
+      depth: 0,
+      count: root.direct,
+      directCount: root.direct,
+      children: [],
+      listFilter: { folder: '' },
+      selectFilter: { folder: '' },
+      classHint: 'mixed',
+    })
+  }
   return nodes
 }
 
@@ -228,42 +333,7 @@ export function folderSegments(path: string | null): string[] {
   return path.replace(/\\/g, '/').split('/').filter(Boolean).slice(0, -1)
 }
 
-interface FolderBuild {
-  name: string
-  items: TreeItem[]
-  children: Map<string, FolderBuild>
-}
-
-export const NO_FOLDER_LABEL = 'Top level (no folder)'
-
-/** The upload folder tree. Files without a folder go in one group at the end. */
-export function groupByFolder(items: TreeItem[]): TreeNode[] {
-  const root: FolderBuild = { name: '', items: [], children: new Map() }
-  for (const item of items) {
-    let cur = root
-    for (const seg of folderSegments(item.path)) {
-      let next = cur.children.get(seg)
-      if (!next) {
-        next = { name: seg, items: [], children: new Map() }
-        cur.children.set(seg, next)
-      }
-      cur = next
-    }
-    cur.items.push(item)
-  }
-  const convert = (f: FolderBuild, parentKey: string, depth: number): TreeNode => {
-    const key = `${parentKey}/${f.name}`
-    const children = [...f.children.values()]
-      .sort((a, b) => collator.compare(a.name, b.name))
-      .map((c) => convert(c, key, depth + 1))
-    return makeNode(key, f.name, depth, [...f.items].sort(byName), children)
-  }
-  const nodes = [...root.children.values()].sort((a, b) => collator.compare(a.name, b.name)).map((c) => convert(c, 'folder:', 0))
-  if (root.items.length > 0) nodes.push(makeNode('folder:', NO_FOLDER_LABEL, 0, [...root.items].sort(byName), []))
-  return nodes
-}
-
-// ---------------------------------------------------------------- filtering
+// ---------------------------------------------------------------- filtering (server-side)
 
 export interface TreeFilters {
   q: string
@@ -276,50 +346,35 @@ export const NO_FILTERS: TreeFilters = { q: '', docClass: '', status: '', decide
 
 export const isFiltering = (f: TreeFilters) => Boolean(f.q.trim() || f.docClass || f.status || f.decidedBy)
 
-function matchesQuery(item: TreeItem, needle: string): boolean {
-  return [item.name, item.path, item.document_number, item.title].some((v) => v != null && v.toLowerCase().includes(needle))
+/** The /items filter for the search box and the Class / Status / Decided-by selects. */
+export function toDocFilter(f: TreeFilters): DocFilter {
+  const out: DocFilter = {}
+  if (f.q.trim()) out.q = f.q.trim()
+  if (f.docClass) out.doc_class = f.docClass
+  if (f.status) out.display_status = f.status
+  if (f.decidedBy) out.decided_by = f.decidedBy
+  return out
 }
 
-export function filterItems(items: TreeItem[], f: TreeFilters): TreeItem[] {
-  const needle = f.q.trim().toLowerCase()
-  if (!isFiltering(f)) return items
-  return items.filter((i) => {
-    if (needle && !matchesQuery(i, needle)) return false
-    if (f.docClass) {
-      if (f.docClass === NO_CLASS_FILTER ? Boolean(i.doc_class) : i.doc_class !== f.docClass) return false
-    }
-    if (f.status && i.display_status !== f.status) return false
-    if (f.decidedBy && decidedByInfo(i)?.key !== f.decidedBy) return false
-    return true
-  })
-}
+// ---------------------------------------------------------------- expansion
 
-// ---------------------------------------------------------------- expansion and paging
-
-export const GROUP_PAGE_SIZE = 100
 const SMALL_TREE = 40
 
 /**
- * Groups start collapsed except drawings and BOQ (and the disciplines inside drawings); a small
- * tree or an active filter opens everything, since there is little to scroll through.
+ * Groups start collapsed except drawings and BOQ (and the disciplines inside drawings); a small tree opens
+ * everything, since there is little to scroll through.
  */
-export function defaultExpanded(node: TreeNode, mode: GroupMode, opts: { filtering: boolean; total: number }): boolean {
-  if (opts.filtering || opts.total <= SMALL_TREE) return true
+export function defaultExpanded(node: TreeNode, mode: GroupMode, opts: { total: number }): boolean {
+  if (opts.total <= SMALL_TREE) return true
   if (mode === 'folder') return node.depth === 0
   if (node.key === 'class:drawing' || node.key === 'class:boq') return true
   return node.depth === 1 && node.key.startsWith('class:drawing/')
 }
 
-/** Total needs-check rows etc. are read from the summary; this is for a filtered client-side view. */
-export function needsCheckItems(items: TreeItem[]): TreeItem[] {
-  return items.filter((i) => i.display_status === 'needs_check').sort(byName)
-}
+/** True while anything is still being uploaded, unpacked or read (the tree query polls for the same condition). */
+export const isIntakeBusy = (s: TreeSummary) => s.in_progress > 0 || s.pending_upload > 0 || s.packages_processing > 0
 
-export function drawingItemsReady(items: TreeItem[]): TreeItem[] {
-  return items
-    .filter((i) => i.drawing_id && i.display_status === 'ready')
-    .sort((a, b) => collator.compare(a.document_number || a.name, b.document_number || b.name))
+/** At most `max` messages, plus how many more there were (for "and K more"). */
+export function capList<T>(list: T[], max = 20): { shown: T[]; more: number } {
+  return { shown: list.slice(0, max), more: Math.max(0, list.length - max) }
 }
-
-/** True while anything is still being unpacked or read (the tree query polls for the same condition). */
-export const isIntakeBusy = (s: TreeSummary) => s.in_progress > 0 || s.packages_processing > 0

@@ -82,11 +82,11 @@ async def test_trigger_ingest_forwards_exactly_the_actors_roles(rls_session):
     )
     await set_rls_context(rls_session, actor_ctx)
 
-    with patch("app.workers.tasks.takeoff.index_sheets.delay") as mock_delay:
+    with patch("app.workers.tasks.takeoff.index_sheets.apply_async") as mock_delay:
         await takeoff_service.trigger_ingest(rls_session, actor_ctx, uuid.UUID(drawing_id))
 
     mock_delay.assert_called_once()
-    called_drawing_id, called_tenant_id, called_actor_user_id, called_actor_roles = mock_delay.call_args.args
+    called_drawing_id, called_tenant_id, called_actor_user_id, called_actor_roles = mock_delay.call_args.kwargs["args"]
     assert called_drawing_id == drawing_id
     assert called_tenant_id == str(TENANT)
     assert called_actor_user_id == str(user_id)
@@ -111,7 +111,7 @@ async def test_non_member_cannot_trigger_ingest_at_all(rls_session):
     )
     await set_rls_context(rls_session, actor_ctx)
 
-    with patch("app.workers.tasks.takeoff.index_sheets.delay") as mock_delay:
+    with patch("app.workers.tasks.takeoff.index_sheets.apply_async") as mock_delay:
         with pytest.raises(NotFoundError):
             await takeoff_service.trigger_ingest(rls_session, actor_ctx, uuid.UUID(drawing_id))
         mock_delay.assert_not_called()

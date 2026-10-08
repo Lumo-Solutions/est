@@ -55,6 +55,7 @@ class AiCallOut(ORMModel):
     entity_id: str | None
     status: str
     tokens_in: int
+    tokens_cached: int = 0
     tokens_out: int
     cost_usd: JsonDecimal
     latency_ms: int
@@ -71,8 +72,11 @@ class AiUsageRow(BaseModel):
     errors: int
     blocked: int
     tokens_in: int
+    tokens_cached: int = 0
     tokens_out: int
     cost_usd: float
+    # False: the rate used is a published or default price, not yet checked against an invoice.
+    rate_verified: bool = True
 
 
 class AiUsageOut(BaseModel):

@@ -69,6 +69,8 @@ class Drawing(TenantEntity):
     # deleted); every takeoff / verification reader excludes archived drawings.
     archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, index=True)
     archived_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Migration 0039: the MeasurePriority the drawing was last queued at (lower runs first).
+    measure_priority: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     @property
     def is_dwg(self) -> bool:

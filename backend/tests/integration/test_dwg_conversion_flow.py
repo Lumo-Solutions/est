@@ -112,11 +112,11 @@ async def test_a_dwg_upload_is_kept_as_the_original_and_ingest_goes_to_the_conve
     assert env.store[drawing.object_key] == data and drawing.sha256 == hashlib.sha256(data).hexdigest()
     assert drawing.derived_object_key is None and drawing.converted_from_dwg is False
 
-    with patch("app.workers.tasks.dwg.convert_dwg.delay") as convert, patch("app.workers.tasks.takeoff.index_sheets.delay") as index:
+    with patch("app.workers.tasks.dwg.convert_dwg.apply_async") as convert, patch("app.workers.tasks.takeoff.index_sheets.apply_async") as index:
         await takeoff_service.trigger_ingest(rls_session, _ctx(tenant_id), drawing.id)
     convert.assert_called_once()
     index.assert_not_called()
-    assert convert.call_args.args[0] == str(drawing.id)
+    assert convert.call_args.kwargs["args"][0] == str(drawing.id) and convert.call_args.kwargs["priority"] == 0
     assert drawing.status == DrawingStatus.QUEUED.value
 
 
@@ -126,7 +126,7 @@ async def test_a_dot_dwg_that_is_really_a_pdf_is_stored_and_ingested_as_a_pdf(rl
     tenant_id, project_id = await _seed_project(rls_session)
     drawing = await _upload(rls_session, tenant_id, project_id, "Mislabelled.dwg", _vector_pdf("C-1", "A", "T", "A1"), "application/acad")
     assert (drawing.kind, drawing.content_type) == ("vector_pdf", "application/pdf")
-    with patch("app.workers.tasks.dwg.convert_dwg.delay") as convert, patch("app.workers.tasks.takeoff.index_sheets.delay") as index:
+    with patch("app.workers.tasks.dwg.convert_dwg.apply_async") as convert, patch("app.workers.tasks.takeoff.index_sheets.apply_async") as index:
         await takeoff_service.trigger_ingest(rls_session, _ctx(tenant_id), drawing.id)
     convert.assert_not_called()
     index.assert_called_once()
@@ -220,7 +220,7 @@ async def test_a_corrupt_dwg_goes_to_needs_conversion_with_a_reason_and_the_work
     assert "corrupt" in drawing.error_message
 
     # ...and the retry path is open (not a dead end): ingest queues it again.
-    with patch("app.workers.tasks.dwg.convert_dwg.delay"):
+    with patch("app.workers.tasks.dwg.convert_dwg.apply_async"):
         await takeoff_service.trigger_ingest(rls_session, _ctx(tenant_id), drawing.id)
     assert drawing.status == DrawingStatus.QUEUED.value and drawing.error_message is None
 
@@ -276,7 +276,7 @@ async def test_the_feature_flag_off_parks_the_drawing_immediately_without_queuei
     env.settings = make_settings(env.spool, DWG_CONVERSION_ENABLED="false")
     tenant_id, project_id = await _seed_project(rls_session)
     drawing = await _upload(rls_session, tenant_id, project_id, "Site.dwg", fixture_bytes("civil_site.dwg"))
-    with patch("app.workers.tasks.dwg.convert_dwg.delay") as convert, patch("app.workers.tasks.takeoff.index_sheets.delay") as index:
+    with patch("app.workers.tasks.dwg.convert_dwg.apply_async") as convert, patch("app.workers.tasks.takeoff.index_sheets.apply_async") as index:
         job_ids = await takeoff_service.trigger_ingest(rls_session, _ctx(tenant_id), drawing.id)
     assert job_ids == [] and not convert.called and not index.called
     _assert_parked(drawing, client.R_DISABLED)

@@ -13,7 +13,13 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 
+from app.takeoff.pdf import PDFIUM_LOCK  # PDFium is not thread-safe: one use at a time, process-wide
+
 MAX_PDF_PAGES_READ = 3
+# A page with more than this many drawing objects is a CAD export. pdfplumber builds a Python object for every one of
+# them (a real 8 MB single-sheet A0 drawing with 750,000 of them took 163 s and 3 GB), so such a file is read with
+# PDFium, which parses the same page in about a second. Below it, pdfplumber is used as always (same text, same cache keys).
+HEAVY_PDF_OBJECTS = 20_000
 MAX_SHEET_ROWS = 40
 MAX_TEXT_CHARS = 20_000
 MAX_DXF_TEXT_ENTITIES = 500
@@ -89,9 +95,68 @@ def header_cells_of(row: list[object]) -> list[tuple[str, str]]:
     return [(get_column_letter(i), str(c).strip()) for i, c in enumerate(row, start=1) if c is not None and str(c).strip()]
 
 
+def _pdf_is_heavy(data: bytes) -> bool:
+    """True when any of the pages that are read has more than HEAVY_PDF_OBJECTS drawing objects. Counting stops at the
+    threshold, so this costs about as much as opening the file."""
+    import pypdfium2 as pdfium
+
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(data)
+        try:
+            for i in range(min(len(doc), MAX_PDF_PAGES_READ)):
+                page = doc[i]
+                try:
+                    n = 0
+                    for _ in page.get_objects():
+                        n += 1
+                        if n > HEAVY_PDF_OBJECTS:
+                            return True
+                finally:
+                    page.close()
+            return False
+        finally:
+            doc.close()
+
+
+def _extract_pdf_pdfium(data: bytes, content: DocContent) -> None:
+    """The same fields as `_extract_pdf`, read with PDFium: for CAD exports that pdfplumber cannot afford."""
+    import pypdfium2 as pdfium
+
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(data)
+        try:
+            content.pages = len(doc)
+            for i in range(min(len(doc), MAX_PDF_PAGES_READ)):
+                page = doc[i]
+                try:
+                    textpage = page.get_textpage()
+                    try:
+                        content.page_texts.append(textpage.get_text_range() or "")
+                        if i == 0:
+                            w, h = page.get_size()
+                            # Bottom-right region, as for pdfplumber below (PDF coordinates start at the bottom left).
+                            content.title_block_text = textpage.get_text_bounded(left=w * 0.65, bottom=0, right=w, top=h * 0.30) or ""
+                    finally:
+                        textpage.close()
+                    if i == 0:
+                        content.vector_density = HEAVY_PDF_OBJECTS  # at least this many: it is dense
+                finally:
+                    page.close()
+        finally:
+            doc.close()
+    content.text = "\n".join(content.page_texts)[:MAX_TEXT_CHARS]
+    total = sum(len(t.strip()) for t in content.page_texts)
+    content.has_text_layer = total >= RASTER_CHAR_THRESHOLD
+    content.is_raster = not content.has_text_layer
+    content.needs_image = content.is_raster
+
+
 def _extract_pdf(data: bytes, content: DocContent) -> None:
     import pdfplumber
 
+    if _pdf_is_heavy(data):
+        _extract_pdf_pdfium(data, content)
+        return
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         content.pages = len(pdf.pages)
         for i, page in enumerate(pdf.pages[:MAX_PDF_PAGES_READ]):

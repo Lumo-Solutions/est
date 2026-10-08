@@ -41,6 +41,7 @@ class CallRecord:
     prompt: str | None = None
     response: Any = None
     tokens_in: int = 0
+    tokens_cached: int = 0
     tokens_out: int = 0
     cost_usd: Decimal = Decimal("0")
     latency_ms: int = 0
@@ -175,6 +176,7 @@ class DbStore:
                     prompt=rec.prompt,
                     response=rec.response,
                     tokens_in=rec.tokens_in,
+                    tokens_cached=rec.tokens_cached,
                     tokens_out=rec.tokens_out,
                     cost_usd=rec.cost_usd,
                     latency_ms=rec.latency_ms,

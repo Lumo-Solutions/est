@@ -2,8 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, SectionHeading } from '../../components/Card'
 import { controlClasses } from '../../components/Field'
-import { drawingItemsReady } from './treeLib'
-import type { TreeItem, TreeSummary } from './types'
+import type { TreeSummary } from './types'
 
 const linkButton =
   'inline-flex items-center justify-center rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2'
@@ -21,27 +20,27 @@ function Step({ title, children }: { title: string; children: React.ReactNode })
 
 // What to do once documents are in: import the BOQ, measure the drawings, verify, settle. Disabled
 // steps say why in text.
-export function NextSteps({ projectId, items, summary }: { projectId: string; items: TreeItem[]; summary: TreeSummary }) {
-  const boqIds = summary.boq_documents
+export function NextSteps({ projectId, summary }: { projectId: string; summary: TreeSummary }) {
+  const boqDocs = summary.boq_documents
   const [pickedBoq, setPickedBoq] = useState('')
-  const boqId = boqIds.includes(pickedBoq) ? pickedBoq : (boqIds[0] ?? '')
-  const nameOf = (id: string) => items.find((i) => i.id === id)?.name ?? id
-  const firstDrawing = drawingItemsReady(items)[0]
+  const boqId = boqDocs.some((d) => d.id === pickedBoq) ? pickedBoq : (boqDocs[0]?.id ?? '')
+  const nameOf = (id: string) => boqDocs.find((d) => d.id === id)?.name ?? id
+  const firstDrawingId = summary.first_drawing_id
 
   return (
     <Card className="mt-6">
       <SectionHeading>Next steps</SectionHeading>
       <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Step title="Import BOQ">
-          {boqIds.length > 1 && (
+          {boqDocs.length > 1 && (
             <div>
               <label htmlFor="next-boq" className="mb-1 block text-xs text-ink-2">
                 BOQ document
               </label>
               <select id="next-boq" value={boqId} onChange={(e) => setPickedBoq(e.target.value)} className={`${controlClasses} !py-1.5 !text-sm`}>
-                {boqIds.map((id) => (
-                  <option key={id} value={id}>
-                    {nameOf(id)}
+                {boqDocs.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
                   </option>
                 ))}
               </select>
@@ -50,7 +49,7 @@ export function NextSteps({ projectId, items, summary }: { projectId: string; it
           {boqId ? (
             <>
               <p className="text-sm text-ink-2">
-                {boqIds.length === 1 ? `${nameOf(boqId)} is ready to import.` : `${boqIds.length} BOQ documents are ready to import.`}
+                {boqDocs.length === 1 ? `${nameOf(boqId)} is ready to import.` : `${boqDocs.length} BOQ documents are ready to import.`}
               </p>
               <Link to={`/projects/${projectId}/boq/import?document=${boqId}`} className={`${linkButton} self-start`}>
                 Import BOQ
@@ -71,8 +70,8 @@ export function NextSteps({ projectId, items, summary }: { projectId: string; it
           <p className="text-sm text-ink-2">
             {summary.drawings_ready} of {summary.drawings_total} drawings ready
           </p>
-          {firstDrawing?.drawing_id ? (
-            <Link to={`/projects/${projectId}/drawings/${firstDrawing.drawing_id}`} className={`${linkButton} self-start`}>
+          {firstDrawingId ? (
+            <Link to={`/projects/${projectId}/drawings/${firstDrawingId}`} className={`${linkButton} self-start`}>
               Open drawings / takeoff
             </Link>
           ) : (

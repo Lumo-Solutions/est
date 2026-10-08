@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi import Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_session, require_roles
@@ -23,6 +24,7 @@ from app.schemas.tender_intake import (
     TreeOut,
     BulkConfirmOut,
     ClassificationOut,
+    DocFilter,
     DocumentPage,
     EditMetadataIn,
     ExcludeIn,
@@ -31,12 +33,18 @@ from app.schemas.tender_intake import (
     ReclassifyIn,
     TenderClassOut,
     TenderClassUpdate,
+    PackageControlOut,
+    RegisterPackageIn,
+    RegisterPackageOut,
     TenderPackageAccepted,
     TenderPackageOut,
+    TreeItemPage,
+    UploadResult,
 )
-from app.services import ai_admin
+from app.services import ai_admin, ai_cost
 from app.services import tender_intake as intake_service
 from app.services import tender_intake_tree
+from app.services import tender_intake_upload as upload_service
 
 router = APIRouter(tags=["tender-intake"])
 
@@ -62,9 +70,11 @@ async def _read_uploads(files: list[UploadFile], settings: Settings) -> list[tup
     out: list[tuple[str, bytes]] = []
     total = 0
     for f in files:
-        data = await f.read(settings.intake_max_file_size_bytes + 1)
-        if len(data) > settings.intake_max_file_size_bytes:
-            raise ValidationAppError(f"{f.filename!r} is larger than the {settings.intake_max_file_size_bytes // (1024 * 1024)} MiB per-file limit")
+        # This path buffers the file: its ceiling is the per-request limit (big files use the streaming upload).
+        ceiling = min(settings.intake_max_file_size_bytes, settings.intake_max_request_bytes)
+        data = await f.read(ceiling + 1)
+        if len(data) > ceiling:
+            raise ValidationAppError(f"{f.filename!r} is larger than the {ceiling // (1024 * 1024)} MiB this endpoint takes; the app uploads big files with the streaming upload")
         total += len(data)
         if total > settings.intake_max_request_bytes:
             raise ValidationAppError(f"This batch is larger than the {settings.intake_max_request_bytes // (1024 * 1024)} MiB per-request limit: send fewer files at once")
@@ -72,14 +82,15 @@ async def _read_uploads(files: list[UploadFile], settings: Settings) -> list[tup
     return out
 
 
-def _dispatch(ctx: RequestContext, package_id: UUID, document_ids: list[UUID]) -> None:
-    from app.workers.tasks.tender_intake import process_tender_package
+def _dispatch(ctx: RequestContext, package_id: UUID, document_ids: list[UUID] | None = None) -> None:
+    """Asks the dispatcher to enqueue the pack's received files (after the request transaction commits). The files
+    are in the database either way: if this message is lost the 30-second tick picks them up."""
+    from app.workers.tasks.tender_intake import dispatch_intake
 
-    # countdown: the request transaction commits when the route returns.
-    process_tender_package.apply_async(
-        args=(str(package_id), str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, list(ctx.roles), [str(i) for i in document_ids]),
-        countdown=3,
-    )
+    try:
+        dispatch_intake.apply_async(args=(str(ctx.tenant_id), str(package_id)), countdown=2)
+    except Exception:  # noqa: BLE001 -- the tick covers it
+        pass
 
 
 @router.post("/projects/{project_id}/tender-packages", response_model=TenderPackageAccepted, status_code=202)
@@ -113,6 +124,94 @@ async def add_files_endpoint(
     package, doc_ids = await intake_service.add_files(session, ctx, package_id, uploads)
     _dispatch(ctx, package.id, doc_ids)
     return TenderPackageAccepted(package_id=package.id, file_count=package.file_count, status=package.status)
+
+
+# --------------------------------------------------------------- resumable upload (the UI's path)
+@router.post("/projects/{project_id}/tender-packages/register", response_model=RegisterPackageOut)
+async def register_files_endpoint(
+    project_id: UUID,
+    data: RegisterPackageIn,
+    ctx: RequestContext = Depends(require_roles(*UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> RegisterPackageOut:
+    """Announces files (path, size, sha256) before any bytes are sent. The answer says which files still need their
+    bytes: re-dropping the same folder after an interruption resumes instead of starting over."""
+    out = await upload_service.register_files(session, ctx, project_id, data)
+    # Files whose bytes were already here are `received` at once.
+    _dispatch(ctx, out.package_id)
+    return out
+
+
+@router.put("/tender-packages/{package_id}/documents/{document_id}/content", response_model=UploadResult)
+async def upload_document_content_endpoint(
+    package_id: UUID,
+    document_id: UUID,
+    request: Request,
+    ctx: RequestContext = Depends(require_roles(*UPLOAD_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> UploadResult:
+    """One file's raw bytes (not multipart), streamed straight to S3 a chunk at a time: the server never holds more
+    than one upload part in memory. The registered sha256 must match what arrives."""
+    raw_length = request.headers.get("content-length")
+    result = await upload_service.receive_upload(
+        session, ctx, package_id, document_id, request.stream(),
+        declared_size=int(raw_length) if raw_length and raw_length.isdigit() else None,
+    )
+    _dispatch(ctx, package_id)
+    return result
+
+
+@router.get("/tender-packages/{package_id}/cost-estimate", response_model=ai_cost.CostEstimateOut)
+async def cost_estimate_endpoint(
+    package_id: UUID,
+    ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ai_cost.CostEstimateOut:
+    """What reading this pack with the configured AI provider is expected to cost (files still needing the AI x the
+    average tokens per call seen so far, priced per model), and whether it still waits for confirmation."""
+    return await ai_cost.estimate(session, ctx, settings, package_id)
+
+
+class ConfirmCostIn(BaseModel):
+    # The estimate the person was shown; if it has grown by more than 10 % since, they are asked to look again.
+    accepted_usd: float = Field(ge=0)
+
+
+@router.post("/tender-packages/{package_id}/confirm-cost", response_model=ai_cost.CostEstimateOut)
+async def confirm_cost_endpoint(
+    package_id: UUID,
+    data: ConfirmCostIn,
+    ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ai_cost.CostEstimateOut:
+    out = await ai_cost.confirm(session, ctx, settings, package_id, data.accepted_usd)
+    _dispatch(ctx, package_id)  # the pack may start now
+    return out
+
+
+@router.post("/tender-packages/{package_id}/pause", response_model=PackageControlOut)
+async def pause_package_endpoint(
+    package_id: UUID, ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session)
+) -> PackageControlOut:
+    return await upload_service.pause_package(session, ctx, package_id)
+
+
+@router.post("/tender-packages/{package_id}/resume", response_model=PackageControlOut)
+async def resume_package_endpoint(
+    package_id: UUID, ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session)
+) -> PackageControlOut:
+    out = await upload_service.resume_package(session, ctx, package_id)
+    _dispatch(ctx, package_id)
+    return out
+
+
+@router.post("/tender-packages/{package_id}/cancel", response_model=PackageControlOut)
+async def cancel_package_endpoint(
+    package_id: UUID, ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session)
+) -> PackageControlOut:
+    return await upload_service.cancel_package(session, ctx, package_id)
 
 
 @router.get("/projects/{project_id}/tender-packages", response_model=list[TenderPackageOut])
@@ -255,7 +354,8 @@ async def bulk_confirm_endpoint(
     ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session),
 ) -> BulkConfirmOut:
     return await intake_service.bulk_confirm(
-        session, ctx, project_id, package_id=data.package_id, document_ids=data.document_ids, min_confidence=data.min_confidence
+        session, ctx, project_id, package_id=data.package_id, document_ids=data.document_ids, min_confidence=data.min_confidence,
+        doc_filter=data.filter, cursor=data.cursor,
     )
 
 
@@ -265,7 +365,8 @@ async def bulk_reclassify_endpoint(
     ctx: RequestContext = Depends(require_roles(*CONFIRM_ROLES)), session: AsyncSession = Depends(get_session),
 ) -> BulkConfirmOut:
     return await intake_service.bulk_reclassify(
-        session, ctx, project_id, data.document_ids, data.doc_class, data.sub_type, data.drawing_type, data.note, data.confirm
+        session, ctx, project_id, data.document_ids, data.doc_class, data.sub_type, data.drawing_type, data.note, data.confirm,
+        doc_filter=data.filter, cursor=data.cursor,
     )
 
 
@@ -276,13 +377,48 @@ async def document_tree_endpoint(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> TreeOut:
+    """Counts only (summary, group counts, folder counts, packs): never the documents themselves, so it stays small
+    and fast for a pack of thousands. The documents of one group come from `/tender-documents/items`."""
     status = await ai_admin.get_status(session, ctx, settings)
-    return await tender_intake_tree.build_tree(session, project_id, ai_available=status.available, ai_message=status.message)
+    return await tender_intake_tree.build_summary(session, project_id, ai_available=status.available, ai_message=status.message)
+
+
+@router.get("/projects/{project_id}/tender-documents/items", response_model=TreeItemPage)
+async def tree_items_endpoint(
+    project_id: UUID,
+    package_id: UUID | None = None,
+    doc_class: str | None = None,
+    discipline: str | None = None,
+    drawing_type: str | None = None,
+    display_status: str | None = None,
+    decided_by: str | None = None,
+    flag: str | None = None,
+    folder: str | None = None,
+    include_subfolders: bool = False,
+    has_class: bool | None = None,
+    exclude_flags: list[str] = Query(default=[]),
+    q: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> TreeItemPage:
+    """One page of the documents matching a filter, as the compact rows the project page shows, in a stable order."""
+    doc_filter = DocFilter(
+        package_id=package_id, doc_class=doc_class, discipline=discipline, drawing_type=drawing_type,
+        display_status=display_status, decided_by=decided_by, flag=flag, folder=folder, include_subfolders=include_subfolders,
+        has_class=has_class, exclude_flags=exclude_flags, q=q,
+    )
+    items, total = await tender_intake_tree.list_tree_items(session, project_id, doc_filter, limit=limit, offset=offset)
+    return TreeItemPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/tender-intake/settings", response_model=IntakeSettingsOut)
 async def intake_settings_endpoint(ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)) -> IntakeSettingsOut:
-    return IntakeSettingsOut(auto_accept_min=await intake_service.get_auto_accept_min(session))
+    return IntakeSettingsOut(
+        auto_accept_min=await intake_service.get_auto_accept_min(session),
+        auto_measure_disciplines=await intake_service.get_auto_measure(session),
+    )
 
 
 @router.put("/admin/intake-settings", response_model=IntakeSettingsOut)
@@ -291,7 +427,14 @@ async def set_intake_settings_endpoint(
     ctx: RequestContext = Depends(require_roles(*CLASS_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> IntakeSettingsOut:
-    return IntakeSettingsOut(auto_accept_min=await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min))
+    if data.auto_accept_min is not None:
+        await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min)
+    if data.auto_measure_disciplines is not None:
+        await intake_service.set_auto_measure(session, ctx, data.auto_measure_disciplines)
+    return IntakeSettingsOut(
+        auto_accept_min=await intake_service.get_auto_accept_min(session),
+        auto_measure_disciplines=await intake_service.get_auto_measure(session),
+    )
 
 
 @router.get("/tender-classes", response_model=list[TenderClassOut])

@@ -1,3 +1,5 @@
+import type { ApiError, ProblemDetails } from '../../lib/api'
+
 // Mirrors backend/app/schemas/tender_intake.py. Decimals arrive as JSON numbers.
 
 export interface TenderPackage {
@@ -111,12 +113,18 @@ export interface BulkConfirmResult {
   failed: number
   skipped: number
   results: ConfirmItemResult[]
+  /** Filter-based calls only: how many files matched when the first call started. */
+  matched?: number | null
+  /** Filter-based calls only: pass back as `cursor` until it is null. */
+  next_cursor?: string | null
 }
 
 export interface BulkConfirmBody {
   package_id?: string | null
   document_ids?: string[] | null
   min_confidence?: number | null
+  filter?: DocFilter | null
+  cursor?: string | null
 }
 
 export interface AddendumLink {
@@ -175,7 +183,9 @@ export interface ReclassifyBody {
 }
 
 export interface BulkReclassifyBody extends ReclassifyBody {
-  document_ids: string[]
+  document_ids?: string[] | null
+  filter?: DocFilter | null
+  cursor?: string | null
   confirm: boolean
 }
 
@@ -223,15 +233,23 @@ export interface TreeItem {
   created_at: string
 }
 
+export interface TreeBoqDoc {
+  id: string
+  name: string
+}
+
 export interface TreeSummary {
   total: number
   by_display_status: Record<string, number>
   by_class: Record<string, number>
   needs_check: number
   in_progress: number
+  /** Registered files whose bytes have not arrived yet (a resumable upload in progress). */
+  pending_upload: number
   drawings_total: number
   drawings_ready: number
-  boq_documents: string[]
+  boq_documents: TreeBoqDoc[]
+  first_drawing_id: string | null
   addenda: number
   packages_processing: number
   auto_accept_min: number
@@ -239,7 +257,131 @@ export interface TreeSummary {
   ai_message: string | null
 }
 
+/** Counts of the "by document type" tree; `null` = not set. Roll up by summing. */
+export interface GroupCount {
+  doc_class: string | null
+  discipline: string | null
+  drawing_type: string | null
+  count: number
+}
+
+/** Files directly in an upload folder (`''` = top level). */
+export interface FolderCount {
+  folder: string
+  count: number
+}
+
+export type PackageStatus = 'uploading' | 'processing' | 'ready' | 'failed' | 'paused' | 'cancelled'
+
+export interface PackageProgress {
+  id: string
+  label: string | null
+  status: PackageStatus | string
+  created_at: string
+  expected_count: number
+  registered: number
+  uploaded: number
+  waiting: number
+  pending_upload: number
+  /** An external AI would read this pack and nobody has confirmed the estimated cost yet. */
+  awaiting_cost_confirmation?: boolean
+}
+
+// GET /projects/{id}/tender-documents/tree: counts only, no file list.
 export interface TreeOut {
-  items: TreeItem[]
   summary: TreeSummary
+  groups: GroupCount[]
+  folders: FolderCount[]
+  packages: PackageProgress[]
+}
+
+/** Which documents of a project; the same vocabulary for the paged list and the bulk actions. `none` = not set. */
+export interface DocFilter {
+  package_id?: string
+  doc_class?: string
+  discipline?: string
+  drawing_type?: string
+  display_status?: string
+  decided_by?: string
+  flag?: string
+  exclude_flags?: string[]
+  has_class?: boolean
+  /** Exact upload folder ('' = top level); with include_subfolders, that folder and everything below it. */
+  folder?: string
+  include_subfolders?: boolean
+  q?: string
+}
+
+// GET /projects/{id}/tender-documents/items
+export interface TreeItemPage {
+  items: TreeItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface PackageControlOut {
+  package_id: string
+  status: string
+  cancelled_documents: number
+}
+
+// --- AI cost estimate and confirmation (GET /tender-packages/{id}/cost-estimate, POST .../confirm-cost) ---
+
+export interface ModelEstimate {
+  model: string
+  tier: string
+  calls: number
+  avg_tokens_in: number
+  avg_tokens_cached: number
+  avg_tokens_out: number
+  est_usd: number
+  /** False: a published or default price, not yet checked against a provider invoice. */
+  rate_verified: boolean
+  basis: 'history' | 'default' | string
+}
+
+export interface CostEstimate {
+  package_id: string
+  provider: string
+  external: boolean
+  ai_available: boolean
+  files_needing_ai: number
+  models: ModelEstimate[]
+  total_usd: number
+  any_unverified: boolean
+  monthly_remaining_usd: number | null
+  project_remaining_usd: number | null
+  within_budget: boolean
+  confirmation_required: boolean
+  confirmed_at: string | null
+  confirmed_usd: number | null
+  note: string
+}
+
+export const COST_CONFIRMATION_TYPE = 'urn:installtec:cost-confirmation-required'
+
+/** A 409 from resume or confirm-cost: the cost was not (or no longer) confirmed; `estimate` is the current one. */
+export class CostConfirmationRequiredError extends Error {
+  readonly status: number
+  readonly problem: ProblemDetails
+  readonly estimate: CostEstimate | null
+
+  constructor(source: { status: number; problem: ProblemDetails; message?: string }) {
+    super(source.message || source.problem.detail || source.problem.title || 'Cost confirmation required')
+    this.name = 'CostConfirmationRequiredError'
+    this.status = source.status
+    this.problem = source.problem
+    const e = source.problem.estimate
+    this.estimate = e && typeof e === 'object' ? (e as CostEstimate) : null
+  }
+}
+
+/** Turns a cost-confirmation 409 (an ApiError) into the typed error; anything else is rethrown unchanged. */
+export function asCostConfirmationError(e: unknown): never {
+  const err = e as Partial<ApiError> | null
+  if (e instanceof Error && err?.status === 409 && err.problem?.type === COST_CONFIRMATION_TYPE) {
+    throw new CostConfirmationRequiredError({ status: err.status, problem: err.problem, message: e.message })
+  }
+  throw e
 }

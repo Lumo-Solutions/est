@@ -18,6 +18,10 @@ services:
     volumes:
       - ../backend/app:/app/app:ro
 
+  celery-worker-index:
+    volumes:
+      - ../backend/app:/app/app:ro
+
   celery-worker-vlm:
     volumes:
       - ../backend/app:/app/app:ro

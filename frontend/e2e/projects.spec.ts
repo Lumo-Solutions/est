@@ -81,26 +81,42 @@ test('an authenticated user opens a project and sees its drawings', async ({ pag
       body: JSON.stringify([{ code: 'drawing', label: 'Drawing', default_label: 'Drawing', enabled: true, sort_order: 0 }]),
     }),
   )
-  // The project page is one page: header, then the AI-sorted document tree (GET .../tender-documents/tree).
+  // The project page is one page: header, then the AI-sorted document tree. The tree endpoint returns counts only; the
+  // files of an open group come from /tender-documents/items, a page at a time.
+  const item = {
+    id: 'd1', package_id: 'k1', name: 'tender-set.pdf', path: 'Tender/tender-set.pdf', ext: 'pdf', size_bytes: 1234,
+    doc_class: 'drawing', discipline: 'roads_civil', drawing_type: 'general_arrangement', unit_type: null,
+    document_number: 'C-101', title: 'Road layout', revision: 'A', sheet_number: null, scale: '1:500', confidence: 0.97,
+    status: 'routed', display_status: 'ready', status_reason: null, classified_by: 'ai', decided_by: 'ai', auto_accepted: true,
+    flags: [], routed_kind: 'drawing', drawing_id: 'dr1', evidence_quote: 'DRAWING NO: C-101', evidence_page: 1, ai_note: null,
+    supersedes: [], created_at: '2026-01-01T00:00:00Z',
+  }
   await page.route('**/api/v1/projects/p1/tender-documents/tree', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        items: [
-          {
-            id: 'd1', package_id: 'k1', name: 'tender-set.pdf', path: 'Tender/tender-set.pdf', ext: 'pdf', size_bytes: 1234,
-            doc_class: 'drawing', discipline: 'roads_civil', drawing_type: 'general_arrangement', unit_type: null,
-            document_number: 'C-101', title: 'Road layout', revision: 'A', sheet_number: null, scale: '1:500', confidence: 0.97,
-            status: 'routed', display_status: 'ready', status_reason: null, classified_by: 'ai', decided_by: 'ai', auto_accepted: true,
-            flags: [], routed_kind: 'drawing', drawing_id: 'dr1', evidence_quote: 'DRAWING NO: C-101', evidence_page: 1, ai_note: null,
-            supersedes: [], created_at: '2026-01-01T00:00:00Z',
-          },
-        ],
         summary: {
-          total: 1, by_display_status: { ready: 1 }, by_class: { drawing: 1 }, needs_check: 0, in_progress: 0, drawings_total: 1,
-          drawings_ready: 1, boq_documents: [], addenda: 0, packages_processing: 0, auto_accept_min: 0.85, ai_available: true, ai_message: null,
+          total: 1, by_display_status: { ready: 1 }, by_class: { drawing: 1 }, needs_check: 0, in_progress: 0, pending_upload: 0,
+          drawings_total: 1, drawings_ready: 1, boq_documents: [], first_drawing_id: 'dr1', addenda: 0, packages_processing: 0,
+          auto_accept_min: 0.85, ai_available: true, ai_message: null,
         },
+        groups: [{ doc_class: 'drawing', discipline: 'roads_civil', drawing_type: 'general_arrangement', count: 1 }],
+        folders: [{ folder: 'Tender', count: 1 }],
+        packages: [],
+      }),
+    }),
+  )
+  await page.route('**/api/v1/projects/p1/tender-documents/items*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [item], total: 1, limit: 100, offset: 0 }) }),
+  )
+  await page.route('**/api/v1/projects/p1/drawings/measurement-summary', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        total: { indexed: 0, queued: 0, measuring: 0, measured: 1, failed: 0 },
+        by_discipline: { roads_civil: { indexed: 0, queued: 0, measuring: 0, measured: 1, failed: 0 } },
       }),
     }),
   )
