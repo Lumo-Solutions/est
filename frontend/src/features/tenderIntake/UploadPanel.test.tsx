@@ -1,4 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render as baseRender, screen, waitFor, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../lib/api'
 
@@ -10,6 +12,9 @@ vi.mock('./uploadApi', () => ({
 }))
 
 import { UploadPanel } from './UploadPanel'
+
+// The panel refreshes the project page's counts (react-query) as the upload goes.
+const render = (ui: ReactElement) => baseRender(<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>)
 
 function pdf(name: string): File {
   return new File(['%PDF-1.4'], name, { type: 'application/pdf' })

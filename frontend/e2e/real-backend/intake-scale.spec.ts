@@ -195,6 +195,14 @@ test('a lead estimator pauses and resumes a pack; an estimator sees no pack cont
 
     await lead.getByRole('button', { name: /^Resume / }).click()
     await expect(lead.getByRole('status').filter({ hasText: /This pack is paused/ })).toHaveCount(0, { timeout: 30_000 })
+    // The browser stopped sending when the pack was paused (it was still uploading): dropping the folder again finishes it.
+    const open = (await counts(lead, projectId)).summary.pending_upload > 0
+    if (open) {
+      await lead.reload()
+      await lead.getByTestId('tender-folder-input').setInputFiles(join(pack.dir, 'Tender'))
+      await lead.getByRole('button', { name: /^Upload [\d,]+ files$/ }).click()
+      await expect(lead.getByText(/Continuing an unfinished upload/)).toBeVisible({ timeout: 120_000 })
+    }
     const done = await waitRead(lead, projectId)
     expect(done.packages[0].status).toBe('ready')
     await lead.context().close()

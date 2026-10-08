@@ -270,7 +270,9 @@ export function useMeasurementSummary(projectId: string | undefined) {
     queryFn: ({ signal }) =>
       api.get<MeasurementSummary>(`/projects/${projectId}/drawings/measurement-summary`, signal),
     enabled: Boolean(projectId),
-    refetchInterval: (query) => (measurementBusy(query.state.data) ? MEASUREMENT_POLL_MS : false),
+    // Busy: follow it closely. Otherwise look again now and then, so drawings that intake routes while the page is open
+    // (the summary was empty when it loaded) show up without a reload.
+    refetchInterval: (query) => (measurementBusy(query.state.data) ? MEASUREMENT_POLL_MS : 15_000),
   })
 }
 

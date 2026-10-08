@@ -193,14 +193,27 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     const filed = byName(await getTree(lead, state.projectId), 'Site visit notes.pdf')
     expect(filed).toMatchObject({ doc_class: 'correspondence', classified_by: 'user', decided_by: 'user', routed_kind: 'register', display_status: 'ready' })
 
-    // ---- 6. the drawings were routed to extraction on their own and reach ready
-    const ready = await waitForTree(lead, state.projectId, (t) => t.summary.drawings_total === 3 && t.summary.drawings_ready === 3, 'three drawings ready', 360_000)
+    // ---- 6. intake only classified and indexed the drawings; measuring is on demand
+    const indexed = await getTree(lead, state.projectId)
+    const drawingItems = indexed.items.filter((i) => i.doc_class === 'drawing')
+    expect(drawingItems).toHaveLength(3)
+    const drawingState = async (id: string) => (await (await lead.request.get(`/api/v1/drawings/${id}`)).json()) as { status: string; measurement: string }
+    for (const item of drawingItems) expect(await drawingState(item.drawing_id!)).toMatchObject({ status: 'indexed', measurement: 'indexed' })
+    await expect(lead.getByRole('heading', { name: 'Drawings to measure' })).toBeVisible({ timeout: 45_000 })
+    // Opening one drawing measures it now (what the takeoff page does) ...
+    const opened = await lead.request.post(`/api/v1/drawings/${drawingItems[0].drawing_id}/measure`, { headers: await csrfHeaders(lead) })
+    expect(opened.status()).toBe(202)
+    // ... and "Measure all" queues the rest behind it (lead_estimator and above).
+    const bulk = await lead.request.post(`/api/v1/projects/${state.projectId}/drawings/measure`, {
+      headers: await csrfHeaders(lead),
+      data: { disciplines: ['roads_civil', 'landscape', 'stormwater'] },
+    })
+    expect(bulk.status()).toBe(202)
+    expect(await bulk.json()).toMatchObject({ matched: 2 })
+    const ready = await waitForTree(lead, state.projectId, (t) => t.summary.drawings_total === 3 && t.summary.drawings_ready === 3 && t.summary.in_progress === 0, 'three drawings measured', 420_000)
     expect(ready.summary.needs_check).toBe(0)
-    await expect(lead.getByText('3 of 3 drawings ready')).toBeVisible({ timeout: 30_000 })
-    for (const item of ready.items.filter((i) => i.doc_class === 'drawing')) {
-      const res = await lead.request.get(`/api/v1/drawings/${item.drawing_id}`)
-      expect(((await res.json()) as { status: string }).status).toBe('ready')
-    }
+    for (const item of drawingItems) await expect.poll(async () => (await drawingState(item.drawing_id!)).measurement, { timeout: 420_000, intervals: [3_000] }).toBe('measured')
+    await expect(lead.getByText('3 of 3 drawings ready')).toBeVisible({ timeout: 60_000 })
 
     // ---- 7. the Excel BOQ is ready to import: the wizard opens pre-filled; the dry run is still the user's to run
     const boq = byName(ready, 'BOQ Rev 0.xlsx')

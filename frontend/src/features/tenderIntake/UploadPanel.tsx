@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../../components/Button'
+import { useInvalidateIntake } from './api'
 import { Card, SectionHeading } from '../../components/Card'
 import { DropZone, type PathedFile } from '../../components/DropZone'
 import { TextField } from '../../components/Field'
@@ -127,6 +128,9 @@ export function UploadPanel({
     }
   }
 
+  const invalidate = useInvalidateIntake(projectId)
+  const lastRefresh = useRef(0)
+
   const flushProgress = (p: UploadProgress | null) => {
     const t = throttle.current
     if (t.timer) clearTimeout(t.timer)
@@ -168,8 +172,14 @@ export function UploadPanel({
         onProgress: (p) => {
           last = p
           pushProgress(p)
+          // The project page's counts follow the upload (at most every 3 s), so the pack appears and fills in.
+          if (p.phase === 'uploading' && Date.now() - lastRefresh.current > 3000) {
+            lastRefresh.current = Date.now()
+            invalidate()
+          }
         },
         onRegistered: ({ resumed, alreadyUploaded }) => {
+          invalidate()
           if (resumed) setNotice(`Continuing an unfinished upload: ${num(alreadyUploaded)} ${alreadyUploaded === 1 ? 'file was' : 'files were'} already here.`)
         },
       })
@@ -189,6 +199,7 @@ export function UploadPanel({
     } finally {
       abortRef.current = null
       setBusy(false)
+      invalidate()
     }
   }
 
