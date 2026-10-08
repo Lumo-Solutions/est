@@ -431,6 +431,20 @@ async def _flag_revision(session: AsyncSession, doc: ProjectDocument, flags: lis
         if Flag.REVISION_OF.value not in flags:
             flags.append(Flag.REVISION_OF.value)
         metadata["revision_of_document_id"] = str(latest.id)
+    # Files are read in parallel, in no fixed order: a later revision can be classified before the revision it replaces
+    # was, and would never be looked at again. So this document also flags the later revisions already read.
+    later = sorted(
+        (o for o in others if doc.revision_label and o.revision_label and revision_sort_key(o.revision_label) > revision_sort_key(doc.revision_label)),
+        key=lambda o: revision_sort_key(o.revision_label)
+    )
+    for o in later:
+        # Its predecessor is the latest revision below it: this document unless another one sits in between.
+        between = [x for x in later if revision_sort_key(x.revision_label) < revision_sort_key(o.revision_label)]
+        predecessor = max(between, key=lambda x: revision_sort_key(x.revision_label)) if between else doc
+        if (o.doc_metadata or {}).get("revision_of_document_id") != str(predecessor.id):
+            o.doc_metadata = {**(o.doc_metadata or {}), "revision_of_document_id": str(predecessor.id)}
+        if Flag.REVISION_OF.value not in (o.flags or []):
+            o.flags = [*(o.flags or []), Flag.REVISION_OF.value]
 
 
 async def persist_proposal(

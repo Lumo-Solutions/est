@@ -244,6 +244,22 @@ async def test_every_readable_file_goes_to_the_ai_once_and_only_scans_get_images
     assert copy.doc_class == "drawing" and copy.doc_metadata["same_file_as"] == str(docs["C-101 Rev A.dxf"].id)
 
 
+async def test_a_later_revision_read_before_its_predecessor_is_still_flagged(ingested):
+    """Files are read in parallel: Rev B can be classified before Rev A. When A lands it flags B."""
+    from app.services.tender_intake_processing import _flag_revision
+
+    s = ingested["session"]
+    docs = await _by_name(s)
+    a, b = docs["C-101 Rev A.dxf"], docs["C-101 Rev B.dxf"]
+    b.flags = [f for f in b.flags if f != "revision_of"]  # as if B had been read when A was not classified yet
+    b.doc_metadata = {k: v for k, v in b.doc_metadata.items() if k != "revision_of_document_id"}
+    await s.flush()
+    flags: list[str] = []
+    await _flag_revision(s, a, flags, {})
+    assert flags == []  # A is the earliest revision: it is not a revision of anything
+    assert "revision_of" in b.flags and b.doc_metadata["revision_of_document_id"] == str(a.id)
+
+
 async def test_revision_of_flag_and_paging_search(ingested):
     s = ingested["session"]
     docs = await _by_name(s)
