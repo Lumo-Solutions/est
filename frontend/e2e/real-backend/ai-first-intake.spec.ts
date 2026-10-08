@@ -254,7 +254,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     await expect(confirm).toContainText('measurements are archived, not deleted')
     await confirm.getByRole('button', { name: 'Change class' }).click()
 
-    const after = await waitForTree(lead, state.projectId, (t) => byName(t, sheet.name).doc_class === 'specification' && byName(t, sheet.name).display_status === 'ready', 'reclassified')
+    const after = await waitForTree(lead, state.projectId, (t) => byName(t, sheet.name).doc_class === 'specification' && byName(t, sheet.name).display_status === 'ready' && t.summary.drawings_total === 2, 'reclassified')
     expect(byName(after, sheet.name)).toMatchObject({ classified_by: 'user', decided_by: 'user', routed_kind: 'register', drawing_id: null, discipline: null, drawing_type: null })
     expect(after.summary.drawings_total).toBe(2)
     expect(await listed()).not.toContain(drawingId) // out of the takeoff

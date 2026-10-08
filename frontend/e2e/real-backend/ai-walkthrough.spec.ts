@@ -154,6 +154,12 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
     docs = await listDocs(lead, state.projectId)
     const drawingDocs = docs.filter((d) => d.routed_kind === 'drawing')
     expect(drawingDocs).toHaveLength(3)
+    // Intake only indexes drawings; measuring is on demand ("Measure all", lead_estimator and above).
+    const measureAll = await lead.request.post(`/api/v1/projects/${state.projectId}/drawings/measure`, {
+      headers: await csrfHeaders(lead),
+      data: { drawing_ids: drawingDocs.map((d) => String(d.routed_ref.drawing_id)) },
+    })
+    expect(measureAll.status(), await measureAll.text()).toBe(202)
     for (const d of drawingDocs) {
       const drawingId = String(d.routed_ref.drawing_id)
       state.drawings.push(drawingId)

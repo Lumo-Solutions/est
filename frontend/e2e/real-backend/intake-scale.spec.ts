@@ -108,7 +108,8 @@ test('a pack is uploaded a few files at a time; closing the tab mid-upload and d
     await lead.getByRole('button', { name: /^Upload [\d,]+ files$/ }).click()
     const progress = lead.getByRole('status').filter({ hasText: /Uploaded \d+ \/ \d+/ })
     await expect(progress).toBeVisible({ timeout: 120_000 })
-    await expect.poll(async () => Number(/Uploaded (\d+) \//.exec((await progress.textContent()) ?? '')?.[1] ?? 0), { timeout: 120_000 }).toBeGreaterThanOrEqual(15)
+    // The panel's "Uploaded N" also counts files the server refused (junk in the pack), so wait on the server's own count.
+    await expect.poll(async () => (await counts(lead, projectId)).packages[0]?.uploaded ?? 0, { timeout: 120_000 }).toBeGreaterThanOrEqual(15)
     await lead.context().close() // "close the tab"
 
     // The server kept the registered pack: some files arrived, the rest are waiting.

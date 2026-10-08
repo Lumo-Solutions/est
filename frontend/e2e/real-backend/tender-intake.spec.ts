@@ -49,7 +49,7 @@ interface Doc {
 }
 
 const PACK_FILES = 18 // top-level files in the pack; the zip adds 4 more documents (the zip itself is not listed)
-const SHOWN_DOCS = PACK_FILES - 1 + 4
+const SHOWN_DOCS = PACK_FILES - 1 - 1 + 4 // the zip is not listed (its four members are); the macro workbook is refused at registration
 
 function writePack(salt: string, extra = 0): { dir: string; files: string[] } {
   const remote = `/tmp/pack-${salt}`
@@ -139,7 +139,8 @@ test('tender pack: drop -> AI routes the confident ones -> drawings ready -> BOQ
   // Whichever of two identical files arrives first is the original: send the copy last.
   const uploadOrder = [...pack.files.filter((f) => !f.includes('(copy)')), ...pack.files.filter((f) => f.includes('(copy)'))]
   await lead.getByTestId('tender-file-input').setInputFiles(uploadOrder.map((f) => join(pack.dir, f)))
-  await expect(lead.getByRole('list', { name: 'Files to upload' }).getByRole('listitem')).toHaveCount(PACK_FILES)
+  // The panel lists at most a handful of rows (a pack can be thousands of files); the button carries the count.
+  await expect(lead.getByRole('button', { name: `Upload ${PACK_FILES} files` })).toBeVisible()
   await lead.getByRole('button', { name: `Upload ${PACK_FILES} files` }).click()
 
   // ---- 2. the worker reads everything (the zip expands to 4 more documents); the AI's confident answers are routed
@@ -158,10 +159,10 @@ test('tender pack: drop -> AI routes the confident ones -> drawings ready -> BOQ
   }
   const docs = await listDocs(lead, projectId)
   for (const name of Object.keys(want)) expect([name, byPath(docs, name).status]).toEqual([name, 'routed'])
-  expect(byPath(docs, 'BOQ_macro.xlsm')).toMatchObject({ status: 'rejected', safety_status: 'rejected_macro' })
+  expect(docs.some((d) => d.original_filename === 'BOQ_macro.xlsm')).toBe(false) // refused when the upload is registered: no row is stored
   expect(byPath(docs, 'bomb.zip')).toMatchObject({ status: 'rejected', safety_status: 'rejected_zip_bomb' })
   expect(byPath(docs, 'Transmittal_2.zip').status).toBe('archive')
-  expect(byPath(tree.items, 'BOQ_macro.xlsm')).toMatchObject({ display_status: 'failed' })
+  expect(byPath(tree.items, 'bomb.zip')).toMatchObject({ display_status: 'failed' })
   const copy = byPath(docs, 'C-101 Rev A (copy).dxf')
   expect(copy.flags).toContain('duplicate')
   expect(copy).toMatchObject({ status: 'routed', routed_kind: 'duplicate' }) // the copy reuses its original's class, no second AI call
@@ -191,6 +192,9 @@ test('tender pack: drop -> AI routes the confident ones -> drawings ready -> BOQ
   expect(drawingDocs.map((d) => d.archive_path ?? d.original_filename).sort()).toEqual(
     ['A-201 Rev A.dxf', 'C-101 Rev A.dxf', 'C-101 Rev B.dxf', 'Drawings/S-201 Rev A.pdf', 'M-301 Rev A.pdf', 'S-201 Rev B.pdf'],
   )
+  // Intake only indexes drawings; "Measure all" (lead_estimator and above) queues the measuring.
+  const bulk = await lead.request.post(`/api/v1/projects/${projectId}/drawings/measure`, { headers: await csrfHeaders(lead), data: { drawing_ids: drawingDocs.map((d) => String(d.routed_ref.drawing_id)) } })
+  expect(bulk.status(), await bulk.text()).toBe(202)
   for (const d of drawingDocs) {
     const drawingId = String(d.routed_ref.drawing_id)
     await expect
@@ -337,7 +341,7 @@ test('the managing director changes the auto-accept threshold on the AI admin sc
   const field = md.getByLabel('Auto-accept at or above (%)')
   await expect(field).toHaveValue('85')
   await field.fill('92')
-  await md.getByRole('button', { name: 'Save' }).last().click()
+  await md.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(md.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible()
   await expect
     .poll(async () => ((await (await md.request.get('/api/v1/tender-intake/settings')).json()) as { auto_accept_min: number }).auto_accept_min)
@@ -359,7 +363,7 @@ test('a 300+ file tender pack stays usable: read in batches with live progress, 
   const pack = writePack(salt, 320)
   const total = pack.files.length
   expect(total).toBe(PACK_FILES + 320)
-  const shown = total - 1 + 4 // the zip itself is not listed; its four members are
+  const shown = total - 1 + 4 - 1 // the zip itself is not listed (its four members are); the macro workbook is refused at registration
 
   const lead = await login(browser, 'lead1', 'Lead1Pass!')
   const created = await lead.request.post('/api/v1/projects', {
@@ -392,17 +396,16 @@ test('a 300+ file tender pack stays usable: read in batches with live progress, 
     expect(n).toBe(80)
   }
 
-  // "Original folders" puts the 340 loose files in one long list that shows 100 rows at a time.
+  // "Original folders" puts the 340 loose files in one long list that is virtualised: only the rows in view are in the DOM.
   await lead.getByRole('button', { name: 'Original folders' }).click()
   const rowCount = () => lead.getByRole('list', { name: 'Top level (no folder) files' }).getByRole('listitem').count()
-  await expect.poll(rowCount, { timeout: 30_000 }).toBe(100)
-  await lead.getByRole('button', { name: /^Show 100 more/ }).click()
-  await expect.poll(rowCount).toBe(200)
+  await expect.poll(rowCount, { timeout: 30_000 }).toBeGreaterThan(5)
+  expect(await rowCount()).toBeLessThan(60)
   await lead.getByRole('button', { name: 'By document type' }).click()
 
   // Search narrows a 340-row pack to a handful.
   await lead.getByLabel('Search documents').fill('Bulk_RFI_0002')
-  await expect(lead.getByText(`1 of ${shown} files match`)).toBeVisible()
+  await expect(lead.getByText("1 file matches")).toBeVisible()
   await lead.getByRole('button', { name: 'Clear filters' }).click()
 
   // Select a whole group and change its class in one go: each file is re-routed under the new class.
@@ -414,7 +417,7 @@ test('a 300+ file tender pack stays usable: read in batches with live progress, 
   const dialog = lead.getByRole('dialog', { name: 'Change class' })
   await dialog.getByLabel('Class', { exact: true }).selectOption({ label: 'Programme / schedule' })
   await dialog.getByRole('button', { name: 'Apply class' }).click()
-  await expect(lead.getByRole('status').filter({ hasText: new RegExp(`Changed ${specCount}, failed 0`) })).toBeVisible({ timeout: 300_000 })
+  await expect(lead.getByRole('status').filter({ hasText: new RegExp(`^Changed ${specCount} of ${specCount}$`) })).toBeVisible({ timeout: 300_000 })
   const after = await getTree(lead, projectId)
   expect(after.summary.by_class.specification ?? 0).toBe(0)
   expect(after.summary.by_class.programme).toBeGreaterThanOrEqual(specCount)
