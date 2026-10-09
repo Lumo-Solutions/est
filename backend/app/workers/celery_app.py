@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.workers.tasks.tender_intake",
         "app.workers.tasks.dwg",
         "app.workers.tasks.ai_reading",
+        "app.workers.tasks.agent",
     ],
 )
 
@@ -56,6 +57,8 @@ celery_app.conf.update(
         # AI-assisted reading (PDF BOQ pages, drawing annotations): the model-backed queue.
         "app.workers.tasks.ai_reading.*": {"queue": "vlm"},
         "app.workers.tasks.maintenance.*": {"queue": "ingest"},
+        # The BOQ agent: one section at a time, concurrency 1 on dev (docs/boq-agent/plan.md).
+        "app.workers.tasks.agent.*": {"queue": "agent"},
         # Tender intake: classification of an uploaded pack (docs/tender-intake-plan.md).
         "app.workers.tasks.tender_intake.*": {"queue": "ingest"},
         "app.workers.tasks.procurement.*": {"queue": "email"},
@@ -93,6 +96,10 @@ celery_app.conf.update(
             "schedule": crontab(minute=0),
         },
         # Tender intake: the dispatcher and the sweeper for files abandoned by a dead worker (docs/intake-scale/report.md).
+        "agent-tick": {
+            "task": "app.workers.tasks.agent.agent_tick",
+            "schedule": 60.0,
+        },
         "intake-tick": {
             "task": "app.workers.tasks.tender_intake.intake_tick",
             "schedule": 30.0,

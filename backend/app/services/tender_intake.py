@@ -839,6 +839,22 @@ def would_auto_accept(doc: ProjectDocument, threshold: float) -> bool:
     return doc.status == DocStatus.PROPOSED.value and _blocked_reason(doc, threshold) is None
 
 
+async def route_for_agent(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> None:
+    """The BOQ agent needs a drawing measured that upload left unrouted (upload routes only BOQs and addenda by rules).
+    Routes it as the system would at the auto-accept threshold: nobody is recorded as the confirmer, the audit entry says
+    why. Only a drawing that passed the safety check and is still waiting is routed."""
+    doc = await get_document(session, document_id)
+    if doc.status == DocStatus.ROUTED.value and doc.routed_kind == "drawing":
+        return
+    if doc.status != DocStatus.PROPOSED.value or doc.doc_class != DocClass.DRAWING.value or doc.safety_status != "accepted":
+        raise ConflictError("Only a drawing that is waiting for a decision can be set up for measuring by the agent")
+    await confirm_document(session, ctx, document_id, auto_accept_min=0.0)
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+        payload={"event": "agent_route", "doc_class": doc.doc_class, "reason": "the BOQ agent asked for this drawing's measurements"},
+    )
+
+
 async def get_auto_measure(session: AsyncSession) -> list[str]:
     """Disciplines measured automatically when intake routes their drawings (default: none)."""
     value = (await session.execute(select(TenantAiSettings.intake_auto_measure))).scalar_one_or_none()
@@ -1089,6 +1105,22 @@ async def bulk_reclassify(
     return BulkConfirmOut(
         confirmed=changed, failed=failed, skipped=len(ids) - len(docs), results=results, matched=matched, next_cursor=next_cursor
     )
+
+
+async def set_ai_classify(session: AsyncSession, ctx: RequestContext, value: bool) -> bool:
+    row = (await session.execute(select(TenantAiSettings).where(TenantAiSettings.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    before = bool(row.intake_ai_classify) if row is not None else False
+    if row is None:
+        session.add(TenantAiSettings(tenant_id=ctx.tenant_id, intake_ai_classify=value, created_by=ctx.user_id, updated_by=ctx.user_id))
+    else:
+        row.intake_ai_classify = value
+        row.updated_by = ctx.user_id
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tenant_ai_settings", entity_id=str(ctx.tenant_id),
+        payload={"intake_ai_classify": {"before": before, "after": value}},
+    )
+    return value
 
 
 async def set_auto_measure(session: AsyncSession, ctx: RequestContext, disciplines: list[str]) -> list[str]:

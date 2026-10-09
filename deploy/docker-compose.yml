@@ -467,6 +467,33 @@ services:
       retries: 3
       start_period: 20s
 
+  # The BOQ agent (`agent` queue, docs/boq-agent/plan.md): one section at a time, concurrency 1 on dev. It reads files from
+  # the manifest, calls the AI gateway and writes proposals; it embeds search queries, so it needs the ONNX models volume.
+  celery-worker-agent:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: installtec_celery_worker_agent
+    command: celery -A app.workers.celery_app worker -Q agent -c ${AGENT_CONCURRENCY:-1} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50} --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD_KB:-700000} -l info
+    mem_limit: ${AGENT_MEM_LIMIT:-1g}
+    cpus: ${AGENT_CPUS:-1}
+    volumes:
+      - onnxmodels:/models
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [installtec]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
   celery-worker-vlm:
     build:
       context: ..

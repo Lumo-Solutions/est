@@ -159,6 +159,14 @@ class BidSettlementLineItem(TenantEntity):
 
     line_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # BOQ agent (migration 0042): the proposal that set an `agent_candidate` / `agent_estimate` line, and the person who
+    # confirmed it. submit_settlement refuses a settlement while any agent line has no confirmation.
+    agent_proposal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_line_proposals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    agent_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    agent_confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
 
 class BidSettlementScenario(TenantEntity):
     """A named, saved simulate() result for side-by-side comparison --

@@ -91,6 +91,10 @@ class BidSettlementLineItemOut(ORMModel):
     unit_sell_rate: JsonDecimal | None
     line_amount: JsonDecimal | None
     line_note: str | None
+    # BOQ agent: set on a line the agent filled (cost_source agent_candidate / agent_estimate) until a person confirms it.
+    agent_proposal_id: UUID | None = None
+    agent_confirmed_by: UUID | None = None
+    agent_confirmed_at: datetime | None = None
 
 
 class BidSettlementOut(ORMModel):

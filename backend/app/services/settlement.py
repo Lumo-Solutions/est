@@ -17,7 +17,7 @@ from uuid import UUID
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -366,6 +366,13 @@ async def set_line_cost(
         line.source_set_at = datetime.now(timezone.utc)
         if data.source_note is not None:
             line.source_note = data.source_note
+        if line.agent_proposal_id is not None:
+            # A person chose the cost: the line is theirs now, and the agent's proposal behind it is set aside.
+            await session.execute(
+                text("UPDATE agent_line_proposals SET status='rejected_by_user', updated_at=now() WHERE id=:id AND status='applied'"),
+                {"id": line.agent_proposal_id},
+            )
+        line.agent_proposal_id, line.agent_confirmed_by, line.agent_confirmed_at = None, None, None
 
     pct_changes = data.model_dump(
         exclude_unset=True,
@@ -653,6 +660,18 @@ async def submit_settlement(session: AsyncSession, ctx: RequestContext, settleme
         raise ConflictError(
             "Every settlement line needs a resolved cost before submission",
             unresolved_line_ids=[str(i) for i in unresolved],
+        )
+
+    unconfirmed = [
+        line.boq_line_item_id
+        for line in lines
+        if line.cost_source in (SettlementCostSource.AGENT_CANDIDATE.value, SettlementCostSource.AGENT_ESTIMATE.value)
+        and line.agent_confirmed_by is None
+    ]
+    if unconfirmed:
+        raise ConflictError(
+            f"{len(unconfirmed)} line(s) were filled by the estimation agent and need a person's confirmation before submission",
+            unconfirmed_agent_line_ids=[str(i) for i in unconfirmed],
         )
 
     fx_missing = [

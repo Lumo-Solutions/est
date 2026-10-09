@@ -33,7 +33,7 @@ class OpenAICompatibleProvider(AIProvider):
             user_content = [{"type": "text", "text": req.user}] + [
                 {"type": "image_url", "image_url": {"url": img.data_url()}} for img in req.images
             ]
-        return {
+        body = {
             "model": req.model,
             "temperature": 0,
             "max_tokens": req.max_tokens,
@@ -43,6 +43,9 @@ class OpenAICompatibleProvider(AIProvider):
                 "json_schema": {"name": req.task[:60], "schema": _clean_schema(req.schema), "strict": False},
             },
         }
+        extra = _extra_body(self._settings.ai_extra_body)
+        # The request's own fields win: AI_EXTRA_BODY adds provider switches, it does not replace the call.
+        return {**extra, **body}
 
     async def _complete(self, req: AIRequest) -> ProviderResult:
         s = self._settings
@@ -71,6 +74,16 @@ class OpenAICompatibleProvider(AIProvider):
             model=body.get("model") or req.model,
             tokens_cached=_cached_tokens(usage),
         )
+
+
+def _extra_body(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _cached_tokens(usage: dict[str, Any]) -> int:

@@ -304,6 +304,21 @@ async def _gather(
     return out, rate_lookups
 
 
+async def gather_for_lines(
+    session: AsyncSession, ctx: RequestContext, settlement: BidSettlement, boq_line_item_ids: list[UUID]
+) -> tuple[dict[UUID, list[pe.CostCandidate]], date]:
+    """The cost candidates (accepted quotes, cost library as of the tender date, history, each with flags computed in code)
+    for some BOQ lines of a settlement. Read-only; the BOQ agent's `cost_candidates` tool and the pricing run share it."""
+    project = (await session.execute(select(Project).where(Project.id == settlement.project_id))).scalar_one()
+    tender_date = project.submission_due_at.date() if project.submission_due_at else datetime.now(timezone.utc).date()
+    lines = [
+        l for l in await settlement_service.list_settlement_lines(session, settlement.id) if l.boq_line_item_id in set(boq_line_item_ids)
+    ]
+    items = await settlement_service._boq_items_by_id(session, [l.boq_line_item_id for l in lines])
+    cands, _lookups = await _gather(session, ctx, settlement, project, lines, items, tender_date)
+    return cands, tender_date
+
+
 # ------------------------------------------------------------------ run: cost proposals
 
 async def run_cost_proposals(

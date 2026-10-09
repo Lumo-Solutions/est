@@ -26,6 +26,11 @@ services:
     volumes:
       - ../backend/app:/app/app:ro
 
+  celery-worker-agent:
+    volumes:
+      - ../backend/app:/app/app:ro
+      - onnxmodels:/models
+
   celery-worker-email:
     volumes:
       - ../backend/app:/app/app:ro

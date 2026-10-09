@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.routes import (
+    agent,
     ai,
     ai_reading,
     approvals,
@@ -29,6 +30,7 @@ from app.api.v1.routes import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(agent.router)
 api_router.include_router(ai.router)
 api_router.include_router(ai_reading.router)
 api_router.include_router(vendors.router)

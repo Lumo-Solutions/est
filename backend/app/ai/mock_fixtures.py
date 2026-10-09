@@ -745,3 +745,8 @@ DEFAULT_HANDLERS: dict[str, Handler] = {
 
 }
 
+
+# The BOQ agent's deterministic policy and plan (docs/boq-agent/plan.md): tests and the keyless dev stack.
+from app.agent import mock_sessions as _agent_mock  # noqa: E402
+
+DEFAULT_HANDLERS.update(_agent_mock.HANDLERS)

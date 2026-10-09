@@ -66,6 +66,8 @@ class AIResult:
     provider: str
     model: str
     cost_usd: Decimal
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 class RateLimiter(Protocol):
@@ -198,7 +200,7 @@ class AIGateway:
                     ctx, CallRecord(status="cached", response=hit.response, tokens_in=hit.tokens_in,
                                     tokens_out=hit.tokens_out, **base)
                 )
-                return AIResult(hit.response, call_id, True, provider.name, model, Decimal("0"))
+                return AIResult(hit.response, call_id, True, provider.name, model, Decimal("0"), hit.tokens_in, hit.tokens_out)
 
         if self.rate_limiter is not None and not await self.rate_limiter.allow(ctx.tenant_id):
             raise AIRateLimited("AI rate limit reached; try again in a minute")
@@ -237,7 +239,7 @@ class AIGateway:
             await self.store.cache_put(
                 ctx, task, digest, model, prompt_version, CacheHit(result.data, result.tokens_in, result.tokens_out)
             )
-        return AIResult(result.data, call_id, False, provider.name, model, cost)
+        return AIResult(result.data, call_id, False, provider.name, model, cost, result.tokens_in, result.tokens_out)
 
     async def _call_with_retry(self, req: AIRequest) -> ProviderResult:
         attempts = max(1, self.settings.ai_max_retries)

@@ -5,6 +5,7 @@ before this module -- always `import app.models` first (main.py and
 migrations/env.py both do)."""
 
 from app.models import (  # noqa: F401
+    agent,
     ai,
     approvals,
     audit,
@@ -27,6 +28,7 @@ from app.models import (  # noqa: F401
 )
 
 __all__ = [
+    "agent",
     "ai",
     "approvals",
     "audit",
