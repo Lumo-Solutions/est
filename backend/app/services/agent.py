@@ -79,7 +79,8 @@ def _clamp_limits(raw: dict | None) -> dict:
     out = default_limits()
     for k, v in (raw or {}).items():
         if k in out and v is not None:
-            out[k] = max(1, min(float(v), CEILING[k]))
+            floor = 0.000001 if k == "max_usd" else 1
+            out[k] = max(floor, min(float(v), CEILING[k]))
             if k != "max_usd":
                 out[k] = int(out[k])
     return out
@@ -366,7 +367,7 @@ async def post_chat_message(
     current = await applier.current_settlement(session, project_id)
     settings = get_settings()
     status = default_gateway(settings).status()
-    user_msg = AgentMessage(tenant_id=ctx.tenant_id, project_id=project_id, conversation_id=conv.id, role="user", content=message[:4000], created_by=ctx.user_id)
+    user_msg = AgentMessage(tenant_id=ctx.tenant_id, project_id=project_id, conversation_id=conv.id, role="user", content=message[:4000], created_by=ctx.user_id, created_at=datetime.now(timezone.utc))
     session.add(user_msg)
     run = AgentRun(
         tenant_id=ctx.tenant_id, project_id=project_id, kind="chat", conversation_id=conv.id, settlement_id=current.id if current else None,

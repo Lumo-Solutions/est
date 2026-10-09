@@ -77,7 +77,8 @@ async def run_turn(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
         run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
         run.status, run.finished_at, run.error = status, datetime.now(timezone.utc), outcome.error
         session.add(
-            AgentMessage(tenant_id=tenant_id, project_id=project_id, conversation_id=conversation_id, role="assistant", content=reply[:REPLY_LIMIT], run_id=run_id)
+            AgentMessage(tenant_id=tenant_id, project_id=project_id, conversation_id=conversation_id, role="assistant", content=reply[:REPLY_LIMIT], run_id=run_id,
+                         created_at=datetime.now(timezone.utc))
         )
 
 

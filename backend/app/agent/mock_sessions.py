@@ -44,7 +44,8 @@ def demo_step(req: Any) -> dict:
     ev = [{"file_id": f["file_id"], "page": (f.get("pages") or [1])[0] or 1, "kind": "text"} for f in files_read[:1]]
 
     if not last:
-        return _step("Look for documents about this section.", "search_files", {"query": section.get("label", "")[:200], "limit": 5})
+        words = " ".join([section.get("label", ""), *(u.get("description") or "" for u in unproposed[:3])])
+        return _step("Look for documents about this section.", "search_files", {"query": words[:280], "limit": 5})
     if last.get("tool") == "search_files" and not files_read:
         hits = (last.get("result") or {}).get("results") or []
         for h in hits:

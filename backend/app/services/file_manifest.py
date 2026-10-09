@@ -6,6 +6,7 @@ and, through RLS, to its tenant; a missing embedding just means the file is foun
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
@@ -19,6 +20,15 @@ from app.intake.manifest import ManifestEntry
 from app.models.tender_intake import ProjectFileIndex
 
 RRF_K = 60
+_TOKEN = re.compile(r"[A-Za-z0-9]{2,}")
+MAX_QUERY_TERMS = 14
+
+
+def text_query(query: str) -> str:
+    """A tsquery that matches a file holding ANY of the words (prefix match), ranked by how many it holds. A tender question
+    is a handful of words, rarely all of them in one file, so AND-ing them (the websearch default) finds nothing."""
+    terms = list(dict.fromkeys(t.lower() for t in _TOKEN.findall(query or "")))[:MAX_QUERY_TERMS]
+    return " | ".join(f"{t}:*" for t in terms)
 
 
 async def upsert_entry(
@@ -66,15 +76,16 @@ async def search(
     clause = " AND ".join(where)
     ranks: dict[UUID, dict] = {}
     paths: dict[UUID, str] = {}
-    if query.strip():
+    tsq = text_query(query)
+    if tsq:
         rows = (
             await session.execute(
                 text(
                     f"SELECT document_id, path FROM project_file_index WHERE {clause} "
-                    "AND search_tsv @@ websearch_to_tsquery('simple', :q) "
-                    "ORDER BY ts_rank_cd(search_tsv, websearch_to_tsquery('simple', :q)) DESC LIMIT :lim"
+                    "AND search_tsv @@ to_tsquery('simple', :q) "
+                    "ORDER BY ts_rank_cd(search_tsv, to_tsquery('simple', :q)) DESC LIMIT :lim"
                 ),
-                {**params, "q": query},
+                {**params, "q": tsq},
             )
         ).all()
         for i, (doc_id, path) in enumerate(rows, start=1):
