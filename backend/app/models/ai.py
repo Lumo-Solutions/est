@@ -22,6 +22,8 @@ class TenantAiSettings(TenantEntity):
     intake_auto_accept_min: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False, server_default="0.850")
     # Disciplines whose drawings are measured automatically when intake routes them (default: none).
     intake_auto_measure: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # Per-file AI classification at upload. Off by default: upload is a fast, AI-free index and the BOQ agent reads on demand.
+    intake_ai_classify: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class AiCall(TenantEntity):

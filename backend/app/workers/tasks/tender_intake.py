@@ -124,6 +124,10 @@ async def _claim(session, document_id: UUID) -> processing.DocSnapshot | None:
     return processing.DocSnapshot.of(row)
 
 
+async def _ai_classify_on(session) -> bool:
+    return await intake_service.get_ai_classify(session)
+
+
 async def _persist(session, ctx: RequestContext, document_id: UUID, prepared) -> list[UUID]:
     return await processing.process_document(session, ctx, document_id, prepared)
 
@@ -171,6 +175,10 @@ async def process_one(tenant_id: UUID, document_id: UUID) -> None:
         return
     shared = processing.SharedBreaker(settings.redis_url, tenant_id, settings)
     run = processing.AiRun(settings, shared)
+    try:
+        run.classify_with_ai = await with_worker_session(ctx, _ai_classify_on)
+    except Exception:  # noqa: BLE001 -- unknown setting: keep the fast, AI-free path
+        run.classify_with_ai = False
     package_id: UUID | None = None
     try:
         prepared = None if snap.is_duplicate else await processing.prepare_one(ctx, snap, run)

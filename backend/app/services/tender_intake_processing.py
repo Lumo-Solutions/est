@@ -49,6 +49,7 @@ from app.intake.classifier import (
 )
 from app.intake.constants import ClassificationSource, Decider, DocClass, DocStatus, Flag
 from app.intake.extract import DocContent, extract_content
+from app.intake.manifest import ManifestEntry, build_entry
 from app.intake.metadata import normalise_doc_no, revision_sort_key
 from app.intake.rules import RuleOutcome, classify_rules, normalise_folder
 from app.intake.safety import IntakeSafety, check_file, extension_of
@@ -162,6 +163,8 @@ class AiRun:
         self.calls = 0
         self._failures = 0
         self.shared = shared
+        # False: upload is a fast index with no model call (the manifest is built, the rules classify, nothing else).
+        self.classify_with_ai = True
 
     def stop(self, reason: str) -> None:
         if self.stopped_reason is None:
@@ -213,12 +216,13 @@ class DocSnapshot:
     object_key: str
     is_duplicate: bool
     size_bytes: int = 0
+    sha256: str = ""
 
     @classmethod
     def of(cls, doc: ProjectDocument) -> "DocSnapshot":
         return cls(
             doc.id, doc.project_id, doc.original_filename, doc.ext, doc.archive_path, doc.bucket, doc.object_key,
-            doc.duplicate_of_id is not None or Flag.DUPLICATE.value in (doc.flags or []), doc.size_bytes or 0,
+            doc.duplicate_of_id is not None or Flag.DUPLICATE.value in (doc.flags or []), doc.size_bytes or 0, doc.sha256 or "",
         )
 
 
@@ -238,6 +242,8 @@ class Prepared:
     # Set when the file is stored but not read automatically (too big, too many pages, too slow): why.
     too_large: str | None = None
     extras: dict = field(default_factory=dict)
+    manifest: ManifestEntry | None = None
+    embedding: list[float] | None = None
 
 
 def _seconds_to_next_window() -> float:
@@ -317,17 +323,50 @@ async def prepare_document(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -
         return Prepared(safety=IntakeSafety(status="pending", sniffed=safety.sniffed), too_large=safety.reason)
     if not safety.accepted or safety.is_archive:
         return Prepared(safety=safety, extras={"data": data if safety.is_archive else None})
-    content = await asyncio.wait_for(
-        asyncio.to_thread(extract_content, filename=snap.original_filename, ext=snap.ext, sniffed=safety.sniffed, data=data),
-        timeout=settings.intake_doc_timeout_s,
-    )
-    rules = classify_rules(content, snap.original_filename, folder=normalise_folder(snap.archive_path))
+    fast = not run.classify_with_ai
+    partial_reason: str | None = None
+    try:
+        content = await asyncio.wait_for(
+            asyncio.to_thread(
+                extract_content, filename=snap.original_filename, ext=snap.ext, sniffed=safety.sniffed, data=data, fast=fast
+            ),
+            timeout=settings.intake_doc_timeout_s,
+        )
+    except asyncio.TimeoutError:
+        if not fast:
+            raise
+        # A slow file is still indexed, with what is known from its name and folder (never parked or failed).
+        content = DocContent(filename=snap.original_filename, ext=snap.ext, sniffed=safety.sniffed)
+        partial_reason = f"reading took longer than {settings.intake_doc_timeout_s} s"
+    folder = normalise_folder(snap.archive_path)
+    rules = classify_rules(content, snap.original_filename, folder=folder)
     injection = looks_like_injection(content.text, content.title_block_text, snap.original_filename)
-    model, reason, used_images = await _ai_read(run, snap, content, rules, data, snap.project_id)
+    if run.classify_with_ai:
+        model, reason, used_images = await _ai_read(run, snap, content, rules, data, snap.project_id)
+    else:
+        model, reason, used_images = None, None, False
+    manifest = build_entry(
+        content=content, rules=rules, filename=snap.original_filename, folder=folder,
+        path=(snap.archive_path or snap.original_filename), size_bytes=snap.size_bytes, sha256=snap.sha256,
+        partial_reason=partial_reason,
+    )
+    embedding = await asyncio.to_thread(_embed_one, manifest.embedding_text())
     return Prepared(
         safety=safety, content=content, rules=rules, model=model, ai_reason=reason, injection=injection,
-        used_images=used_images, ai_text_chars=len(content.text or ""),
+        used_images=used_images, ai_text_chars=len(content.text or ""), manifest=manifest, embedding=embedding,
     )
+
+
+def _embed_one(text: str) -> list[float] | None:
+    """The local ONNX embedder; None when it is not provisioned or fails (the file is then found by text only)."""
+    from app.integrations.embeddings import embed_best_effort
+
+    try:
+        out = embed_best_effort([text])
+    except Exception:  # noqa: BLE001 -- an embedding failure must never fail the document
+        logger.warning("tender_intake: embedding failed", exc_info=True)
+        return None
+    return out[0] if out else None
 
 
 async def prepare_one(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -> Prepared:
@@ -579,6 +618,9 @@ async def process_document(
     await session.flush()
 
     if prepared is None and await _copy_from_original(session, ctx, doc):
+        from app.services import file_manifest
+
+        await file_manifest.copy_entry(session, ctx, doc)
         return []
     if prepared is None:
         prepared = await prepare_document(ctx, DocSnapshot.of(doc), run or AiRun(settings))
@@ -629,6 +671,12 @@ async def process_document(
         session, ctx, doc, prepared.content, prepared.rules, proposal, prepared.model,
         injection=prepared.injection, used_images=prepared.used_images,
     )
+    if prepared.manifest is not None:
+        from app.services import file_manifest
+
+        await file_manifest.upsert_entry(
+            session, ctx, project_id=doc.project_id, document_id=doc.id, entry=prepared.manifest, embedding=prepared.embedding
+        )
     return []
 
 
