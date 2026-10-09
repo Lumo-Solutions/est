@@ -52,6 +52,7 @@ from app.models.tender_intake import ProjectDocument, ProjectFileIndex
 from app.pricing import engine as pe
 
 ENTRY_TEXT_PREVIEW = 600
+NO_DOCUMENT_CONFIDENCE_CAP = 0.7
 
 
 class ToolError(Exception):
@@ -632,6 +633,12 @@ async def propose_line(env: ToolEnv, args: ProposeLineArgs) -> ToolResult:
         if currency != settlement_ccy and pe.NEEDS_FX not in flags:
             flags.append(pe.NEEDS_FX)
         confidence = args.confidence * (pe.BLOCKING_CONFIDENCE_FACTOR if pe.is_blocked(flags) else 1.0)
+        # A library rate or a historical median matched only by wording, with no document read behind it, is weak: it cannot
+        # be bulk-confirmed (an accepted quote linked to this very BOQ line stands on its own).
+        if kind == "candidate" and (apply.get("type") in ("library", "historical")) and not any(e.get("file_id") for e in evidence):
+            if "no_document_check" not in flags:
+                flags.append("no_document_check")
+            confidence = min(confidence, NO_DOCUMENT_CONFIDENCE_CAP)
         qty = {}
         v = env.state.verification.get(lid)
         if v:

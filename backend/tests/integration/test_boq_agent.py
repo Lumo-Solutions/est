@@ -325,6 +325,32 @@ async def test_an_estimate_needs_evidence_a_method_and_a_matching_unit_and_is_fl
     assert (await env.lines())["C"].agent_confirmed_by is None
 
 
+async def test_a_wording_only_source_without_a_document_behind_it_is_capped_and_not_bulk_confirmable(env):
+    a = env.items["A"]  # has a library rate and a history median besides its (person-set) quote
+    spec = env.files["Sewerage specification.pdf"]
+
+    def fetch(st):
+        return {"note": "costs", "tool": "cost_candidates", "args": {"line_ids": [str(a)]}}
+
+    def lib(st):
+        cands = [c for ln in st["last"]["result"]["lines"] for c in ln["candidates"]]
+        ref = next(c["ref"] for c in cands if c["ref"].startswith("c:"))
+        return _propose(a, ref)
+
+    def lib_with_document(st):
+        cands = [c for ln in st["recent_results"][0]["result"]["lines"] for c in ln["candidates"]]
+        ref = next(c["ref"] for c in cands if c["ref"].startswith("c:"))
+        return _propose(a, ref, evidence=[{"file_id": str(spec), "page": 1}])
+
+    register_mock_handler("agent.step", Script([fetch, lib, lib_with_document]))
+    run = await env.run_all()
+    props = list((await env.session.execute(select(AgentLineProposal).where(AgentLineProposal.run_id == run.id).order_by(AgentLineProposal.created_at))).scalars())
+    first = next(p for p in props if p.status == "superseded")
+    last = next(p for p in props if p.status != "superseded")
+    assert "no_document_check" in first.flags and first.confidence <= Decimal("0.7")
+    assert "no_document_check" not in last.flags and last.confidence == Decimal("0.8")  # a document was read: no cap
+
+
 async def test_an_unfetched_or_foreign_candidate_ref_and_a_foreign_file_are_refused(env):
     d = env.items["D"]
     other = uuid.uuid4()
@@ -509,6 +535,30 @@ async def test_agent_calls_are_audited_through_the_gateway_with_the_run_as_entit
     n = len(env.provider.calls)
     assert n >= run.steps_total  # every step (and the plan) went through the gateway -> the ai_calls audit/cost path
     assert {c.task for c in env.provider.calls} >= {"agent.step", "agent.plan"}
+
+
+async def test_the_runner_binds_the_tenant_context_the_gateway_needs(env):
+    """A worker task has no request context until it binds one; a gateway without its own context (as the real one is built)
+    must still work inside the runner."""
+    from app.ai.factory import set_gateway_override
+    from app.ai.gateway import AIGateway
+    from app.ai.store import MemoryStore
+    from app.core.config import Settings
+
+    settings = Settings(APP_DATABASE_URL="postgresql://x/y", MIGRATOR_DATABASE_URL="postgresql://x/y", S3_ENDPOINT="http://s3", VLLM_API_BASE="http://v/v1", AI_PROVIDER="mock")
+    set_gateway_override(lambda s: AIGateway(settings=settings, store=MemoryStore(), provider=env.provider))  # no ctx
+    run = await env.run_all()
+    assert run.status == "done" and run.steps_total > 0
+
+
+async def test_the_section_id_the_model_is_shown_is_one_boq_lines_accepts(env):
+    register_mock_handler("agent.step", Script([
+        lambda st: {"note": "lines", "tool": "boq_lines", "args": {"section": st["section"]["id"]}},
+        lambda st: {"note": "by number", "tool": "boq_lines", "args": {"section": st["section"]["item_no"], "offset": 1, "limit": 2}},
+    ]))
+    run = await env.run_all()
+    steps = await env.steps(run.id)
+    assert steps[0].ok and steps[1].ok, [(s.tool, s.result_summary) for s in steps[:2]]
 
 
 async def test_manifest_search_finds_the_spec_for_the_section(env):

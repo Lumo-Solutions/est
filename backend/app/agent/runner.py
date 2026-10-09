@@ -24,7 +24,7 @@ from app.ai.errors import AIError, describe_reason
 from app.ai.gateway import AIGateway, AIMeta
 from app.ai.provider import EXTRACT, TIER_REASONING
 from app.core.config import get_settings
-from app.core.context import RequestContext, system_context
+from app.core.context import RequestContext, reset_context, set_context, system_context
 from app.db.session import worker_session_scope
 from app.models.agent import AgentLineProposal, AgentMessage, AgentRun, AgentRunSection
 from app.models.boq import BoqLineItem
@@ -103,6 +103,15 @@ async def _folder_tree(session, project_id: UUID, depth: int = 2) -> list[dict]:
 
 async def plan_run(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
     """Writes the plan (one model call), marks the run `running` and starts the first section."""
+    # The AI gateway reads the request context of whoever calls it; a worker task has none until it is bound.
+    token = set_context(system_context(tenant_id))
+    try:
+        await _plan_run(run_id, tenant_id, enqueue)
+    finally:
+        reset_context(token)
+
+
+async def _plan_run(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
     from app.services import file_manifest
     from app.integrations.embeddings import embed_best_effort
 
@@ -223,7 +232,7 @@ async def _runtime_for(ctx: RequestContext, run: AgentRun, sec: AgentRunSection,
             for p in (await session.execute(select(AgentLineProposal).where(AgentLineProposal.run_id == run.id, AgentLineProposal.boq_line_item_id.in_(ids or [UUID(int=0)]), AgentLineProposal.status.in_(("proposed", "applied"))))).scalars()
         }
     rt = SectionRuntime(
-        ctx=ctx, run_id=run.id, section_id=sec.id, project_id=run.project_id, settlement_id=run.settlement_id, label=sec.label,
+        ctx=ctx, run_id=run.id, section_id=sec.id, section_item_id=sec.section_item_id, project_id=run.project_id, settlement_id=run.settlement_id, label=sec.label,
         item_no=sec.label.split(" ", 1)[0], line_ids=[i for i in ids if i in brief], line_brief=brief, plan=sec.plan,
         user_note=(run.scope or {}).get("notes", {}).get(str(sec.section_item_id)), limits=limits_of(run), settings=settings, gateway=gateway,
     )
@@ -233,6 +242,14 @@ async def _runtime_for(ctx: RequestContext, run: AgentRun, sec: AgentRunSection,
 
 
 async def run_next_section(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
+    token = set_context(system_context(tenant_id))
+    try:
+        await _run_next_section(run_id, tenant_id, enqueue)
+    finally:
+        reset_context(token)
+
+
+async def _run_next_section(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
     settings = get_settings()
     ctx = system_context(tenant_id)
     claimed = await _claim_next(ctx, run_id)

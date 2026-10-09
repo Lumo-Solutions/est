@@ -187,6 +187,15 @@ ai-eval:
 	$(COMPOSE) exec -e AI_PROVIDER=$${PROVIDER:-mock} backend python -m app.ai.eval --out /tmp/ai-eval && \
 	mkdir -p docs/ai-eval && docker cp installtec_backend:/tmp/ai-eval/. docs/ai-eval/
 
+# BOQ agent (docs/boq-agent/plan.md): `agent-eval` runs the agent on PROJECT with the deterministic mock provider (free;
+# asserts the run completes, every applied line has evidence, limits hold, coverage is reported); `agent-smoke` is the opt-in
+# real-provider run, capped at BUDGET USD (default 1.00) and refused without CONFIRM=1 because it spends money.
+agent-eval:
+	export MSYS_NO_PATHCONV=1; 	$(COMPOSE) exec backend python -m app.agent.eval --project $(PROJECT) --provider mock --out /tmp/agent-eval && 	mkdir -p docs/boq-agent && docker cp installtec_backend:/tmp/agent-eval/agent-eval.md docs/boq-agent/agent-eval.md
+
+agent-smoke:
+	export MSYS_NO_PATHCONV=1; 	$(COMPOSE) exec backend python -m app.agent.eval --project $(PROJECT) --provider configured --budget $${BUDGET:-1.0} $${CONFIRM:+--confirm} --out /tmp/agent-smoke && 	mkdir -p docs/boq-agent && docker cp installtec_backend:/tmp/agent-smoke/agent-smoke.md docs/boq-agent/agent-smoke.md
+
 # Fails if a worker AI_* key is not also passed to the backend service (they keep separate environment lists).
 check-ai-env:
 	bash deploy/check-ai-env.sh

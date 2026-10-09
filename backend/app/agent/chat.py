@@ -16,7 +16,7 @@ from sqlalchemy import select
 from app.agent import applier, runner
 from app.agent.loop import SectionOutcome, SectionRuntime, run_section
 from app.core.config import get_settings
-from app.core.context import system_context
+from app.core.context import reset_context, set_context, system_context
 from app.db.session import worker_session_scope
 from app.models.agent import AgentMessage, AgentRun
 
@@ -28,6 +28,14 @@ Enqueue = Callable[[str, UUID, UUID], None]
 
 
 async def run_turn(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
+    token = set_context(system_context(tenant_id))
+    try:
+        await _run_turn(run_id, tenant_id, enqueue)
+    finally:
+        reset_context(token)
+
+
+async def _run_turn(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
     settings = get_settings()
     ctx = system_context(tenant_id)
     async with worker_session_scope(ctx) as session:
@@ -48,7 +56,7 @@ async def run_turn(run_id: UUID, tenant_id: UUID, enqueue: Enqueue) -> None:
     last_user = next((m.content for m in reversed(msgs) if m.role == "user"), "")
     history = "\n".join(f"{m.role}: {m.content[:400]}" for m in msgs[:-1])
     rt = SectionRuntime(
-        ctx=ctx, run_id=run_id, section_id=None, project_id=project_id, settlement_id=settlement_id, label="Chat with the estimator",
+        ctx=ctx, run_id=run_id, section_id=None, section_item_id=None, project_id=project_id, settlement_id=settlement_id, label="Chat with the estimator",
         item_no="chat", line_ids=[], line_brief={}, plan=None, user_note=(f"Earlier in this chat:\n{history}" if history else None),
         limits=limits, settings=settings, gateway=runner._gateway(), chat_prompt=last_user[:1500],
     )

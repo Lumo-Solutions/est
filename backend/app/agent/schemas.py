@@ -97,6 +97,9 @@ class CostCandidatesArgs(Args):
 
 
 class EvidenceItem(Args):
+    # Evidence is a pointer (file, page, a short quote). A model often adds a "description"; it is dropped, not an error.
+    model_config = ConfigDict(extra="ignore")
+
     file_id: UUID
     page: int | None = Field(default=None, ge=1)
     quote: str | None = Field(default=None, max_length=300)

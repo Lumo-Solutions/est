@@ -57,6 +57,13 @@ def test_invalid_args_come_back_as_a_reason(tool, args, fragment):
     assert parsed is None and why and fragment in why
 
 
+def test_evidence_ignores_extra_words_but_the_proposal_itself_stays_strict():
+    fid = str(uuid.uuid4())
+    parsed, why = validate_args("propose_line", {"line_id": str(uuid.uuid4()), "confidence": 0.5, "rationale": "because it matches",
+                                                 "evidence": [{"file_id": fid, "page": 2, "description": "the spec says so"}]}, TOOLS)
+    assert why is None and parsed.evidence[0].page == 2 and not hasattr(parsed.evidence[0], "description")
+
+
 def test_valid_args_parse():
     fid = str(uuid.uuid4())
     parsed, why = validate_args("read_text", {"file_id": fid, "first_page": 2, "last_page": 4}, TOOLS)
