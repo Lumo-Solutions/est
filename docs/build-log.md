@@ -569,3 +569,9 @@ Fixed on the way: a later revision read before its predecessor never got `revisi
 **Tests (final).** unit 719, integration 337, API 113, vitest 307, tsc/build/oxlint clean, mocked Playwright 5, real-backend (each alone, `--workers=1`): intake-scale 2 (+1 opt-in skipped), ai-first-intake 4, tender-intake 4, ai-walkthrough 2, project-pages 8, layout-widths 1.
 
 **Open.** Packs `948b4c0f` (project 102) and `661d42e3` (project 103) are still paused and not resumed. Drawing queue ordering and the time-out `error_message` wording are documented, not fixed. Nothing pushed; MFA left off.
+
+## feat/boq-agent: BOQ-led estimation agent (in progress)
+
+Brief `docs/boq-agent-brief.md`; plan `docs/boq-agent/plan.md`; resume log `docs/boq-agent/log.md`; numbers and deviations will be in `docs/boq-agent/report.md`.
+
+**Scope change (10 Oct 2026).** Upload no longer calls a model per file: it builds a manifest (migration 0040) and classifies by rules; an agent starts from the BOQ, reads only the files it needs and fills a *draft* settlement that a person must confirm line by line. This supersedes steps 1-2 of the index-speed work in `docs/handoff-est-build-2.md` section 2.7 (heavy `index_sheets` no longer runs at upload); steps 3-5 are folded into Phase 6. Relaxes a previous rule: "the AI never sets money" now holds for submitted/approved settlements and for every person-set line, not for agent-filled draft lines (marked, confirmed one by one or bulk for confident candidates).

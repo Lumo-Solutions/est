@@ -78,3 +78,9 @@ Only when `AI_PROVIDER` is external **and** the tenant switch is on **and** the 
 ## Files added by the AI work
 
 `backend/app/ai/` (gateway, providers, mock fixtures, eval, smoke), `backend/app/verification/`, `backend/app/pricing/`, `backend/app/boq/pdf_reader.py`, `backend/app/boq/pdf_ai.py`, `backend/app/takeoff/annotations.py`, `backend/app/demo/` (synthetic dataset), `ai-service/prompts|schemas/` (boq_pdf_rows, drawing_annotations, boq_interpret, evidence_rank, cost_choose, markup_advise). Migrations `0032` to `0036`.
+
+## BOQ agent and the AI at upload (10 Oct 2026)
+
+- **No model call at upload by default.** `intake_ai_classify` (tenant setting, default off) gates the per-file classification described above; `AI_MODEL_CLASSIFY` is then used only by the agent's bulk reads. Turning it on restores the previous behaviour exactly.
+- **The agent runs on `AIGateway`** (task names `agent.step`, `agent.vision`, `agent.chat`): caching, the `ai_calls` audit, rate limiting, the external-AI switch, the per-project opt-out and the monthly/project budgets apply to every step. Step output is a JSON-schema object (`note`, `tool`, `args`), so it works with `openai_compatible`, `anthropic`, `local_vllm` and `mock` without provider-native tool calling. Reasoning tier plans and steps; the vision tier looks at a page only when the agent asks for one (counted separately and capped per run).
+- **What the model may claim** is limited in code: a rate/currency/unit/as-of date comes from the chosen cost candidate's database row, never from the model; an estimate without a candidate needs evidence and a method text and is flagged `agent_estimate`.

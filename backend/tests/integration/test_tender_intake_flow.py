@@ -85,7 +85,9 @@ def mock_model(postgres_container):
     set_gateway_override(None)
 
 
-async def drive_worker(session, monkeypatch, ctx: RequestContext, tenant_id: uuid.UUID, *, rounds: int = 400) -> dict:
+async def drive_worker(
+    session, monkeypatch, ctx: RequestContext, tenant_id: uuid.UUID, *, rounds: int = 400, ai_classify: bool = True
+) -> dict:
     """The real worker, one file per task, on the test session: the dispatcher claims files (bounded, honouring paused
     packs) and `process_one` reads each, round after round, until nothing is left to claim (zip members and retries
     included). Every `with_worker_session` sets the RLS context of the ctx it is given, like a worker session does."""
@@ -108,6 +110,12 @@ async def drive_worker(session, monkeypatch, ctx: RequestContext, tenant_id: uui
         stats["peak_in_flight"] = max(stats["peak_in_flight"], len(queued) + len(batch))
         return []
 
+    async def fake_ai_classify(_session) -> bool:
+        return ai_classify
+
+    # The per-file AI classification is a tenant setting that defaults to off; these tests are about the AI path unless
+    # a test asks for the fast, AI-free one (ai_classify=False).
+    monkeypatch.setattr(worker.intake_service, "get_ai_classify", fake_ai_classify)
     monkeypatch.setattr(worker, "with_worker_session", fake_with_worker_session)
     monkeypatch.setattr(worker, "enqueue_documents", enqueue)
     for _ in range(rounds):
