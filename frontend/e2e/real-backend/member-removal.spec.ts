@@ -17,13 +17,15 @@ test('a director removes a project member through the confirm modal; an estimato
   const estPage = await estContext.newPage()
   await loginViaKeycloak(estPage, 'estimator1', 'Estimator1Pass!')
   await estPage.goto(`/projects/${project.id}`)
+  await estPage.getByRole('button', { name: 'Edit project' }).click() // members live in the Edit project drawer
   await expect(estPage.getByRole('heading', { name: 'Members' })).toBeVisible()
   await expect(estPage.getByRole('button', { name: /^Remove / })).toHaveCount(0)
 
   try {
     await page.goto(`/projects/${project.id}`)
+    await page.getByRole('button', { name: 'Edit project' }).click()
     await page.getByRole('button', { name: 'Remove estimator1' }).click()
-    const dialog = page.getByRole('dialog')
+    const dialog = page.getByRole('dialog', { name: 'Remove member?' })
     await expect(dialog).toContainText('estimator1 will lose access')
     await dialog.getByRole('button', { name: 'Remove' }).click()
     await expect(page.getByRole('button', { name: 'Remove estimator1' })).toHaveCount(0)
