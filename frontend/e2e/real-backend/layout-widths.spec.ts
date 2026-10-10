@@ -6,7 +6,8 @@ import { D1_SIM_PROJECT_CODE, findProjectByCode, loginViaKeycloak } from './help
 // scrolls sideways) and writes a viewport screenshot per page and width to
 // docs/ui-qa/screenshots/phase-4/. md1 can reach every page.
 const WIDTHS = [1440, 1280, 1024]
-const SHOT_DIR = '../docs/ui-qa/screenshots/phase-4'
+// The tracked QA screenshots are only rewritten on purpose (UPDATE_QA_SCREENSHOTS=1); a normal run writes to test-results.
+const SHOT_DIR = process.env.UPDATE_QA_SCREENSHOTS === '1' ? '../docs/ui-qa/screenshots/phase-4' : 'test-results/qa-screenshots/phase-4'
 
 test.setTimeout(900_000)
 
