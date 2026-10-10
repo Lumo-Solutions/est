@@ -655,13 +655,6 @@ async def submit_settlement(session: AsyncSession, ctx: RequestContext, settleme
         )
 
     lines = await list_settlement_lines(session, settlement.id)
-    unresolved = [line.boq_line_item_id for line in lines if line.direct_unit_cost is None]
-    if unresolved:
-        raise ConflictError(
-            "Every settlement line needs a resolved cost before submission",
-            unresolved_line_ids=[str(i) for i in unresolved],
-        )
-
     unconfirmed = [
         line.boq_line_item_id
         for line in lines
@@ -672,6 +665,13 @@ async def submit_settlement(session: AsyncSession, ctx: RequestContext, settleme
         raise ConflictError(
             f"{len(unconfirmed)} line(s) were filled by the estimation agent and need a person's confirmation before submission",
             unconfirmed_agent_line_ids=[str(i) for i in unconfirmed],
+        )
+
+    unresolved = [line.boq_line_item_id for line in lines if line.direct_unit_cost is None]
+    if unresolved:
+        raise ConflictError(
+            "Every settlement line needs a resolved cost before submission",
+            unresolved_line_ids=[str(i) for i in unresolved],
         )
 
     fx_missing = [
