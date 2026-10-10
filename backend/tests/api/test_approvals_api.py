@@ -286,3 +286,62 @@ async def test_inbox_states_enrichment_and_recent(authed_client):
     # A different lead who never decided it does not see it as recent.
     other = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}))
     assert request_id not in {r["id"] for r in (await other.get("/api/v1/approvals/inbox")).json()["recent"]}
+
+
+async def _create_cost_rate_request(c, amount=1000):
+    resp = await c.post(
+        "/api/v1/approvals",
+        json={"entity_type": "cost_rate_change", "entity_id": str(uuid.uuid4()), "amount": amount, "currency": "AED"},
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def test_requester_withdraws_a_pending_request_and_it_leaves_every_queue(authed_client, app_engine):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    c = authed_client(frozenset({Role.ESTIMATOR.value}))
+    request_id = await _create_cost_rate_request(c)
+
+    resp = await c.post(f"/api/v1/approvals/{request_id}/withdraw", json={"reason": "wrong amount"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "cancelled" and body["completed_at"] is not None
+    assert [s["status"] for s in body["steps"]] == ["skipped"]
+
+    # withdrawn is final: no second withdrawal, no decision
+    assert (await c.post(f"/api/v1/approvals/{request_id}/withdraw")).status_code == 409
+    lead = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), acr="silver")
+    assert (await lead.post(f"/api/v1/approvals/{request_id}/decide", json={"approve": True})).status_code == 409
+    pending = (await lead.get("/api/v1/approvals/pending-for-me")).json()
+    assert request_id not in [r["id"] for r in pending]
+
+    async with AsyncSession(app_engine) as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.tenant_id', :t, false), set_config('app.is_system', 'on', false)"), {"t": TENANT}
+        )
+        rows = await session.execute(
+            text("SELECT payload FROM audit_events WHERE entity_id = :e AND action = 'update'"), {"e": request_id}
+        )
+        payloads = [r[0] for r in rows]
+    assert any(p.get("event") == "withdraw" and p.get("reason") == "wrong amount" for p in payloads)
+
+
+async def test_withdraw_is_denied_to_someone_who_is_neither_the_requester_nor_a_managing_director(authed_client):
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    request_id = await _create_cost_rate_request(creator)
+
+    other = authed_client(frozenset({Role.LEAD_ESTIMATOR.value}), acr="silver")
+    assert (await other.post(f"/api/v1/approvals/{request_id}/withdraw")).status_code == 403
+
+
+async def test_managing_director_withdraws_someone_elses_request_only_with_a_recent_step_up(authed_client):
+    creator = authed_client(frozenset({Role.ESTIMATOR.value}))
+    request_id = await _create_cost_rate_request(creator)
+
+    md_no_step_up = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}))
+    assert (await md_no_step_up.post(f"/api/v1/approvals/{request_id}/withdraw")).status_code in (401, 403)
+
+    md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}), acr="silver")
+    resp = await md.post(f"/api/v1/approvals/{request_id}/withdraw")
+    assert resp.status_code == 200 and resp.json()["status"] == "cancelled"

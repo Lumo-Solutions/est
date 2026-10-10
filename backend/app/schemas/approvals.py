@@ -64,6 +64,10 @@ class ApprovalRequestOut(ORMModel):
     payload_snapshot: dict | None = None
 
 
+class ApprovalWithdraw(BaseModel):
+    reason: str | None = None
+
+
 class ApprovalInboxOut(BaseModel):
     pending: list[ApprovalRequestOut]
     recent: list[ApprovalRequestOut]

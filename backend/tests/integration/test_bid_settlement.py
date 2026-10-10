@@ -436,6 +436,37 @@ async def test_submitter_cannot_decide_own_request_but_a_different_bd_director_c
     assert decided.decided_by == bd_other.user_id
 
 
+async def test_withdrawing_a_bid_submission_request_returns_the_settlement_to_draft(rls_session):
+    from app.services import approvals as approvals_service
+
+    tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
+    submitter_id = uuid.uuid4()
+    bd = _ctx(BD, tenant_id=tenant_id, user_id=submitter_id, acr="silver")
+    await set_rls_context(rls_session, bd)
+    submitted = await settlement_service.submit_settlement(rls_session, bd, settlement.id)
+    request_id = submitted.approval_request_id
+
+    # another approver cannot take it back (only the requester or a managing director)
+    other = _ctx(BD, tenant_id=tenant_id, user_id=uuid.uuid4(), acr="silver")
+    await set_rls_context(rls_session, other)
+    with pytest.raises(ForbiddenError):
+        await approvals_service.withdraw_request(rls_session, other, request_id)
+
+    await set_rls_context(rls_session, bd)
+    request = await approvals_service.withdraw_request(rls_session, bd, request_id, reason="submitted by mistake")
+    assert request.status == "cancelled" and request.completed_at is not None
+    await rls_session.refresh(submitted)
+    refreshed = submitted
+    assert refreshed.status == BidSettlementStatus.DRAFT.value
+    assert refreshed.approval_request_id is None and refreshed.submitted_at is None
+
+    # nothing left to decide, and it can be submitted again (a new request)
+    with pytest.raises(ConflictError):
+        await approvals_service.withdraw_request(rls_session, bd, request_id)
+    again = await settlement_service.submit_settlement(rls_session, bd, settlement.id)
+    assert again.status == BidSettlementStatus.SUBMITTED.value and again.approval_request_id != request_id
+
+
 async def test_rejected_settlement_allows_a_new_version(rls_session):
     tenant_id, project_id, settlement = await _draft_with_one_resolved_line(rls_session)
     bd_ctx = _ctx(BD, tenant_id=tenant_id, acr="silver")

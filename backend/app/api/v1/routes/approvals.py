@@ -10,6 +10,7 @@ from app.core.context import RequestContext
 from app.core.enums import Role
 from app.schemas.approvals import (
     ApprovalDecision,
+    ApprovalWithdraw,
     ApprovalInboxOut,
     ApprovalPolicyCreate,
     ApprovalPolicyOut,
@@ -121,5 +122,18 @@ async def decide_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> ApprovalRequestOut:
     request = await approvals_service.decide(session, ctx, request_id, approve=data.approve, note=data.note)
+    _, steps = await approvals_service.get_request(session, request.id)
+    return _to_out(request, steps)
+
+
+@router.post("/{request_id}/withdraw", response_model=ApprovalRequestOut)
+async def withdraw_endpoint(
+    request_id: UUID,
+    data: ApprovalWithdraw | None = None,
+    ctx: RequestContext = CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> ApprovalRequestOut:
+    """The requester (or a managing director) takes a pending request back; it is neither approved nor rejected."""
+    request = await approvals_service.withdraw_request(session, ctx, request_id, reason=data.reason if data else None)
     _, steps = await approvals_service.get_request(session, request.id)
     return _to_out(request, steps)
