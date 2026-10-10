@@ -7,8 +7,12 @@ import {
   isMfaDisabledDev,
   loginViaKeycloak,
   resolveUnresolvedLines,
+  useApprovalCleanup,
 } from './helpers'
 import { DEMO_TOTP_SECRETS } from './totp'
+
+// Requests this file leaves pending are withdrawn when it is done (see helpers.ts).
+useApprovalCleanup(test)
 
 // Real backend, real Keycloak logins, no page.route mocks anywhere.
 // global-setup.ts runs `make dev-simulate-settlement` first, which

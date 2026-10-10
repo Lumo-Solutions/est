@@ -3,7 +3,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, loginViaKeycloak, submitSettlementForApproval } from './helpers'
+import { csrfHeaders, loginViaKeycloak, submitSettlementForApproval, useApprovalCleanup } from './helpers'
+
+// Requests this file leaves pending are withdrawn when it is done (see helpers.ts).
+useApprovalCleanup(test)
 
 // The BOQ agent end to end on the real dev stack, the MOCK provider (no key, no cost):
 //   create project + BOQ -> upload the tender folder (fast, AI-free index) -> Run estimation agent (Agent tab)

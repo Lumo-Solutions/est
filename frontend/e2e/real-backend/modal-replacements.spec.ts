@@ -6,8 +6,12 @@ import {
   findProjectByCode,
   loginViaKeycloak,
   submitSettlementForApproval,
+  useApprovalCleanup,
 } from './helpers'
 import { DEMO_TOTP_SECRETS } from './totp'
+
+// Requests this file leaves pending are withdrawn when it is done (see helpers.ts).
+useApprovalCleanup(test)
 
 // Phase 3 gap-fill (docs/ui-qa-brief.md): every window.prompt call site was
 // replaced with TextPromptModal (frontend/src/components). These tests
