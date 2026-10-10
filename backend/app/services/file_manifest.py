@@ -21,7 +21,8 @@ from app.models.tender_intake import ProjectFileIndex
 
 RRF_K = 60
 EMBED_SUB_BATCH = 16
-_TOKEN = re.compile(r"[A-Za-z0-9]{2,}")
+# A drawing or document number ("C-101", "ADD-01") is one term: the parser indexes it as `c` + `-101`, so its digits alone never match.
+_TOKEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+|[A-Za-z0-9]{2,}")
 MAX_QUERY_TERMS = 14
 
 
@@ -29,7 +30,7 @@ def text_query(query: str) -> str:
     """A tsquery that matches a file holding ANY of the words (prefix match), ranked by how many it holds. A tender question
     is a handful of words, rarely all of them in one file, so AND-ing them (the websearch default) finds nothing."""
     terms = list(dict.fromkeys(t.lower() for t in _TOKEN.findall(query or "")))[:MAX_QUERY_TERMS]
-    return " | ".join(f"{t}:*" for t in terms)
+    return " | ".join(f"'{t}':*" if "-" in t else f"{t}:*" for t in terms)
 
 
 async def upsert_entry(

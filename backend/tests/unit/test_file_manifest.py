@@ -80,3 +80,12 @@ def test_rules_routing_only_for_boq_and_addenda_when_ai_is_off():
     assert f(_Doc("rules", "addendum"), 0.85, rules_routing=False) is not None  # AI-on tenants: unchanged
     assert f(_Doc("rules", "addendum", confidence=0.5), 0.85, rules_routing=True) is not None
     assert f(_Doc("ai", "drawing"), 0.85, rules_routing=True) is None  # AI proposals behave as before
+
+
+def test_text_query_keeps_a_hyphenated_document_number_as_one_term():
+    # "C-101" is indexed as `c` + `-101`, so the bare digits would never match it
+    from app.services.file_manifest import text_query
+
+    assert text_query("C-101") == "'c-101':*"
+    assert text_query("storm C-101 ADD-01") == "storm:* | 'c-101':* | 'add-01':*"
+    assert text_query("a 7") == ""
