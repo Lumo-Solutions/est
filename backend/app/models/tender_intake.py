@@ -4,11 +4,12 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy import BigInteger, Computed, Boolean, Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import TenantEntity
+from app.db.types import EmbeddingVector
 
 
 def _project_fk() -> Mapped[uuid.UUID]:
@@ -154,3 +155,45 @@ class TenderClassConfig(TenantEntity):
     label: Mapped[str] = mapped_column(String(128), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class ProjectFileIndex(TenantEntity):
+    """The manifest: what can be read from a file without a model (docs/boq-agent/plan.md §2). One row per document;
+    the BOQ agent searches and reads through it. `partial_index` marks a file a limit cut short (it is still indexed)."""
+
+    __tablename__ = "project_file_index"
+    __table_args__ = (UniqueConstraint("document_id", name="uq_project_file_index_document"),)
+
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    folder: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    ext: Mapped[str] = mapped_column(String(16), nullable=False, server_default="")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_sizes: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    page1_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    title_block_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sheets: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    hints: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    hints_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    partial_index: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    partial_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    indexed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
+    embedding: Mapped[list[float] | None] = mapped_column(EmbeddingVector(), nullable=True)
+    search_tsv = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('simple', coalesce(filename, '')), 'A') || "
+            "setweight(to_tsvector('simple', coalesce(path, '')), 'B') || "
+            "setweight(to_tsvector('simple', coalesce(title_block_text, '')), 'B') || "
+            "setweight(to_tsvector('simple', coalesce(hints_text, '')), 'B') || "
+            "setweight(to_tsvector('simple', coalesce(page1_text, '')), 'C')",
+            persisted=True,
+        ),
+        nullable=True,
+    )

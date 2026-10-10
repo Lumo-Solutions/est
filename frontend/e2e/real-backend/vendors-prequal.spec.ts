@@ -53,8 +53,12 @@ test.describe('Vendor certificates and prequalification', () => {
     await page.getByRole('button', { name: 'New vendor' }).click()
     const uniqueName = `E2E Cert Vendor ${Date.now()}`
     await page.getByLabel('Legal name').fill(uniqueName)
-    await page.getByRole('button', { name: 'Create vendor' }).click()
-    await page.getByRole('link', { name: uniqueName }).click()
+    // name-sorted list of the first 50 vendors: the new one may not be on it, so open it by the id the create call returned
+    const [created] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/api/v1/vendors') && r.request().method() === 'POST'),
+      page.getByRole('button', { name: 'Create vendor' }).click(),
+    ])
+    await page.goto(`/vendors/${((await created.json()) as { id: string }).id}`)
 
     const certTypeSelect = page.locator('select').filter({ hasText: '-- Certificate type --' })
     // useCertificateTypes() resolves asynchronously -- the select renders

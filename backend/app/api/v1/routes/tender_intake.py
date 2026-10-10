@@ -418,6 +418,7 @@ async def intake_settings_endpoint(ctx: RequestContext = CurrentUser, session: A
     return IntakeSettingsOut(
         auto_accept_min=await intake_service.get_auto_accept_min(session),
         auto_measure_disciplines=await intake_service.get_auto_measure(session),
+        ai_classify=await intake_service.get_ai_classify(session),
     )
 
 
@@ -431,9 +432,12 @@ async def set_intake_settings_endpoint(
         await intake_service.set_auto_accept_min(session, ctx, data.auto_accept_min)
     if data.auto_measure_disciplines is not None:
         await intake_service.set_auto_measure(session, ctx, data.auto_measure_disciplines)
+    if data.ai_classify is not None:
+        await intake_service.set_ai_classify(session, ctx, data.ai_classify)
     return IntakeSettingsOut(
         auto_accept_min=await intake_service.get_auto_accept_min(session),
         auto_measure_disciplines=await intake_service.get_auto_measure(session),
+        ai_classify=await intake_service.get_ai_classify(session),
     )
 
 

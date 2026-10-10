@@ -2125,6 +2125,28 @@ def write_tender_pack(out_dir: str, salt: str, extra: int = 0) -> None:
     print(f"wrote {len(files)} files to {target} (salt={salt!r}, extra={extra})")
 
 
+async def backfill_manifest(tenant_slug: str | None, project: str | None, limit: int | None, dry_run: bool) -> None:
+    """Manifest entries for documents without one. Changes nothing on the documents themselves."""
+    from app.services import manifest_backfill
+
+    async with session_scope(system_context(UUID("00000000-0000-0000-0000-000000000000"))) as session:
+        tenants = [(r[0], r[1]) for r in (await session.execute(select(Tenant.id, Tenant.slug).where(Tenant.is_active.is_(True)))).all()]
+    for tenant_id, slug in tenants:
+        if tenant_slug and slug != tenant_slug:
+            continue
+        project_id = None
+        if project:
+            try:
+                project_id = UUID(project)
+            except ValueError:
+                async with session_scope(system_context(tenant_id)) as session:
+                    project_id = (await session.execute(select(Project.id).where(Project.code == project))).scalar_one_or_none()
+                if project_id is None:
+                    continue
+        stats = await manifest_backfill.backfill_tenant(tenant_id, project_id=project_id, limit=limit, dry_run=dry_run)
+        print(f"{slug}: {stats}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2174,6 +2196,12 @@ def main() -> None:
     quotes_parser.add_argument("--project", default="AI-DEMO")
     ai_pack_parser = subparsers.add_parser("write-ai-demo-pack", help="DEV/TEST: write the synthetic AI demo tender pack to a directory")
     ai_pack_parser.add_argument("--out", required=True)
+    bf = subparsers.add_parser("backfill-manifest", help="Build manifest entries for documents that have none (documents are not changed)")
+    bf.add_argument("--tenant", default=None, help="tenant slug (default: all)")
+    bf.add_argument("--project", default=None, help="project code or id (default: all)")
+    bf.add_argument("--limit", type=int, default=None)
+    bf.add_argument("--all", action="store_true", help="every project of the tenant(s): required when --project is not given")
+    bf.add_argument("--dry-run", action="store_true")
     subparsers.add_parser(
         "clean-demo-data",
         help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
@@ -2206,6 +2234,10 @@ def main() -> None:
         asyncio.run(seed_ai_demo())
     elif args.command == "seed-ai-demo-quotes":
         asyncio.run(seed_ai_demo_quotes(args.project))
+    elif args.command == "backfill-manifest":
+        if not args.project and not args.all:
+            parser.error("backfill-manifest needs --project (code or id) or --all")
+        asyncio.run(backfill_manifest(args.tenant, args.project, args.limit, args.dry_run))
     elif args.command == "write-ai-demo-pack":
         write_ai_demo_pack(args.out)
 

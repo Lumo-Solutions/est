@@ -38,6 +38,9 @@ services:
   celery-worker-vlm:
     environment: *prod-app-env
 
+  celery-worker-agent:
+    environment: *prod-app-env
+
   celery-worker-email:
     environment: *prod-app-env
 

@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   forcedTotal: null as number | null,
   fetchNextPage: vi.fn(),
   hasNextPage: false,
+  readFiles: new Set<string>(),
 }))
 
 // A tiny in-memory version of the server's /items filter, so the tests see what the real list would return.
@@ -32,6 +33,8 @@ function matches(i: TreeItem, f: DocFilter): boolean {
   }
   return true
 }
+
+vi.mock('../agentLines/useAgentReadFiles', () => ({ useAgentReadFiles: () => m.readFiles }))
 
 vi.mock('./api', () => ({
   useTenderClasses: () => ({ data: TEST_CLASSES }),
@@ -108,6 +111,7 @@ describe('DocumentTree', () => {
     m.db = sample()
     m.forcedTotal = null
     m.hasNextPage = false
+    m.readFiles = new Set()
     m.itemsCalls = []
     for (const f of [m.reclassifyMutate, m.bulkAsync, m.excludeMutate, m.rerunMutate, m.invalidate, m.fetchNextPage]) f.mockReset()
   })
@@ -364,6 +368,28 @@ describe('DocumentTree', () => {
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Superseded by addendum' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Exclude' }))
     expect(m.excludeMutate.mock.calls[0][0]).toEqual({ id: 's1', reason: 'Superseded by addendum' })
+  })
+
+  it('marks the files the latest agent run read, and only those', () => {
+    m.readFiles = new Set(['b1'])
+    renderTree()
+    expect(rowOf('boq.xlsx').getByText('Read by agent')).toBeInTheDocument()
+    expect(rowOf('spec.pdf').queryByText('Read by agent')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Read by agent')).toHaveLength(1)
+  })
+
+  it('shows no mark and changes nothing when there is no agent run', () => {
+    renderTree()
+    expect(screen.queryByText('Read by agent')).not.toBeInTheDocument()
+    expect(groupNames()).toContain('Bill of quantities, 1 file')
+  })
+
+  it('also marks files in the flat search list', async () => {
+    m.readFiles = new Set(['s1'])
+    renderTree()
+    fireEvent.change(screen.getByLabelText('Search documents'), { target: { value: 'spec' } })
+    await waitFor(() => expect(screen.getByText('1 file matches')).toBeInTheDocument())
+    expect(rowOf('spec.pdf').getByText('Read by agent')).toBeInTheDocument()
   })
 
   it('opens the evidence modal', () => {

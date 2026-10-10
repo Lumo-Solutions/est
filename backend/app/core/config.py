@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     ai_api_key: SecretStr = Field(default=SecretStr(""), alias="AI_API_KEY")
     ai_base_url: str = Field(default="", alias="AI_BASE_URL")
     ai_timeout_s: float = Field(default=120, alias="AI_TIMEOUT_S")
+    # Extra JSON fields merged into every openai_compatible request body (e.g. {"enable_thinking": false} for Qwen when
+    # structured output misbehaves with thinking on). Empty = nothing added.
+    ai_extra_body: str = Field(default="", alias="AI_EXTRA_BODY")
     ai_max_retries: int = Field(default=3, alias="AI_MAX_RETRIES")
     ai_monthly_budget_usd: float | None = Field(default=None, alias="AI_MONTHLY_BUDGET_USD")
     ai_project_budget_usd: float | None = Field(default=None, alias="AI_PROJECT_BUDGET_USD")
@@ -236,6 +239,18 @@ class Settings(BaseSettings):
     intake_ai_max_consecutive_failures: int = Field(default=3, alias="INTAKE_AI_MAX_CONSECUTIVE_FAILURES")
     intake_ai_breaker_s: int = Field(default=120, alias="INTAKE_AI_BREAKER_S")
     # Dispatch: files are enqueued from the database, never more than this many queued or running at once.
+    # BOQ agent (docs/boq-agent/plan.md): limits per run and per chat turn; a limit ends a section as stopped_limit.
+    agent_max_steps_section: int = Field(default=40, alias="AGENT_MAX_STEPS_SECTION")
+    agent_max_page_views: int = Field(default=60, alias="AGENT_MAX_PAGE_VIEWS")
+    agent_max_usd_run: float = Field(default=5.0, alias="AGENT_MAX_USD_RUN")
+    agent_chat_max_steps: int = Field(default=15, alias="AGENT_CHAT_MAX_STEPS")
+    agent_chat_max_usd: float = Field(default=0.5, alias="AGENT_CHAT_MAX_USD")
+    agent_measure_wait_s: int = Field(default=120, alias="AGENT_MEASURE_WAIT_S")
+    agent_tool_result_chars: int = Field(default=3000, alias="AGENT_TOOL_RESULT_CHARS")
+    agent_window: int = Field(default=6, alias="AGENT_WINDOW")
+    agent_step_max_tokens: int = Field(default=700, alias="AGENT_STEP_MAX_TOKENS")
+    # Wall-clock cap for one section's loop (the Celery message must not outlive the broker's visibility timeout).
+    agent_section_max_seconds: int = Field(default=1500, alias="AGENT_SECTION_MAX_SECONDS")
     intake_dispatch_limit: int = Field(default=40, alias="INTAKE_DISPATCH_LIMIT")
     # A file queued this long ago without starting is enqueued again (the broker lost it).
     intake_requeue_after_s: int = Field(default=600, alias="INTAKE_REQUEUE_AFTER_S")

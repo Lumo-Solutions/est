@@ -176,6 +176,8 @@ export interface IntakeSettings {
   default_auto_accept_min: number
   /** Drawing disciplines measured automatically on intake (none by default). */
   auto_measure_disciplines?: string[]
+  /** Classify every uploaded file with the AI (default off). */
+  ai_classify?: boolean
 }
 
 export function useIntakeSettings() {
@@ -188,7 +190,7 @@ export function useIntakeSettings() {
 export function useSetIntakeSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { auto_accept_min?: number; auto_measure_disciplines?: string[] }) => api.put<IntakeSettings>('/admin/intake-settings', data),
+    mutationFn: (data: { auto_accept_min?: number; auto_measure_disciplines?: string[]; ai_classify?: boolean }) => api.put<IntakeSettings>('/admin/intake-settings', data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tender-intake-settings'] }),
   })
 }

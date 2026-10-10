@@ -373,9 +373,12 @@ class IntakeSettingsIn(BaseModel):
     auto_accept_min: float | None = Field(default=None, ge=0.5, le=1.0)
     # Disciplines whose drawings are measured automatically when intake routes them (default: none).
     auto_measure_disciplines: list[str] | None = None
+    # Classify every uploaded file with a model (slow and costly at pack scale). Default off: upload is a fast index.
+    ai_classify: bool | None = None
 
 
 class IntakeSettingsOut(BaseModel):
     auto_accept_min: float
     default_auto_accept_min: float = 0.85
     auto_measure_disciplines: list[str] = []
+    ai_classify: bool = False

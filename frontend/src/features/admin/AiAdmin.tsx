@@ -173,6 +173,44 @@ function AutoMeasureCard({ canEdit }: { canEdit: boolean }) {
   )
 }
 
+function AiClassifyCard({ canEdit }: { canEdit: boolean }) {
+  const { data } = useIntakeSettings()
+  const save = useSetIntakeSettings()
+  if (!data) return null
+  const on = data.ai_classify ?? false
+  return (
+    <section aria-labelledby="intake-ai-classify-title">
+      <h2 id="intake-ai-classify-title" className="text-sm font-semibold text-slate-800">
+        Tender intake: AI classification
+      </h2>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          id="intake-ai-classify"
+          type="checkbox"
+          role="switch"
+          checked={on}
+          disabled={!canEdit || save.isPending}
+          onChange={() => save.mutate({ ai_classify: !on })}
+          className="h-4 w-4 rounded border-slate-300 text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
+        />
+        <label htmlFor="intake-ai-classify" className="text-sm text-slate-700">
+          Classify every uploaded file with the AI
+        </label>
+      </div>
+      <p className="mt-2 text-sm text-slate-600">
+        Off: uploads are indexed in seconds and nothing is sent to a model; the estimation agent reads only what it
+        needs. On: every file is classified by the AI, which is slow, costs money and needs the cost confirmation.
+      </p>
+      {!canEdit && <p className="mt-1 text-xs text-slate-500">Only the managing director can change this</p>}
+      {save.isError && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {save.error.message}
+        </p>
+      )}
+    </section>
+  )
+}
+
 export function AiAdmin() {
   const { hasRole } = useAuth()
   const canSwitch = hasRole(...SWITCH_ROLES)
@@ -245,6 +283,7 @@ export function AiAdmin() {
       </section>
 
       <IntakeAutoAcceptCard canEdit={canSwitch} />
+      <AiClassifyCard canEdit={canSwitch} />
       <AutoMeasureCard canEdit={canSwitch} />
 
       {!canSeeUsage && <p className="text-xs text-slate-500">Your role cannot view AI usage.</p>}

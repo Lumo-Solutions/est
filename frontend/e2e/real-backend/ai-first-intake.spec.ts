@@ -3,7 +3,12 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, loginViaKeycloak } from './helpers'
+import { csrfHeaders, loginViaKeycloak, useAiClassify } from './helpers'
+
+useAiClassify(test) // these specs are about the AI's classification: turn the tenant setting on for this file
+
+// The tracked QA screenshots are only rewritten on purpose (UPDATE_QA_SCREENSHOTS=1); a normal run writes to test-results.
+const QA_SHOT_DIR = process.env.UPDATE_QA_SCREENSHOTS === '1' ? '../docs/ui-qa/screenshots/ai-first-intake' : 'test-results/qa-screenshots/ai-first-intake'
 
 // AI-first tender intake, real backend, real Keycloak, real Celery workers, real S3, the MOCK provider (no key):
 //   create a project -> drop the .ai-demo-pack FOLDER -> the AI reads every file, confident answers are routed
@@ -286,8 +291,8 @@ test.describe.serial('AI-first intake (mock provider)', () => {
         clientWidth: document.documentElement.clientWidth,
       }))
       expect(scrollWidth, `project page overflows sideways at ${width}px`).toBeLessThanOrEqual(clientWidth + 1)
-      mkdirSync('../docs/ui-qa/screenshots/ai-first-intake', { recursive: true })
-      await lead.screenshot({ path: `../docs/ui-qa/screenshots/ai-first-intake/project-page-${width}.png`, fullPage: true })
+      mkdirSync(QA_SHOT_DIR, { recursive: true })
+      await lead.screenshot({ path: `${QA_SHOT_DIR}/project-page-${width}.png`, fullPage: true })
     }
     const axe = await new AxeBuilder({ page: lead }).analyze()
     const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
@@ -298,7 +303,7 @@ test.describe.serial('AI-first intake (mock provider)', () => {
     const drawer = lead.getByRole('dialog', { name: 'Edit project' })
     await expect(drawer).toBeVisible()
     await expect(drawer.getByRole('heading', { name: 'Members' })).toBeVisible()
-    await lead.screenshot({ path: '../docs/ui-qa/screenshots/ai-first-intake/edit-project-drawer.png' })
+    await lead.screenshot({ path: `${QA_SHOT_DIR}/edit-project-drawer.png` })
     await lead.keyboard.press('Escape')
     await expect(drawer).toHaveCount(0)
     await lead.context().close()

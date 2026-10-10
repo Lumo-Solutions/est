@@ -286,7 +286,7 @@ async def seed_history(w, flash_calls=100, plus_calls=25):
                 ),
                 {"t": w["tenant"], "m": model, "h": sha(f"{model}{i}"), "i": t_in, "c": t_cached, "o": t_out},
             )
-    await s.execute(text("INSERT INTO tenant_ai_settings (tenant_id, external_ai_allowed) VALUES (:t, true)"), {"t": w["tenant"]})
+    await s.execute(text("INSERT INTO tenant_ai_settings (tenant_id, external_ai_allowed, intake_ai_classify) VALUES (:t, true, true)"), {"t": w["tenant"]})
     await set_rls_context(s, w["lead"])
 
 
@@ -341,7 +341,7 @@ async def test_without_history_the_defaults_are_used_and_a_budget_below_the_esti
     from app.core.context import system_context
 
     await set_rls_context(w["s"], system_context(w["tenant"]))
-    await w["s"].execute(text("INSERT INTO tenant_ai_settings (tenant_id, external_ai_allowed) VALUES (:t, true)"), {"t": w["tenant"]})
+    await w["s"].execute(text("INSERT INTO tenant_ai_settings (tenant_id, external_ai_allowed, intake_ai_classify) VALUES (:t, true, true)"), {"t": w["tenant"]})
     await set_rls_context(w["s"], w["lead"])
     pkg = await pack_with(w, 100)
     settings = external_settings().model_copy(update={"ai_monthly_budget_usd": 0.0001})

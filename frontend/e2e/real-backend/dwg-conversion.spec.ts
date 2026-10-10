@@ -38,6 +38,26 @@ interface Measurement {
   unit: string
 }
 
+// The Drawings picker was folded into the tender-folder drop (which routes by classification), so these specs
+// upload through the drawing-upload endpoint the picker used: the conversion pipeline under test is the same.
+async function uploadDrawings(page: Page, projectId: string, files: { name: string; path?: string; buffer?: Buffer }[]) {
+  const responses = []
+  for (const f of files) {
+    const up = await page.request.post(`/api/v1/projects/${projectId}/drawings`, {
+      headers: await csrfHeaders(page),
+      multipart: { file: { name: f.name, mimeType: 'application/octet-stream', buffer: f.buffer ?? readFileSync(f.path!) } },
+    })
+    // The picker started ingest (conversion, indexing, extraction, measurements) right after the upload; so do we.
+    if (up.status() === 201) {
+      const id = ((await up.json()) as { id: string }).id
+      const m = await page.request.post(`/api/v1/drawings/${id}/ingest`, { headers: await csrfHeaders(page) })
+      expect(m.status(), await m.text()).toBe(202)
+    }
+    responses.push(up)
+  }
+  return responses
+}
+
 async function login(browser: Browser, user: string, pass: string): Promise<Page> {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   const page = await context.newPage()
@@ -93,16 +113,12 @@ test('multi-file upload: DWG and DXF side by side, DWG converted, measured like 
   const lead = await login(browser, 'lead1', 'Lead1Pass!')
   const projectId = await newProject(lead, 'convert')
 
-  await lead.goto(`/projects/${projectId}`)
-  // The picker says what it takes, and takes several files including .dwg.
-  await expect(lead.getByText('PDF (vector), DXF, DWG (auto-converted)')).toBeVisible()
-  const input = lead.getByTestId('drawing-file-input')
-  await expect(input).toHaveAttribute('multiple', '')
-  expect(await input.getAttribute('accept')).toContain('.dwg')
-
-  // Two DWGs and the DXF the first one was made from -- one upload gesture.
-  await input.setInputFiles([fixture('civil_site.dwg'), fixture('civil_site.source.dxf'), fixture('intake_sheet.dwg')])
-  await expect(lead.getByRole('status').filter({ hasText: 'Uploaded 3 files' })).toBeVisible({ timeout: 60_000 })
+  // Two DWGs and the DXF the first one was made from.
+  for (const r of await uploadDrawings(lead, projectId, [
+    { name: 'civil_site.dwg', path: fixture('civil_site.dwg') },
+    { name: 'civil_site.source.dxf', path: fixture('civil_site.source.dxf') },
+    { name: 'intake_sheet.dwg', path: fixture('intake_sheet.dwg') },
+  ])) expect(r.status(), await r.text()).toBe(201)
 
   const dwg = await waitForStatus(lead, projectId, 'civil_site.dwg', ['ready', 'partial', 'failed', 'needs_conversion'])
   const dxf = await waitForStatus(lead, projectId, 'civil_site.source.dxf', ['ready', 'partial', 'failed'])
@@ -130,9 +146,7 @@ test('multi-file upload: DWG and DXF side by side, DWG converted, measured like 
   for (const [i, m] of sorted(fromDwg).entries()) expect(m.value).toBeCloseTo(sorted(fromDxf)[i].value, 4)
 
   // UI: the project list marks it DWG; the sheet page says "Converted from DWG" and offers both files.
-  await lead.reload()
-  await expect(lead.getByRole('link', { name: 'civil_site.dwg' })).toBeVisible()
-  await lead.getByRole('link', { name: 'civil_site.dwg' }).click()
+  await lead.goto(`/projects/${projectId}/drawings/${dwg.id}`)
   await expect(lead.getByTestId('dwg-provenance')).toContainText('Converted from DWG')
   await expect(lead.getByTestId('dwg-provenance')).toContainText('ACAD2018')
   const original = lead.getByRole('link', { name: 'Download original DWG' })
@@ -164,9 +178,10 @@ test('a corrupt DWG and a .dwg that is really a PDF: needs conversion with a rea
     if (r.status() >= 500) serverErrors.push(`${r.status()} ${r.url()}`)
   })
 
-  await lead.goto(`/projects/${projectId}`)
-  await lead.getByTestId('drawing-file-input').setInputFiles([fixture('corrupt.dwg'), fixture('pdf_named.dwg')])
-  await expect(lead.getByRole('status').filter({ hasText: 'Uploaded 2 files' })).toBeVisible({ timeout: 60_000 })
+  for (const r of await uploadDrawings(lead, projectId, [
+    { name: 'corrupt.dwg', path: fixture('corrupt.dwg') },
+    { name: 'pdf_named.dwg', path: fixture('pdf_named.dwg') },
+  ])) expect(r.status(), await r.text()).toBe(201)
 
   // The real converter rejects the corrupt file: parked, with the reason and the manual workaround.
   const corrupt = await waitForStatus(lead, projectId, 'corrupt.dwg', ['needs_conversion', 'ready', 'failed'])
@@ -188,9 +203,9 @@ test('a corrupt DWG and a .dwg that is really a PDF: needs conversion with a rea
   expect(pdf.conversion_reason).toBeNull()
 
   // A .dwg with no DWG content at all is refused at upload with a readable message.
-  await lead.goto(`/projects/${projectId}`)
-  await lead.getByTestId('drawing-file-input').setInputFiles({ name: 'notes.dwg', mimeType: 'application/octet-stream', buffer: Buffer.from('just some text') })
-  await expect(lead.getByRole('alert').filter({ hasText: 'notes.dwg' })).toContainText('not a valid DWG')
+  const [refused] = await uploadDrawings(lead, projectId, [{ name: 'notes.dwg', buffer: Buffer.from('just some text') }])
+  expect(refused.status()).toBe(422)
+  expect(await refused.text()).toContain('not a valid DWG')
 
   expect(serverErrors).toEqual([])
 })
@@ -205,8 +220,8 @@ test('converter down -> needs conversion (unavailable), converter back -> Retry 
   try {
     // The heartbeat goes stale after DWG_HEARTBEAT_MAX_AGE_S (30s).
     await lead.waitForTimeout(36_000)
-    await lead.goto(`/projects/${projectId}`)
-    await lead.getByTestId('drawing-file-input').setInputFiles(fixture('intake_sheet.dwg'))
+    const [up] = await uploadDrawings(lead, projectId, [{ name: 'intake_sheet.dwg', path: fixture('intake_sheet.dwg') }])
+    expect(up.status(), await up.text()).toBe(201)
     const parked = await waitForStatus(lead, projectId, 'intake_sheet.dwg', ['needs_conversion', 'ready', 'failed'], 90_000)
     expect(parked).toMatchObject({ status: 'needs_conversion', conversion_reason: 'unavailable' })
     expect(parked.error_message).toContain('not installed or not running')

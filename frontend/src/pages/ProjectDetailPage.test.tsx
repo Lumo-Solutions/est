@@ -47,6 +47,10 @@ vi.mock('../features/tenderIntake/ProjectDocuments', () => ({
   ProjectDocuments: ({ projectId }: { projectId: string }) => <p data-testid="documents">documents of {projectId}</p>,
 }))
 
+vi.mock('../features/agent/AgentTab', () => ({
+  AgentTab: ({ projectId }: { projectId: string }) => <p data-testid="agent">agent of {projectId}</p>,
+}))
+
 import { ProjectDetailPage } from './ProjectDetailPage'
 
 function Where() {
@@ -71,7 +75,7 @@ const renderAt = (url: string) =>
     </MemoryRouter>,
   )
 
-describe('ProjectDetailPage (one page, no tabs)', () => {
+describe('ProjectDetailPage', () => {
   beforeEach(() => {
     roles = ['lead_estimator']
     projectState = { data: project, isLoading: false, isError: false }
@@ -85,10 +89,29 @@ describe('ProjectDetailPage (one page, no tabs)', () => {
     expect(screen.getByText('Abu Dhabi · Al Reem Island')).toBeInTheDocument()
     expect(screen.getByText('lead1, est1')).toBeInTheDocument()
     expect(screen.getByTestId('documents')).toHaveTextContent('documents of p1')
-    // The old Overview / Tender documents split is gone.
+    // The old Overview / Tender documents split is gone; the page has Documents and Agent tabs.
+    expect(screen.getByRole('tab', { name: 'Documents' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByTestId('agent')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Tender documents' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('switches to the Agent tab and back, mounting only the visible one', () => {
+    renderAt('/projects/p1')
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent' }))
+    expect(screen.getByTestId('agent')).toHaveTextContent('agent of p1')
+    expect(screen.queryByTestId('documents')).not.toBeInTheDocument()
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'project-tab-agent')
+    fireEvent.click(screen.getByRole('tab', { name: 'Documents' }))
+    expect(screen.getByTestId('documents')).toBeInTheDocument()
+    expect(screen.queryByTestId('agent')).not.toBeInTheDocument()
+  })
+
+  it('shows the Agent tab to a plain estimator too (read-only is handled inside it)', () => {
+    roles = ['estimator']
+    renderAt('/projects/p1')
+    expect(screen.getByRole('tab', { name: 'Agent' })).toBeInTheDocument()
   })
 
   it('opens "Edit project" as a drawer holding members and the old Overview fields, and closes it again', () => {

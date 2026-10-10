@@ -796,7 +796,7 @@ async def confirm_document(
     doc.auto_accepted = auto
     await session.flush()
     payload = {
-        "event": "auto_accept" if auto else "confirm", "decided_by": Decider.AI.value if auto else Decider.USER.value,
+        "event": "auto_accept" if auto else "confirm", "decided_by": (doc.classified_by or Decider.AI.value) if auto else Decider.USER.value,
         "proposed_by": doc.classified_by, "doc_class": doc.doc_class, "sub_type": doc.sub_type,
         "confidence": float(doc.confidence or 0),
     }
@@ -810,9 +810,17 @@ async def confirm_document(
     return doc
 
 
-def _blocked_reason(doc: ProjectDocument, threshold: float) -> str | None:
-    """Why an AI proposal may not be accepted without a person; None when it may."""
-    if doc.classified_by != Decider.AI.value:
+# With the per-file AI classification off (the default), the rules alone may route these two classes at upload:
+# a BOQ workbook goes to the import wizard's offer list, an addendum to the register. Everything else waits in the manifest.
+RULES_ROUTABLE_CLASSES = frozenset({DocClass.BOQ.value, DocClass.ADDENDUM.value})
+
+
+def _blocked_reason(doc: ProjectDocument, threshold: float, *, rules_routing: bool = False) -> str | None:
+    """Why a proposal may not be accepted without a person; None when it may."""
+    if doc.classified_by == Decider.RULES.value and rules_routing:
+        if doc.doc_class not in RULES_ROUTABLE_CLASSES:
+            return "not a class the rules may route"
+    elif doc.classified_by != Decider.AI.value:
         return "not classified by the AI"
     if doc.safety_status != "accepted":
         return "did not pass the safety check"
@@ -831,6 +839,22 @@ def would_auto_accept(doc: ProjectDocument, threshold: float) -> bool:
     return doc.status == DocStatus.PROPOSED.value and _blocked_reason(doc, threshold) is None
 
 
+async def route_for_agent(session: AsyncSession, ctx: RequestContext, document_id: UUID) -> None:
+    """The BOQ agent needs a drawing measured that upload left unrouted (upload routes only BOQs and addenda by rules).
+    Routes it as the system would at the auto-accept threshold: nobody is recorded as the confirmer, the audit entry says
+    why. Only a drawing that passed the safety check and is still waiting is routed."""
+    doc = await get_document(session, document_id)
+    if doc.status == DocStatus.ROUTED.value and doc.routed_kind == "drawing":
+        return
+    if doc.status != DocStatus.PROPOSED.value or doc.doc_class != DocClass.DRAWING.value or doc.safety_status != "accepted":
+        raise ConflictError("Only a drawing that is waiting for a decision can be set up for measuring by the agent")
+    await confirm_document(session, ctx, document_id, auto_accept_min=0.0)
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="project_document", entity_id=doc.id, project_id=doc.project_id,
+        payload={"event": "agent_route", "doc_class": doc.doc_class, "reason": "the BOQ agent asked for this drawing's measurements"},
+    )
+
+
 async def get_auto_measure(session: AsyncSession) -> list[str]:
     """Disciplines measured automatically when intake routes their drawings (default: none)."""
     value = (await session.execute(select(TenantAiSettings.intake_auto_measure))).scalar_one_or_none()
@@ -847,6 +871,12 @@ def _schedule_light_index(ctx: RequestContext, drawing_id: UUID) -> None:
         pass
 
 
+async def get_ai_classify(session: AsyncSession) -> bool:
+    """Whether uploaded files are classified by a model one by one (tenant setting `intake_ai_classify`, default off)."""
+    value = (await session.execute(select(TenantAiSettings.intake_ai_classify))).scalar_one_or_none()
+    return bool(value)
+
+
 async def get_auto_accept_min(session: AsyncSession) -> float:
     value = (await session.execute(select(TenantAiSettings.intake_auto_accept_min))).scalar_one_or_none()
     return float(value) if value is not None else DEFAULT_AUTO_ACCEPT_MIN
@@ -860,7 +890,8 @@ async def auto_accept_document(session: AsyncSession, ctx: RequestContext, docum
     if doc.status != DocStatus.PROPOSED.value:
         return False
     threshold = await get_auto_accept_min(session)
-    if _blocked_reason(doc, threshold) is not None:
+    rules_routing = not await get_ai_classify(session)
+    if _blocked_reason(doc, threshold, rules_routing=rules_routing) is not None:
         return False
     try:
         async with session.begin_nested():
@@ -1074,6 +1105,22 @@ async def bulk_reclassify(
     return BulkConfirmOut(
         confirmed=changed, failed=failed, skipped=len(ids) - len(docs), results=results, matched=matched, next_cursor=next_cursor
     )
+
+
+async def set_ai_classify(session: AsyncSession, ctx: RequestContext, value: bool) -> bool:
+    row = (await session.execute(select(TenantAiSettings).where(TenantAiSettings.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    before = bool(row.intake_ai_classify) if row is not None else False
+    if row is None:
+        session.add(TenantAiSettings(tenant_id=ctx.tenant_id, intake_ai_classify=value, created_by=ctx.user_id, updated_by=ctx.user_id))
+    else:
+        row.intake_ai_classify = value
+        row.updated_by = ctx.user_id
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="tenant_ai_settings", entity_id=str(ctx.tenant_id),
+        payload={"intake_ai_classify": {"before": before, "after": value}},
+    )
+    return value
 
 
 async def set_auto_measure(session: AsyncSession, ctx: RequestContext, disciplines: list[str]) -> list[str]:

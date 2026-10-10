@@ -3,7 +3,9 @@ import { mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, loginViaKeycloak, resolveUnresolvedLines } from './helpers'
+import { csrfHeaders, loginViaKeycloak, resolveUnresolvedLines, useAiClassify } from './helpers'
+
+useAiClassify(test) // these specs are about the AI's classification: turn the tenant setting on for this file
 
 // The whole AI feature set, real backend, real Keycloak, real Celery workers, real S3, the MOCK provider (no key):
 //   create project -> drop the FOLDER -> classify + confirm -> import BOQ -> read drawing annotations -> verify the BOQ
@@ -184,7 +186,7 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
       await lead.getByRole('button', { name: /Read annotations with AI/ }).click()
     }
     const summary = await pollJson<{ sheets: number; queued: number; done: number; annotations: number }>(
-      lead, `/api/v1/projects/${state.projectId}/drawing-annotations/summary`, (v) => v.sheets > 0 && v.queued === 0 && v.annotations > 0, 'annotations read',
+      lead, `/api/v1/projects/${state.projectId}/drawing-annotations/summary`, (v) => v.done >= state.drawings.length && v.queued === 0 && v.annotations > 0, 'annotations read',
     )
     expect(summary.done).toBeGreaterThanOrEqual(3)
     expect(summary.annotations).toBeGreaterThanOrEqual(10) // 7 on C-101 + 3 on L-201, all AI-read

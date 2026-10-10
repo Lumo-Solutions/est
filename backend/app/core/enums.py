@@ -328,6 +328,9 @@ class SettlementCostSource(StrEnum):
     QUOTATION_LINE = "quotation_line"
     COST_LIBRARY_RATE = "cost_library_rate"
     MANUAL = "manual"
+    # BOQ agent, draft settlements only: a person must confirm the line before the settlement can be submitted.
+    AGENT_CANDIDATE = "agent_candidate"
+    AGENT_ESTIMATE = "agent_estimate"
 
 
 class SettlementOutcome(StrEnum):

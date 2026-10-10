@@ -1,9 +1,11 @@
+import { Bot } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card, SectionHeading } from '../../components/Card'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { controlClasses } from '../../components/Field'
 import { TextPromptModal } from '../../components/TextPromptModal'
+import { useAgentReadFiles } from '../agentLines/useAgentReadFiles'
 import { ChangeClassDialog } from './ChangeClassDialog'
 import { EMPTY_CHOICE, type ChoiceBody, type ClassChoice } from './classChoice'
 import { DocumentRow, type RowActions } from './DocumentRow'
@@ -70,6 +72,16 @@ interface Pending {
 
 type ItemsQuery = ReturnType<typeof useTenderItems>
 
+// A small mark under a file the latest agent run read. Without a run the set is empty and nothing shows.
+function ReadByAgentMark() {
+  return (
+    <p className="-mt-1 mb-1 flex items-center gap-1 text-xs text-ink-2">
+      <Bot aria-hidden="true" className="h-3.5 w-3.5" />
+      Read by agent
+    </p>
+  )
+}
+
 // The pages of one server-side list in a virtualised, scrollable box.
 function ItemPages({
   query,
@@ -78,6 +90,7 @@ function ItemPages({
   selected,
   showFolder,
   actions,
+  readByAgent,
 }: {
   query: ItemsQuery
   label: string
@@ -85,6 +98,7 @@ function ItemPages({
   selected: ReadonlySet<string>
   showFolder: boolean
   actions: RowActions
+  readByAgent: ReadonlySet<string>
 }) {
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const total = query.data?.pages[0]?.total ?? 0
@@ -111,13 +125,30 @@ function ItemPages({
       loadingMore={isFetchingNextPage}
       onLoadMore={loadMore}
       getKey={(i) => i.id}
-      renderRow={(item) => <DocumentRow item={item} canAct={canAct} selected={selected.has(item.id)} showFolder={showFolder} actions={actions} />}
+      renderRow={(item) => (
+        <>
+          <DocumentRow item={item} canAct={canAct} selected={selected.has(item.id)} showFolder={showFolder} actions={actions} />
+          {readByAgent.has(item.id) && <ReadByAgentMark />}
+        </>
+      )}
     />
   )
 }
 
 // Mounted only while its group is open, so a collapsed group costs nothing and an open one fetches its own files.
-function GroupFiles({ projectId, node, ...rest }: { projectId: string; node: TreeNode; canAct: boolean; selected: ReadonlySet<string>; showFolder: boolean; actions: RowActions }) {
+function GroupFiles({
+  projectId,
+  node,
+  ...rest
+}: {
+  projectId: string
+  node: TreeNode
+  canAct: boolean
+  selected: ReadonlySet<string>
+  showFolder: boolean
+  actions: RowActions
+  readByAgent: ReadonlySet<string>
+}) {
   const query = useTenderItems(projectId, node.listFilter)
   return <ItemPages query={query} label={`${node.label} files`} {...rest} />
 }
@@ -143,6 +174,7 @@ export function DocumentTree({
   const invalidateIntake = useInvalidateIntake(projectId)
   const exclude = useExclude(projectId)
   const rerun = useRerun(projectId)
+  const readByAgent = useAgentReadFiles(projectId)
 
   const [mode, setMode] = useState<GroupMode>('type')
   const [typed, setTyped] = useState<TreeFilters>(NO_FILTERS)
@@ -367,7 +399,7 @@ export function DocumentTree({
           <div className="ml-2 border-l border-row-rule pl-3">
             {node.children.map(renderNode)}
             {node.listFilter && (
-              <GroupFiles projectId={projectId} node={node} canAct={canConfirm} selected={selectedIds} showFolder={mode === 'type'} actions={actions} />
+              <GroupFiles projectId={projectId} node={node} canAct={canConfirm} selected={selectedIds} showFolder={mode === 'type'} actions={actions} readByAgent={readByAgent} />
             )}
           </div>
         )}
@@ -516,7 +548,7 @@ export function DocumentTree({
                 Select all {flatTotal} matching files
               </label>
             )}
-            <ItemPages query={flat} label="Matching files" canAct={canConfirm} selected={selectedIds} showFolder actions={actions} />
+            <ItemPages query={flat} label="Matching files" canAct={canConfirm} selected={selectedIds} showFolder actions={actions} readByAgent={readByAgent} />
             {flatTotal === 0 && <p className="py-4 text-base text-ink-2">No files match your search or filters.</p>}
           </>
         ) : nodes.length === 0 ? (

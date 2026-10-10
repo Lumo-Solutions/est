@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, ensureProjectMember, loginViaKeycloak } from './helpers'
+import { csrfHeaders, ensureProjectMember, loginViaKeycloak, useAiClassify } from './helpers'
+
+useAiClassify(test) // these specs are about the AI's classification: turn the tenant setting on for this file
 
 // Tender document intake, real backend, real Keycloak, real Celery workers, real S3, the MOCK AI provider.
 // A fresh project per run (so nothing is a duplicate of an earlier run and the shared D1-SIM fixture is

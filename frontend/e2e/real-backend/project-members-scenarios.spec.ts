@@ -19,10 +19,11 @@ test('project members: lead_estimator sees real usernames in the add-member pick
   await loginViaKeycloak(page, 'lead1', 'Lead1Pass!')
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
   await page.goto(`/projects/${project.id}`)
+  await page.getByRole('button', { name: 'Edit project' }).click() // location + members live in the Edit project drawer
 
-  await expect(page.getByText('Edit location')).not.toBeVisible()
+  await expect(page.getByLabel('Emirate')).toHaveCount(0) // a lead_estimator cannot edit the location
   const estimatorOptionValue = await page.locator('select option', { hasText: 'estimator1' }).getAttribute('value')
-  await page.getByRole('combobox').selectOption(estimatorOptionValue!)
+  await page.getByRole('region', { name: 'Members' }).getByRole('combobox').selectOption(estimatorOptionValue!)
   await page.getByRole('button', { name: 'Add member' }).click()
   await expect(page.getByText('estimator1', { exact: false }).first()).toBeVisible()
 
@@ -31,7 +32,8 @@ test('project members: lead_estimator sees real usernames in the add-member pick
   const estPage = await estContext.newPage()
   await loginViaKeycloak(estPage, 'estimator1', 'Estimator1Pass!')
   await estPage.goto(`/projects/${project.id}`)
-  await expect(estPage.getByText('Edit location')).not.toBeVisible()
+  await estPage.getByRole('button', { name: 'Edit project' }).click()
+  await expect(estPage.getByLabel('Emirate')).toHaveCount(0)
   await expect(estPage.getByRole('button', { name: 'Add member' })).not.toBeVisible()
 
   const directAttempt = await estPage.request.patch(`/api/v1/projects/${project.id}/location`, {
@@ -47,10 +49,10 @@ test('project location: bd_director can edit and save', async ({ page }) => {
   const project = await findProjectByCode(page, D1_SIM_PROJECT_CODE)
   await page.goto(`/projects/${project.id}`)
 
-  await page.getByText('Edit location').click()
+  await page.getByRole('button', { name: 'Edit project' }).click()
   await page.getByLabel('Emirate').fill('Sharjah')
-  await page.getByRole('button', { name: 'Save' }).click()
-  await expect(page.getByText('Sharjah', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Save location' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Location saved' })).toBeVisible()
 })
 
 test('saved-scenario delete: lead_estimator can save then delete via the two-step confirm; estimator sees no delete button, and a direct DELETE 403s', async ({

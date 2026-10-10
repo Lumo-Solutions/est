@@ -5,12 +5,19 @@ import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { PageTitle } from '../components/PageTitle'
 import { SkeletonRows } from '../components/Skeleton'
+import { TabBar } from '../components/TabBar'
+import { AgentTab } from '../features/agent/AgentTab'
 import { EditProjectDrawer } from '../features/projects/EditProjectDrawer'
 import { USER_DIRECTORY_ROLES } from '../features/projects/projectRoles'
 import { useProject, useProjectMembers } from '../features/projects/api'
 import { ProjectDocuments } from '../features/tenderIntake/ProjectDocuments'
 import { useUsers } from '../features/users/api'
 import type { ProjectOut } from '../types/api'
+
+const PROJECT_TABS = [
+  { id: 'documents', label: 'Documents' },
+  { id: 'agent', label: 'Agent' },
+]
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -65,13 +72,14 @@ function ProjectHeader({ project, onEdit }: { project: ProjectOut; onEdit: () =>
   )
 }
 
-// One page per project: the header, then everything about its tender documents. (It used to be an Overview tab
-// and a Tender documents tab; an old ?tab= URL lands here and is cleaned up.)
+// One page per project: the header, then two tabs -- the tender documents and the estimation agent. (An old ?tab=
+// URL lands here and is cleaned up.)
 export function ProjectDetailPage() {
   const { projectId } = useParams()
   const { pathname, search } = useLocation()
   const { data: project, isLoading, isError, error, refetch } = useProject(projectId)
   const [editing, setEditing] = useState(false)
+  const [tab, setTab] = useState<'documents' | 'agent'>('documents')
 
   const backLink = (
     <Link
@@ -113,7 +121,18 @@ export function ProjectDetailPage() {
     <div className="px-6 py-6 xl:px-10">
       {backLink}
       <ProjectHeader project={project} onEdit={() => setEditing(true)} />
-      <ProjectDocuments projectId={project.id} />
+      <div className="mt-4">
+        <TabBar
+          tabs={PROJECT_TABS}
+          value={tab}
+          onChange={(id) => setTab(id as 'documents' | 'agent')}
+          label="Project sections"
+          idPrefix="project"
+        />
+      </div>
+      <div role="tabpanel" id={`project-panel-${tab}`} aria-labelledby={`project-tab-${tab}`}>
+        {tab === 'documents' ? <ProjectDocuments projectId={project.id} /> : <AgentTab projectId={project.id} />}
+      </div>
       <EditProjectDrawer project={project} open={editing} onClose={() => setEditing(false)} />
     </div>
   )

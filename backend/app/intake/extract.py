@@ -23,6 +23,9 @@ HEAVY_PDF_OBJECTS = 20_000
 MAX_SHEET_ROWS = 40
 MAX_TEXT_CHARS = 20_000
 MAX_DXF_TEXT_ENTITIES = 500
+MANIFEST_MAX_PAGE_SIZES = 200
+# The fast PDF read counts drawing objects on page 1 only up to this many: enough to tell a drawing from a document.
+FAST_DENSITY_CAP = 2_000
 # Below this many characters across the read pages a PDF is treated as having no text layer.
 RASTER_CHAR_THRESHOLD = 20
 
@@ -45,6 +48,7 @@ class SheetInfo:
     # (column letter, header text) for the detected header row, in sheet order.
     header_cells: list[tuple[str, str]] = field(default_factory=list)
     sample_text: str = ""
+    row_count: int | None = None  # rows in the sheet as the file declares them (not just the rows read)
 
 
 @dataclass(slots=True)
@@ -64,6 +68,9 @@ class DocContent:
     # True when the stage 2 model should look at an image because there is no text to read.
     needs_image: bool = False
     error: str | None = None
+    # Manifest extras (no model involved): [[w, h], ...] in points for up to MANIFEST_MAX_PAGE_SIZES pages, pixel size of an image.
+    page_sizes: list[list[float]] = field(default_factory=list)
+    image_size: tuple[int, int] | None = None
 
     @property
     def best_sheet(self) -> SheetInfo | None:
@@ -151,6 +158,48 @@ def _extract_pdf_pdfium(data: bytes, content: DocContent) -> None:
     content.needs_image = content.is_raster
 
 
+def _extract_pdf_fast(data: bytes, content: DocContent) -> None:
+    """The manifest read: PDFium only, page count + sizes, the text of the first pages, the title-block region and a
+    capped vector-object count of page 1. No pdfplumber (it costs seconds on a CAD export), no rasterisation."""
+    import pypdfium2 as pdfium
+
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(data)
+        try:
+            n = len(doc)
+            content.pages = n
+            for i in range(n if n <= MANIFEST_MAX_PAGE_SIZES else MANIFEST_MAX_PAGE_SIZES):
+                page = doc[i]
+                try:
+                    w, h = page.get_size()
+                    content.page_sizes.append([round(w, 1), round(h, 1)])
+                    if i >= MAX_PDF_PAGES_READ:
+                        continue
+                    textpage = page.get_textpage()
+                    try:
+                        content.page_texts.append(textpage.get_text_range() or "")
+                        if i == 0:
+                            content.title_block_text = textpage.get_text_bounded(left=w * 0.65, bottom=0, right=w, top=h * 0.30) or ""
+                    finally:
+                        textpage.close()
+                    if i == 0:
+                        count = 0
+                        for _ in page.get_objects():
+                            count += 1
+                            if count >= FAST_DENSITY_CAP:
+                                break
+                        content.vector_density = count
+                finally:
+                    page.close()
+        finally:
+            doc.close()
+    content.text = "\n".join(content.page_texts)[:MAX_TEXT_CHARS]
+    total = sum(len(t.strip()) for t in content.page_texts)
+    content.has_text_layer = total >= RASTER_CHAR_THRESHOLD
+    content.is_raster = not content.has_text_layer
+    content.needs_image = content.is_raster
+
+
 def _extract_pdf(data: bytes, content: DocContent) -> None:
     import pdfplumber
 
@@ -212,7 +261,10 @@ def _extract_xlsx(data: bytes, content: DocContent) -> None:
             header_row, score, cols = detect_header(rows)
             sample = "\n".join(" | ".join(str(c) for c in r if c is not None) for r in rows[:12])
             content.sheets.append(
-                SheetInfo(ws.title, header_row, score, cols, header_cells_of(rows[header_row - 1]) if header_row else [], sample)
+                SheetInfo(
+                    ws.title, header_row, score, cols, header_cells_of(rows[header_row - 1]) if header_row else [], sample,
+                    row_count=ws.max_row if isinstance(ws.max_row, int) else None,
+                )
             )
             chunks.append(f"[{ws.title}]\n{sample}")
         content.text = "\n".join(chunks)[:MAX_TEXT_CHARS]
@@ -235,6 +287,7 @@ def _extract_csv(data: bytes, content: DocContent) -> None:
             "csv", header_row, score, cols,
             header_cells_of(rows[header_row - 1]) if header_row else [],
             "\n".join(",".join(r) for r in rows[:12]),
+            row_count=len(text.splitlines()),
         )
     )
     content.text = text[:MAX_TEXT_CHARS]
@@ -251,13 +304,21 @@ def _extract_docx(data: bytes, content: DocContent) -> None:
     content.has_text_layer = bool(text.strip())
 
 
-def extract_content(*, filename: str, ext: str, sniffed: str | None, data: bytes) -> DocContent:
+def _image_size(data: bytes) -> tuple[int, int] | None:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as im:  # reads the header only
+        return int(im.size[0]), int(im.size[1])
+
+
+def extract_content(*, filename: str, ext: str, sniffed: str | None, data: bytes, fast: bool = False) -> DocContent:
     """Never raises: an unreadable file becomes an empty DocContent with ``error`` set,
-    so classification falls back to filename rules and a human still sees it."""
+    so classification falls back to filename rules and a human still sees it.
+    ``fast`` is the manifest read (PDFium only, page sizes, image size)."""
     content = DocContent(filename=filename, ext=ext, sniffed=sniffed)
     try:
         if ext == "pdf":
-            _extract_pdf(data, content)
+            (_extract_pdf_fast if fast else _extract_pdf)(data, content)
         elif ext == "dxf":
             _extract_dxf(data, content)
         elif ext == "xlsx":
@@ -269,6 +330,8 @@ def extract_content(*, filename: str, ext: str, sniffed: str | None, data: bytes
         elif ext in ("jpg", "jpeg", "png"):
             content.is_raster = True
             content.needs_image = True
+            if fast:
+                content.image_size = _image_size(data)
         # xls / doc / dwg: no parser; stored, classified from filename/extension only.
     except Exception as exc:  # noqa: BLE001
         content.error = f"{type(exc).__name__}: {exc}"[:300]

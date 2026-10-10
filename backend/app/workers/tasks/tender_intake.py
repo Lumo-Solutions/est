@@ -20,6 +20,7 @@ The tasks run with the system context for the document's tenant: classification 
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -124,6 +125,16 @@ async def _claim(session, document_id: UUID) -> processing.DocSnapshot | None:
     return processing.DocSnapshot.of(row)
 
 
+async def _ai_classify_on(session) -> bool:
+    return await intake_service.get_ai_classify(session)
+
+
+async def _embed_pending(session) -> int:
+    from app.services import file_manifest
+
+    return await file_manifest.embed_pending(session)
+
+
 async def _persist(session, ctx: RequestContext, document_id: UUID, prepared) -> list[UUID]:
     return await processing.process_document(session, ctx, document_id, prepared)
 
@@ -171,11 +182,21 @@ async def process_one(tenant_id: UUID, document_id: UUID) -> None:
         return
     shared = processing.SharedBreaker(settings.redis_url, tenant_id, settings)
     run = processing.AiRun(settings, shared)
+    try:
+        run.classify_with_ai = await with_worker_session(ctx, _ai_classify_on)
+    except Exception:  # noqa: BLE001 -- unknown setting: keep the fast, AI-free path
+        run.classify_with_ai = False
     package_id: UUID | None = None
+    t_start = time.perf_counter()
+    t_prepared = t_persisted = t_start
+    timings: dict = {}
     try:
         prepared = None if snap.is_duplicate else await processing.prepare_one(ctx, snap, run)
+        t_prepared = time.perf_counter()
+        timings = dict(getattr(prepared, "timings", None) or {})
         children = await with_worker_session(ctx, _persist, ctx, document_id, prepared)
         del prepared  # the file's bytes can go now
+        t_persisted = time.perf_counter()
         try:
             await with_worker_session(ctx, _auto_accept, ctx, document_id)
         except Exception:  # noqa: BLE001 -- the document simply waits for a person
@@ -199,6 +220,12 @@ async def process_one(tenant_id: UUID, document_id: UUID) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("tender_intake: could not refresh the package status for %s", document_id)
     # This file is done: pull the next ones in (keeps the pipeline full without waiting for the next tick).
+    t_end = time.perf_counter()
+    detail = ", ".join(f"{k} {v:.2f}" for k, v in timings.items())
+    logger.info(
+        "tender_intake: file %s done in %.2fs (read %.2fs [%s], persist %.2fs, accept+finalize %.2fs)", document_id, t_end - t_start,
+        t_prepared - t_start, detail, t_persisted - t_prepared, t_end - t_persisted,
+    )
     try:
         await dispatch_for_tenant(tenant_id)
     except Exception:  # noqa: BLE001 -- the tick will do it
@@ -241,6 +268,10 @@ async def tick_all_tenants() -> dict[str, int]:
         totals["requeued"] += stats["requeued"]
         totals["failed"] += stats["failed"]
         totals["dispatched"] += await dispatch_for_tenant(tenant_id)
+        try:
+            totals["embedded"] = totals.get("embedded", 0) + await with_worker_session(system_context(tenant_id), _embed_pending)
+        except Exception:  # noqa: BLE001 -- text search still works
+            logger.exception("tender_intake: embedding batch failed")
     return totals
 
 

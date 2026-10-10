@@ -353,12 +353,34 @@ async def _index_sheets_body(session: AsyncSession, drawing_id: str, task_id: st
         await _finish_job(session, job, ok=True, error=None, started_at=t0)
         return sheet_ids
     except Exception as exc:  # noqa: BLE001 -- persisted below, then re-raised for Celery retry bookkeeping
-        message = str(exc)
+        message = describe_index_failure(exc)
         drawing.status = DrawingStatus.FAILED.value
         drawing.error_message = message
         await session.flush()
         await _finish_job(session, job, ok=False, error=message, started_at=t0)
         raise
+
+
+def _hit_time_limit(exc: BaseException | None) -> bool:
+    """True when the task's soft time limit is the real cause, even if it fired inside a database call and reached us wrapped
+    (SQLAlchemy re-raises whatever interrupted asyncpg as a DBAPIError whose text is a long, unreadable statement dump)."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, SoftTimeLimitExceeded) or type(exc).__name__ == "SoftTimeLimitExceeded":
+            return True
+        exc = getattr(exc, "orig", None) or exc.__cause__ or exc.__context__
+    return False
+
+
+def describe_index_failure(exc: BaseException) -> str:
+    """What a person reads in the drawing's error message: a sentence for a time-out, the error's own text otherwise."""
+    if _hit_time_limit(exc):
+        return (
+            f"Reading this file took longer than {get_settings().drawing_index_soft_limit_s} seconds (too many pages or "
+            "drawing objects). Split it into smaller PDFs and upload those."
+        )
+    return str(exc) or type(exc).__name__
 
 
 async def _should_index(session: AsyncSession, drawing_id: str) -> bool:
@@ -377,12 +399,7 @@ async def _record_index_failure_body(session: AsyncSession, drawing_id: str, mes
 
 
 async def _record_index_failure(drawing_id: str, tenant_id: str, exc: BaseException) -> None:
-    message = str(exc) or type(exc).__name__
-    if isinstance(exc, SoftTimeLimitExceeded):
-        message = (
-            f"Reading this file took longer than {get_settings().drawing_index_soft_limit_s} seconds (too many pages or "
-            "drawing objects). Split it into smaller PDFs and upload those."
-        )
+    message = describe_index_failure(exc)
     try:
         await with_worker_session(system_ctx(tenant_id), _record_index_failure_body, drawing_id, message)
     except Exception:  # noqa: BLE001 -- the hourly reaper is the backstop
@@ -430,6 +447,14 @@ def _limit(name: str, default: int) -> int:
         return default
 
 
+PRIORITY_STEP = 3  # the broker's priority steps are 0 / 3 / 6 / 9 (celery_app.py)
+
+
+def continuation_priority(priority: int) -> int:
+    """One step more urgent than `priority`; 0 (a person is looking at it) stays 0."""
+    return max(0, int(priority) - PRIORITY_STEP)
+
+
 @celery_app.task(
     bind=True, name="app.workers.tasks.takeoff.index_sheets",
     autoretry_for=(ConnectionError,), retry_backoff=True, retry_jitter=True, max_retries=5,
@@ -456,10 +481,13 @@ def index_sheets(
             # this a drawing whose indexing timed out stayed "indexing" until the hourly reaper.
             await _record_index_failure(drawing_id, tenant_id, exc)
             raise
-        header = [extract_sheet.si(sid, tenant_id).set(priority=priority) for sid in sheet_ids]
-        header.append(embed_drawing.si(drawing_id, tenant_id).set(priority=priority))
-        header.append(extract_geometry_measurements.si(drawing_id, tenant_id).set(priority=priority))
-        chord(group(header), finalize_drawing.si(drawing_id, tenant_id).set(priority=priority)).apply_async(priority=priority)
+        # A drawing's continuation (sheets, embedding, geometry, finalize) runs one priority step above its own index task, so a
+        # drawing is finished before the next one is started (depth first) instead of every drawing being indexed first.
+        cont = continuation_priority(priority)
+        header = [extract_sheet.si(sid, tenant_id).set(priority=cont) for sid in sheet_ids]
+        header.append(embed_drawing.si(drawing_id, tenant_id).set(priority=cont))
+        header.append(extract_geometry_measurements.si(drawing_id, tenant_id).set(priority=cont))
+        chord(group(header), finalize_drawing.si(drawing_id, tenant_id).set(priority=cont)).apply_async(priority=cont)
 
     run_async(_run)()
 
