@@ -5,7 +5,7 @@ tenant's index away from another's (docs/boq-agent/plan.md section 2)."""
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.db.rls import set_rls_context
 from app.models.tender_intake import ProjectDocument, ProjectFileIndex
@@ -82,3 +82,47 @@ async def test_other_tenant_sees_nothing(fast_pack, rls_session):
     assert (await s.execute(select(func.count()).select_from(ProjectFileIndex))).scalar_one() == 0
     await set_rls_context(s, fast_pack["est"])
     assert (await s.execute(select(func.count()).select_from(ProjectFileIndex))).scalar_one() > 0
+
+
+async def test_upload_with_the_ai_off_needs_no_cost_confirmation_even_when_an_external_provider_is_configured(fast_pack):
+    """The pack is read without a model, so the dispatcher must not wait for a cost confirmation that has nothing to cost."""
+    from pydantic import SecretStr
+
+    from app.core.config import Settings
+    from app.models.ai import TenantAiSettings
+    from app.models.tender_intake import TenderPackage
+    from app.services import ai_cost
+
+    s = fast_pack["s"]
+    settings = Settings(
+        APP_DATABASE_URL="postgresql://x/y", MIGRATOR_DATABASE_URL="postgresql://x/y", S3_ENDPOINT="http://s3", VLLM_API_BASE="http://v/v1",
+        AI_PROVIDER="openai_compatible", AI_API_KEY=SecretStr("k"), AI_BASE_URL="https://ai.example/v1", AI_MODEL="qwen3.7-plus",
+    )
+    sys_ctx = fast_pack["est"].__class__(tenant_id=fast_pack["tenant"], user_id=None, sub="system", roles=frozenset(), is_system=True)
+    await set_rls_context(s, sys_ctx)
+    s.add(TenantAiSettings(tenant_id=fast_pack["tenant"], external_ai_allowed=True, intake_ai_classify=False))
+    await s.flush()
+    package_id = (await s.execute(select(TenderPackage.id))).scalars().first()
+    assert await ai_cost.external_ai_in_use(s, sys_ctx, settings) is False
+    est = await ai_cost.estimate(s, sys_ctx, settings, package_id)
+    assert est.confirmation_required is False and est.files_needing_ai == 0 and est.total_usd == 0 and "no cost" in est.note
+    await s.execute(text("UPDATE tenant_ai_settings SET intake_ai_classify = true"))
+    assert await ai_cost.external_ai_in_use(s, sys_ctx, settings) is True  # unchanged behaviour once a tenant turns it on
+
+
+async def test_embeddings_are_filled_in_afterwards_in_small_batches(fast_pack, monkeypatch):
+    from app.services import file_manifest
+
+    s = fast_pack["s"]
+    calls: list[int] = []
+
+    def fake(texts):
+        calls.append(len(texts))
+        return [[0.1] * 384 for _ in texts]
+
+    monkeypatch.setattr("app.integrations.embeddings.embed_best_effort", fake)
+    missing = (await s.execute(select(func.count()).select_from(ProjectFileIndex).where(ProjectFileIndex.embedding.is_(None)))).scalar_one()
+    assert missing > 0  # upload does not wait for the embedder
+    done = await file_manifest.embed_pending(s, limit=96)
+    assert done == missing and max(calls) <= file_manifest.EMBED_SUB_BATCH
+    assert await file_manifest.embed_pending(s) == 0

@@ -24,7 +24,7 @@ from app.core.context import RequestContext
 from app.core.enums import AuditAction
 from app.core.errors import ConflictError, NotFoundError
 from app.intake.constants import DocStatus
-from app.models.ai import AiCall
+from app.models.ai import AiCall, TenantAiSettings
 from app.models.tender_intake import ProjectDocument, TenderPackage
 from app.services import ai_admin, audit
 from app.services.projects import assert_can_see_project
@@ -72,10 +72,16 @@ class CostConfirmationRequired(ConflictError):
     title = "Cost confirmation required"
 
 
+async def classification_enabled(session: AsyncSession) -> bool:
+    """The tenant setting `intake_ai_classify` (default off): upload calls a model per file only when it is on."""
+    return bool((await session.execute(select(TenantAiSettings.intake_ai_classify))).scalar_one_or_none())
+
+
 async def external_ai_in_use(session: AsyncSession, ctx: RequestContext, settings: Settings) -> bool:
-    """True when this tenant's files would be sent to an external provider that is configured, allowed and in budget."""
+    """True when this tenant's uploaded files would be sent to an external provider that is configured, allowed and in
+    budget. With the per-file classification off (the default) upload sends nothing, so there is nothing to confirm."""
     status = await ai_admin.get_status(session, ctx, settings)
-    return bool(status.external and status.available)
+    return bool(status.external and status.available and await classification_enabled(session))
 
 
 async def _history(session: AsyncSession) -> dict[str, tuple[int, int, int, int]]:
@@ -117,7 +123,8 @@ async def estimate(session: AsyncSession, ctx: RequestContext, settings: Setting
         raise NotFoundError(f"Tender package {package_id} not found")
     await assert_can_see_project(session, ctx, package.project_id)
     status = await ai_admin.get_status(session, ctx, settings)
-    n = await files_needing_ai(session, package_id, settings.intake_max_process_bytes) if status.available else 0
+    classify_on = await classification_enabled(session)
+    n = await files_needing_ai(session, package_id, settings.intake_max_process_bytes) if (status.available and classify_on) else 0
     hist = await _history(session)
 
     classify_model = settings.ai_model_classify or settings.ai_model
@@ -159,9 +166,11 @@ async def estimate(session: AsyncSession, ctx: RequestContext, settings: Setting
         max(0.0, float(settings.ai_project_budget_usd) - float(project_spent)) if settings.ai_project_budget_usd is not None else None
     )
     within = all(r is None or float(total) <= r for r in (monthly_remaining, project_remaining))
-    external_in_use = bool(status.external and status.available)
+    external_in_use = bool(status.external and status.available and classify_on)
     confirmed = package.cost_confirmed_at is not None
-    if not status.external:
+    if not classify_on:
+        note = "Upload does not call a model (per-file AI classification is off): there is no cost to confirm. The BOQ agent asks for its own confirmation."
+    elif not status.external:
         note = "The AI provider runs inside your deployment: no per-call cost."
     elif not status.available:
         note = status.message or "External AI is not available: files are classified by the built-in rules (no cost)."

@@ -20,6 +20,7 @@ from app.intake.manifest import ManifestEntry
 from app.models.tender_intake import ProjectFileIndex
 
 RRF_K = 60
+EMBED_SUB_BATCH = 16
 _TOKEN = re.compile(r"[A-Za-z0-9]{2,}")
 MAX_QUERY_TERMS = 14
 
@@ -113,6 +114,43 @@ async def search(
     ]
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits[: max(1, min(limit, 50))]
+
+
+async def embed_pending(session: AsyncSession, limit: int = 96) -> int:
+    """Embeds manifest rows that have no embedding yet, in one batch through the local ONNX model. Returns how many were
+    filled; 0 when there is nothing to do or the model is not provisioned (search then uses text only)."""
+    import asyncio
+
+    from app.integrations.embeddings import embed_best_effort
+
+    rows = list(
+        (
+            await session.execute(
+                select(ProjectFileIndex).where(ProjectFileIndex.embedding.is_(None)).order_by(ProjectFileIndex.indexed_at).limit(limit)
+            )
+        ).scalars()
+    )
+    if not rows:
+        return 0
+    texts = [
+        f"{r.filename} {(r.hints or {}).get('title') or ''} {(r.page1_text or '')[:500]}".strip() for r in rows
+    ]
+    vectors: list = []
+    try:
+        for i in range(0, len(texts), EMBED_SUB_BATCH):  # small batches: the model pads to the longest text of a batch
+            part = await asyncio.to_thread(embed_best_effort, texts[i : i + EMBED_SUB_BATCH])
+            if not part:
+                break
+            vectors.extend(part)
+    except Exception:  # noqa: BLE001 -- never let embedding trouble touch intake
+        return 0
+    rows = rows[: len(vectors)]
+    if not vectors:
+        return 0
+    for r, v in zip(rows, vectors):
+        r.embedding = v
+    await session.flush()
+    return len(rows)
 
 
 async def get_entry(session: AsyncSession, project_id: UUID, document_id: UUID) -> ProjectFileIndex | None:

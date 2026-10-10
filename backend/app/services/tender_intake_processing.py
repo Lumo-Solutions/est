@@ -244,6 +244,7 @@ class Prepared:
     extras: dict = field(default_factory=dict)
     manifest: ManifestEntry | None = None
     embedding: list[float] | None = None
+    timings: dict = field(default_factory=dict)  # seconds per phase of the read, logged by the worker
 
 
 def _seconds_to_next_window() -> float:
@@ -317,14 +318,19 @@ async def prepare_document(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -
             safety=IntakeSafety(status="pending", sniffed=None),
             too_large=f"{snap.size_bytes / (1024 * 1024):.0f} MB is over the {settings.intake_max_process_bytes // (1024 * 1024)} MB limit for reading files automatically",
         )
+    t0 = time.perf_counter()
     data = await get_object_bytes(snap.object_key, bucket=snap.bucket)
+    t_download = time.perf_counter() - t0
+    t0 = time.perf_counter()
     safety: IntakeSafety = await asyncio.to_thread(check_file, filename=snap.original_filename, data=data, settings=settings)
+    t_safety = time.perf_counter() - t0
     if safety.status == AttachmentSafetyStatus.REJECTED_PAGE_LIMIT.value:
         return Prepared(safety=IntakeSafety(status="pending", sniffed=safety.sniffed), too_large=safety.reason)
     if not safety.accepted or safety.is_archive:
         return Prepared(safety=safety, extras={"data": data if safety.is_archive else None})
     fast = not run.classify_with_ai
     partial_reason: str | None = None
+    t0 = time.perf_counter()
     try:
         content = await asyncio.wait_for(
             asyncio.to_thread(
@@ -338,6 +344,7 @@ async def prepare_document(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -
         # A slow file is still indexed, with what is known from its name and folder (never parked or failed).
         content = DocContent(filename=snap.original_filename, ext=snap.ext, sniffed=safety.sniffed)
         partial_reason = f"reading took longer than {settings.intake_doc_timeout_s} s"
+    t_extract = time.perf_counter() - t0
     folder = normalise_folder(snap.archive_path)
     rules = classify_rules(content, snap.original_filename, folder=folder)
     injection = looks_like_injection(content.text, content.title_block_text, snap.original_filename)
@@ -350,10 +357,14 @@ async def prepare_document(ctx: RequestContext, snap: DocSnapshot, run: AiRun) -
         path=(snap.archive_path or snap.original_filename), size_bytes=snap.size_bytes, sha256=snap.sha256,
         partial_reason=partial_reason,
     )
-    embedding = await asyncio.to_thread(_embed_one, manifest.embedding_text())
+    # The embedding is filled in afterwards, in batches (file_manifest.embed_pending, run by the intake tick): it was 0.15 s of
+    # every file's critical path and the manifest is searchable by text without it.
+    embedding = None
+    t0 = time.perf_counter()
     return Prepared(
         safety=safety, content=content, rules=rules, model=model, ai_reason=reason, injection=injection,
         used_images=used_images, ai_text_chars=len(content.text or ""), manifest=manifest, embedding=embedding,
+        timings={"download": t_download, "safety": t_safety, "extract": t_extract, "embed": time.perf_counter() - t0},
     )
 
 
