@@ -113,7 +113,7 @@ test.describe.serial('AI walkthrough (mock provider)', () => {
   // 15-minute test timeout, with nothing to look at): a hang now fails in 6 minutes, each action in 30 s, and the config's
   // trace: 'retain-on-failure' keeps the trace of the failed test (npx playwright show-trace test-results/.../trace.zip).
   test.setTimeout(360_000)
-  test.use({ actionTimeout: 30_000, trace: 'retain-on-failure' })
+  test.use({ actionTimeout: 30_000 })
   const state: { projectId: string; code: string; runId: string; drawings: string[] } = { projectId: '', code: '', runId: '', drawings: [] }
 
   test('folder drop -> classify -> confirm -> BOQ import -> annotations -> verification report -> export', async ({ browser }) => {
