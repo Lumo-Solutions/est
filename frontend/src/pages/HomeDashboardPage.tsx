@@ -8,8 +8,8 @@ import {
   usePendingApprovalsForMe,
   useQuarantineQueueForDashboard,
 } from '../features/dashboard/api'
+import { newestApprovals } from '../lib/approvals'
 import { Role } from '../lib/roles'
-import type { ApprovalRequestOut } from '../types/api'
 import { PageTitle } from '../components/PageTitle'
 
 // Phase 3 gap-fill (docs/ui-qa-brief.md): "Add a home dashboard per role
@@ -75,14 +75,8 @@ function Tile({
 
 const APPROVAL_TILE_ROWS = 5
 
-// The tile lists the NEWEST requests first, not the oldest: the one an approver was just told about (or just
-// submitted) is the one they come here for, and oldest-first buries it behind any backlog of stale requests. Nothing is
-// hidden silently: the heading carries the total, and when rows are left out the tile says how many and links to
-// /approvals, which lists the whole queue (oldest first, so the longest-waiting one is not lost either).
-export function newestApprovals(requests: ApprovalRequestOut[], rows = APPROVAL_TILE_ROWS): ApprovalRequestOut[] {
-  return [...requests].sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at)).slice(0, rows)
-}
-
+// The tile lists the NEWEST requests first (see newestApprovals): nothing is hidden silently -- the heading carries the total,
+// and when rows are left out the tile says how many and links to /approvals, the whole queue.
 export function ApprovalsTile() {
   const { data, isLoading, isError, error } = usePendingApprovalsForMe()
   const total = data?.length ?? 0
@@ -95,7 +89,7 @@ export function ApprovalsTile() {
       count={total}
       emptyLabel="Nothing waiting on your decision."
     >
-      {data && newestApprovals(data).map((r) => (
+      {data && newestApprovals(data, APPROVAL_TILE_ROWS).map((r) => (
         <li key={r.id}>
           <ApprovalSummary request={r} />
         </li>

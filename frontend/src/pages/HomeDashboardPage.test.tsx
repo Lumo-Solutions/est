@@ -12,7 +12,8 @@ vi.mock('../features/dashboard/api', () => ({
 }))
 vi.mock('../features/approvals/api', () => ({ useSubmitterName: () => () => 'someone' }))
 
-import { ApprovalsTile, newestApprovals } from './HomeDashboardPage'
+import { newestApprovals } from '../lib/approvals'
+import { ApprovalsTile } from './HomeDashboardPage'
 
 function request(n: number, requestedAt: string): ApprovalRequestOut {
   return {
