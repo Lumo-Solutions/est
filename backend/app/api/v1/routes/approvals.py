@@ -86,6 +86,15 @@ async def list_pending_for_me_endpoint(
     return await approvals_service.enrich(session, ctx, requests)
 
 
+@router.get("/mine", response_model=list[ApprovalRequestOut])
+async def list_my_pending_requests_endpoint(
+    ctx: RequestContext = CurrentUser, session: AsyncSession = Depends(get_session)
+) -> list[ApprovalRequestOut]:
+    """Requests the caller submitted that are still pending (what they can still withdraw)."""
+    requests = await approvals_service.list_pending_requested_by_me(session, ctx)
+    return await approvals_service.enrich(session, ctx, requests)
+
+
 @router.get("/inbox", response_model=ApprovalInboxOut)
 async def approvals_inbox_endpoint(
     ctx: RequestContext = Depends(require_roles(*_APPROVER_ROLES)),

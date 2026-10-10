@@ -261,6 +261,16 @@ async def list_pending_for_caller(session: AsyncSession, ctx: RequestContext) ->
     return waiting_on_me
 
 
+async def list_pending_requested_by_me(session: AsyncSession, ctx: RequestContext) -> list[ApprovalRequest]:
+    """The caller's own requests that are still pending (newest first): what they can still withdraw."""
+    result = await session.execute(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.status == ApprovalRequestStatus.PENDING.value, ApprovalRequest.requested_by == ctx.user_id)
+        .order_by(ApprovalRequest.requested_at.desc())
+    )
+    return list(result.scalars().all())
+
+
 async def get_request(session: AsyncSession, request_id: UUID) -> tuple[ApprovalRequest, list[ApprovalStep]]:
     result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.id == request_id))
     request = result.scalar_one_or_none()

@@ -345,3 +345,17 @@ async def test_managing_director_withdraws_someone_elses_request_only_with_a_rec
     md = authed_client(frozenset({Role.MANAGING_DIRECTOR.value}), acr="silver")
     resp = await md.post(f"/api/v1/approvals/{request_id}/withdraw")
     assert resp.status_code == 200 and resp.json()["status"] == "cancelled"
+
+
+async def test_mine_lists_only_my_pending_requests_and_a_withdrawn_one_leaves_it(authed_client):
+    me = authed_client(frozenset({Role.ESTIMATOR.value}))
+    first = await _create_cost_rate_request(me, 1001)
+    second = await _create_cost_rate_request(me, 1002)
+    mine = (await me.get("/api/v1/approvals/mine")).json()
+    assert [r["id"] for r in mine] == [second, first]  # newest first
+
+    assert (await me.post(f"/api/v1/approvals/{first}/withdraw")).status_code == 200
+    assert [r["id"] for r in (await me.get("/api/v1/approvals/mine")).json()] == [second]
+
+    someone_else = authed_client(frozenset({Role.ESTIMATOR.value}))
+    assert (await someone_else.get("/api/v1/approvals/mine")).json() == []
