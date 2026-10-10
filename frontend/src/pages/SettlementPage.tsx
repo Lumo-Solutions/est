@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, type BadgeTone } from '../components/Badge'
@@ -6,6 +6,14 @@ import { SkeletonRows } from '../components/Skeleton'
 import { Spinner } from '../components/Spinner'
 import { TextPromptModal } from '../components/TextPromptModal'
 import { useTaxonomyNodes } from '../features/admin/api'
+import { AgentSourceBadge } from '../features/agentLines/AgentBadges'
+import { AgentConfidenceAndFlags } from '../features/agentLines/AgentConfidenceAndFlags'
+import { AgentLineDrawer } from '../features/agentLines/AgentLineDrawer'
+import { AgentSummaryBar } from '../features/agentLines/AgentSummaryBar'
+import { useAgentLines, useAgentSummary, useRefreshAgent } from '../features/agentLines/api'
+import { AGENT_ACTION_ROLES, lineDomId } from '../features/agentLines/constants'
+import { unconfirmedText } from '../features/agentLines/text'
+import type { AgentLine } from '../features/agentLines/types'
 import { ApiError } from '../lib/api'
 import {
   useBuildSettlementDraft,
@@ -165,11 +173,18 @@ function LineOverrideRow({
   settlementId,
   currency,
   line,
+  agentLine,
+  onOpenAgent,
+  replaceRequest,
 }: {
   projectId: string
   settlementId: string
   currency: string
   line: BidSettlementLineItemOut
+  agentLine?: AgentLine
+  onOpenAgent?: (lineId: string) => void
+  /** Changes when the evidence drawer's Replace is pressed: opens this row's cost entry. */
+  replaceRequest?: number
 }) {
   const { hasRole } = useAuth()
   const updateLine = useUpdateSettlementLine(projectId, settlementId)
@@ -179,8 +194,22 @@ function LineOverrideRow({
   const [manualCostNote, setManualCostNote] = useState('')
   const [fxRate, setFxRateInput] = useState('')
 
+  // Replace in the evidence drawer opens this row's cost entry (adjusting state while rendering, not in an effect).
+  const [seenReplace, setSeenReplace] = useState(replaceRequest)
+  if (replaceRequest !== seenReplace) {
+    setSeenReplace(replaceRequest)
+    if (replaceRequest) setEditing(true)
+  }
+  useEffect(() => {
+    if (replaceRequest && editing) document.getElementById(`manual-${line.id}`)?.focus()
+  }, [replaceRequest, editing, line.id])
+
   return (
-    <li className="rounded border border-hairline px-2 py-1 text-sm">
+    <li
+      id={lineDomId(line.id)}
+      tabIndex={-1}
+      className="rounded border border-hairline px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
       <div className="flex items-center justify-between">
         <span>
           Line {line.id.slice(0, 8)} -- qty <span className="tabular-nums">{line.quantity}</span> -- sell rate{' '}
@@ -197,6 +226,12 @@ function LineOverrideRow({
           </button>
         )}
       </div>
+      {agentLine && (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <AgentSourceBadge line={agentLine} onOpen={onOpenAgent} />
+          <AgentConfidenceAndFlags proposal={agentLine.proposal} />
+        </div>
+      )}
       {editing && (
         <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-row-rule pt-2">
           <div>
@@ -291,21 +326,51 @@ function LineOverridesPanel({
   settlementId,
   currency,
   lines,
+  agentByLine,
+  reviewOnly,
+  focusRequest,
+  replaceRequest,
+  onOpenAgent,
 }: {
   projectId: string
   settlementId: string
   currency: string
   lines: BidSettlementLineItemOut[]
+  agentByLine: ReadonlyMap<string, AgentLine>
+  reviewOnly: boolean
+  focusRequest: { lineId: string; n: number } | null
+  replaceRequest: { lineId: string; n: number } | null
+  onOpenAgent: (lineId: string) => void
 }) {
   const { hasRole } = useAuth()
+  const shown = reviewOnly ? lines.filter((l) => agentByLine.has(l.id) && !agentByLine.get(l.id)?.agent_confirmed_by) : lines
+
+  useEffect(() => {
+    if (!focusRequest) return
+    const el = document.getElementById(lineDomId(focusRequest.lineId))
+    el?.scrollIntoView?.({ block: 'center' })
+    el?.focus()
+  }, [focusRequest, shown.length])
+
   if (!hasRole(...LINE_OVERRIDE_ROLES) || lines.length === 0) return null
 
   return (
     <div className="mt-4 border-t border-hairline pt-4">
       <h3 className="text-lg font-semibold text-ink-title">Per-line overrides</h3>
+      {reviewOnly && <p className="mt-1 text-xs text-muted">Showing only the agent lines that still need confirmation.</p>}
+      {reviewOnly && shown.length === 0 && <p className="mt-2 text-sm text-ink-2">No agent lines are waiting for confirmation.</p>}
       <ul className="mt-2 space-y-1">
-        {lines.map((line) => (
-          <LineOverrideRow key={line.id} projectId={projectId} settlementId={settlementId} currency={currency} line={line} />
+        {shown.map((line) => (
+          <LineOverrideRow
+            key={line.id}
+            projectId={projectId}
+            settlementId={settlementId}
+            currency={currency}
+            line={line}
+            agentLine={agentByLine.get(line.id)}
+            onOpenAgent={onOpenAgent}
+            replaceRequest={replaceRequest?.lineId === line.id ? replaceRequest.n : undefined}
+          />
         ))}
       </ul>
     </div>
@@ -505,7 +570,17 @@ function SimulationSliders({ settlement }: { settlement: BidSettlementOut }) {
   )
 }
 
-function SubmitApprove({ projectId, settlement }: { projectId: string; settlement: BidSettlementOut }) {
+function SubmitApprove({
+  projectId,
+  settlement,
+  unconfirmed,
+  onUnconfirmedLines,
+}: {
+  projectId: string
+  settlement: BidSettlementOut
+  unconfirmed: number
+  onUnconfirmedLines: (lineIds: string[]) => void
+}) {
   const { user, hasRole } = useAuth()
   const submit = useSubmitSettlement(projectId, settlement.id)
   const decide = useDecideSettlement(projectId, settlement.id)
@@ -528,13 +603,22 @@ function SubmitApprove({ projectId, settlement }: { projectId: string; settlemen
       <div className="flex flex-col items-end gap-1">
         <button
           type="button"
-          onClick={() => submit.mutate()}
+          onClick={() =>
+            submit.mutate(undefined, {
+              onError: (e) => {
+                // 409 + unconfirmed_agent_line_ids: send the person to the first line still unconfirmed.
+                const ids = e instanceof ApiError && e.status === 409 ? e.problem.unconfirmed_agent_line_ids : undefined
+                if (Array.isArray(ids) && ids.length > 0) onUnconfirmedLines(ids as string[])
+              },
+            })
+          }
           disabled={submit.isPending}
           className="inline-flex items-center gap-1.5 rounded-control bg-brand px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
         >
           {submit.isPending && <Spinner className="text-white" />}
           Submit for approval
         </button>
+        {unconfirmed > 0 && <p className="text-xs text-amber-800">{unconfirmedText(unconfirmed)}</p>}
         {submit.isError && (
           <p role="alert" className="text-xs text-danger">
             {submit.error.message}
@@ -640,6 +724,29 @@ export function SettlementPage() {
   // endpoint may 403 for anyone else, so do not call it for other roles.
   const { data: addenda } = useProjectAddenda(projectId, { enabled: hasRole(...BUILD_DRAFT_ROLES) })
   const staleAddendum = current ? addenda?.find((a) => a.open_settlement_ids.includes(current.id)) : undefined
+  const canAct = hasRole(...AGENT_ACTION_ROLES)
+  const { data: agentSummary } = useAgentSummary(current?.id)
+  const { data: agentLines } = useAgentLines(current?.id)
+  const refreshAgent = useRefreshAgent(current?.id)
+  const agentByLine = useMemo(() => new Map((agentLines ?? []).map((l) => [l.line_id, l])), [agentLines])
+  const [reviewOnly, setReviewOnly] = useState(false)
+  const [openLineId, setOpenLineId] = useState<string | null>(null)
+  const [focusRequest, setFocusRequest] = useState<{ lineId: string; n: number } | null>(null)
+  const [replaceRequest, setReplaceRequest] = useState<{ lineId: string; n: number } | null>(null)
+  const openLine = openLineId ? (agentByLine.get(openLineId) ?? null) : null
+  const unconfirmed = current?.status === 'draft' ? (agentSummary?.unconfirmed ?? 0) : 0
+
+  const onReview = () => {
+    const next = !reviewOnly
+    setReviewOnly(next)
+    const first = (agentLines ?? []).find((l) => !l.agent_confirmed_by)?.line_id
+    if (next && first) setFocusRequest({ lineId: first, n: Date.now() })
+  }
+  const onUnconfirmedLines = (ids: string[]) => {
+    setReviewOnly(true)
+    setFocusRequest({ lineId: ids[0], n: Date.now() })
+    void refreshAgent()
+  }
   const canBuildNewDraft = (!current || REBUILDABLE_STATUSES.has(current.status)) && hasRole(...BUILD_DRAFT_ROLES)
 
   return (
@@ -698,7 +805,7 @@ export function SettlementPage() {
                   {refreshQuantities.isPending && <Spinner className="h-3 w-3" />}
                   Refresh quantities
                 </button>
-                <SubmitApprove projectId={projectId} settlement={current} />
+                <SubmitApprove projectId={projectId} settlement={current} unconfirmed={unconfirmed} onUnconfirmedLines={onUnconfirmedLines} />
               </div>
               {refreshQuantities.isError && (
                 <p role="alert" className="text-xs text-danger">
@@ -707,6 +814,14 @@ export function SettlementPage() {
               )}
             </div>
           </div>
+          <AgentSummaryBar
+            settlementId={current.id}
+            summary={agentSummary}
+            draft={current.status === 'draft'}
+            canAct={canAct}
+            reviewing={reviewOnly}
+            onReview={onReview}
+          />
           {/* key: remount the sliders when the defaults change (e.g. "Use these values") so they show the saved values */}
           <SimulationSliders
             key={`${current.default_plant_pct}-${current.default_overhead_pct}-${current.default_volatility_pct}-${current.default_markup_pct}`}
@@ -719,9 +834,30 @@ export function SettlementPage() {
               {current.status === 'draft' && (
                 <AiCostProposalsPanel projectId={projectId} settlementId={current.id} currency={current.currency} />
               )}
-              <LineOverridesPanel projectId={projectId} settlementId={current.id} currency={current.currency} lines={detail.lines} />
+              <LineOverridesPanel
+                projectId={projectId}
+                settlementId={current.id}
+                currency={current.currency}
+                lines={detail.lines}
+                agentByLine={agentByLine}
+                reviewOnly={reviewOnly}
+                focusRequest={focusRequest}
+                replaceRequest={replaceRequest}
+                onOpenAgent={setOpenLineId}
+              />
             </>
           )}
+          <AgentLineDrawer
+            line={openLine}
+            settlementId={current.id}
+            canAct={canAct}
+            draft={current.status === 'draft'}
+            onClose={() => setOpenLineId(null)}
+            onReplace={(lineId) => {
+              setOpenLineId(null)
+              setReplaceRequest({ lineId, n: Date.now() })
+            }}
+          />
         </div>
       )}
     </div>
