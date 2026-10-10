@@ -3,7 +3,9 @@ import { mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, loginViaKeycloak, resolveUnresolvedLines } from './helpers'
+import { csrfHeaders, loginViaKeycloak, resolveUnresolvedLines, useAiClassify } from './helpers'
+
+useAiClassify(test) // these specs are about the AI's classification: turn the tenant setting on for this file
 
 // The whole AI feature set, real backend, real Keycloak, real Celery workers, real S3, the MOCK provider (no key):
 //   create project -> drop the FOLDER -> classify + confirm -> import BOQ -> read drawing annotations -> verify the BOQ

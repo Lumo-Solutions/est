@@ -448,3 +448,18 @@ export async function driveSettlementTo(
   await submitSettlementForApproval(page, projectId)
   await approveSubmittedSettlement(browser, projectId)
 }
+
+// Upload no longer calls a model per file (tenant setting intake_ai_classify, default off). The specs that are about the
+// AI's classification switch it on for their own run and put it back afterwards. Call once at the top level of a spec file.
+export function useAiClassify(t: typeof import('@playwright/test').test): void {
+  const set = async (browser: import('@playwright/test').Browser, on: boolean) => {
+    const context = await browser.newContext({ ignoreHTTPSErrors: true })
+    const page = await context.newPage()
+    await loginViaKeycloak(page, 'md1', 'Md1Pass!')
+    const res = await page.request.put('/api/v1/admin/intake-settings', { headers: await csrfHeaders(page), data: { ai_classify: on } })
+    if (!res.ok()) throw new Error(`could not set ai_classify=${on}: ${res.status()} ${await res.text()}`)
+    await context.close()
+  }
+  t.beforeAll(async ({ browser }) => set(browser, true))
+  t.afterAll(async ({ browser }) => set(browser, false))
+}

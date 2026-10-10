@@ -3,7 +3,9 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { csrfHeaders, loginViaKeycloak } from './helpers'
+import { csrfHeaders, loginViaKeycloak, useAiClassify } from './helpers'
+
+useAiClassify(test) // these specs are about the AI's classification: turn the tenant setting on for this file
 
 // The tracked QA screenshots are only rewritten on purpose (UPDATE_QA_SCREENSHOTS=1); a normal run writes to test-results.
 const QA_SHOT_DIR = process.env.UPDATE_QA_SCREENSHOTS === '1' ? '../docs/ui-qa/screenshots/ai-first-intake' : 'test-results/qa-screenshots/ai-first-intake'
