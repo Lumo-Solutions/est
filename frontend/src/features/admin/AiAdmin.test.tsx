@@ -37,10 +37,12 @@ const usage = {
   ],
 } as unknown as AiUsageOut
 
+let aiClassify: boolean | undefined = false
+
 function setup(status: AiStatusOut = okStatus) {
   get.mockImplementation((path: string) => {
     if (path.startsWith('/tender-intake/settings'))
-      return Promise.resolve({ auto_accept_min: 0.85, default_auto_accept_min: 0.85, auto_measure_disciplines: ['stormwater'] })
+      return Promise.resolve({ auto_accept_min: 0.85, default_auto_accept_min: 0.85, auto_measure_disciplines: ['stormwater'], ...(aiClassify === undefined ? {} : { ai_classify: aiClassify }) })
     return Promise.resolve(path.startsWith('/ai/status') ? status : usage)
   })
   put.mockResolvedValue({})
@@ -56,6 +58,7 @@ describe('AiAdmin', () => {
   beforeEach(() => {
     get.mockReset()
     put.mockReset()
+    aiClassify = false
   })
 
   it('shows the not-configured notice', async () => {
@@ -203,6 +206,52 @@ describe('AiAdmin', () => {
       setup()
       expect(await screen.findByRole('checkbox', { name: 'Roads / civil' })).toBeDisabled()
       expect(screen.queryByRole('button', { name: 'Save automatic measuring' })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('classify every uploaded file with the AI', () => {
+    const name = 'Classify every uploaded file with the AI'
+
+    it('is off by default and explains what off and on mean', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      aiClassify = undefined // an older server that does not send the field yet
+      setup()
+      const sw = await screen.findByRole('switch', { name })
+      expect(sw).not.toBeChecked()
+      expect(screen.getByText(/uploads are indexed in seconds and nothing is sent to a model/)).toBeInTheDocument()
+      expect(screen.getByText(/the estimation agent reads only what it needs/)).toBeInTheDocument()
+      expect(screen.getByText(/On: every file is classified by the AI, which is slow, costs money and needs the cost confirmation/)).toBeInTheDocument()
+    })
+
+    it('reflects the saved value', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      aiClassify = true
+      setup()
+      expect(await screen.findByRole('switch', { name })).toBeChecked()
+    })
+
+    it('saves ai_classify when the managing director flips it', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      setup()
+      fireEvent.click(await screen.findByRole('switch', { name }))
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/intake-settings', { ai_classify: true }))
+    })
+
+    it('turns it back off', async () => {
+      roles = [Role.MANAGING_DIRECTOR]
+      aiClassify = true
+      setup()
+      fireEvent.click(await screen.findByRole('switch', { name }))
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/intake-settings', { ai_classify: false }))
+    })
+
+    it('is read-only for other roles', async () => {
+      roles = [Role.BD_DIRECTOR]
+      setup()
+      const sw = await screen.findByRole('switch', { name })
+      expect(sw).toBeDisabled()
+      fireEvent.click(sw)
+      expect(put).not.toHaveBeenCalled()
     })
   })
 })
