@@ -8,6 +8,7 @@ import {
   usePendingApprovalsForMe,
   useQuarantineQueueForDashboard,
 } from '../features/dashboard/api'
+import { newestApprovals } from '../lib/approvals'
 import { Role } from '../lib/roles'
 import { PageTitle } from '../components/PageTitle'
 
@@ -72,29 +73,39 @@ function Tile({
   )
 }
 
-function ApprovalsTile() {
+const APPROVAL_TILE_ROWS = 5
+
+// The tile lists the NEWEST requests first (see newestApprovals): nothing is hidden silently -- the heading carries the total,
+// and when rows are left out the tile says how many and links to /approvals, the whole queue.
+export function ApprovalsTile() {
   const { data, isLoading, isError, error } = usePendingApprovalsForMe()
+  const total = data?.length ?? 0
   return (
     <Tile
       title="Approvals waiting for me"
       isLoading={isLoading}
       isError={isError}
       errorMessage={error?.message}
-      count={data?.length ?? 0}
+      count={total}
       emptyLabel="Nothing waiting on your decision."
     >
-      {data?.slice(0, 5).map((r) => (
+      {data && newestApprovals(data, APPROVAL_TILE_ROWS).map((r) => (
         <li key={r.id}>
           <ApprovalSummary request={r} />
         </li>
       ))}
-      {(data?.length ?? 0) > 0 && (
+      {total > 0 && (
         <li className="pt-1">
+          {total > APPROVAL_TILE_ROWS && (
+            <span className="mb-1 block text-xs text-ink-2">
+              Showing the {APPROVAL_TILE_ROWS} newest of {total}.
+            </span>
+          )}
           <Link
             to="/approvals"
             className="rounded text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1"
           >
-            View all
+            View all {total}
           </Link>
         </li>
       )}

@@ -61,3 +61,6 @@ backend/tests/fixtures/dwg/
 # Written by `make dev-ai-demo-pack` and the real-backend walkthrough specs
 .ai-demo-pack/
 backend/.last-test.log
+
+# Claude Code local state (worktrees, scheduled tasks, local settings)
+.claude/

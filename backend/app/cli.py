@@ -2075,6 +2075,66 @@ async def clean_demo_data() -> None:
         )
 
 
+# Projects the e2e specs, simulators and demo seeds create (never a real tender pack: those have plain numeric codes).
+_E2E_DEMO_PROJECT_PREFIXES = ("AI-DEMO", "AIFI-", "DWG-", "E2E-", "QA-DEMO", "D1-SIM", "C2-SIM", "SCALE-", "BOQSCALE", "P6-IDX-", "REPRO-")
+
+
+def _require_dev_env(what: str) -> None:
+    env = get_settings().app_env
+    if env not in ("dev", "development", "test"):
+        raise SystemExit(f"Refusing to {what}: APP_ENV={env!r} (dev/test only).")
+
+
+async def withdraw_stale_approvals(apply: bool) -> None:
+    """DEV ONLY: lists (default) or WITHDRAWS (--apply) pending approval requests that belong to e2e/demo data: a project
+    whose code starts with one of _E2E_DEMO_PROJECT_PREFIXES, or a project-less request whose payload reason starts with 'e2e'
+    (the cost_rate_change requests the approvals spec makes). A withdrawal is the audited status change of
+    approvals.withdraw_request (status 'cancelled', open steps 'skipped'): never a delete, never an approve or reject."""
+    _require_dev_env("withdraw approval requests")
+    from app.models.approvals import ApprovalRequest
+    from app.services import approvals as approvals_service
+
+    tenant_id = UUID(get_settings().demo_tenant_id)
+    sys_ctx = system_context(tenant_id)
+    async with session_scope(sys_ctx) as session:
+        rows = (
+            await session.execute(
+                select(ApprovalRequest, Project.code)
+                .join(Project, Project.id == ApprovalRequest.project_id, isouter=True)
+                .where(ApprovalRequest.tenant_id == tenant_id, ApprovalRequest.status == "pending")
+                .order_by(ApprovalRequest.requested_at)
+            )
+        ).all()
+        picked = []
+        for req, code in rows:
+            reason = str((req.payload_snapshot or {}).get("reason", ""))
+            if (code and code.startswith(_E2E_DEMO_PROJECT_PREFIXES)) or (code is None and reason.lower().startswith("e2e")):
+                picked.append((req, code))
+        kept = len(rows) - len(picked)
+        for req, code in picked:
+            print(f"{'withdraw' if apply else 'would withdraw'} {req.id} {req.entity_type} {req.amount} {code or '(no project)'} requested {req.requested_at:%Y-%m-%d %H:%M}")
+            if apply:
+                await approvals_service.withdraw_request(session, sys_ctx, req.id, reason="dev cleanup of stale e2e/demo request")
+        print(f"{len(picked)} {'withdrawn' if apply else 'to withdraw (dry run; add --apply)'}; {kept} pending request(s) of other projects left alone.")
+
+
+async def delete_demo_project(code: str) -> None:
+    """DEV ONLY: deletes one e2e/demo project by code (cascades to every project-scoped table, like clean-demo-data does for
+    E2E-SIM). Only codes with one of _E2E_DEMO_PROJECT_PREFIXES: a numeric tender code is refused. Stored objects stay in S3."""
+    _require_dev_env("delete a project")
+    if not code.startswith(_E2E_DEMO_PROJECT_PREFIXES):
+        raise SystemExit(f"Refusing: {code!r} is not an e2e/demo project code ({', '.join(_E2E_DEMO_PROJECT_PREFIXES)}).")
+    tenant_id = UUID(get_settings().demo_tenant_id)
+    async with session_scope(system_context(tenant_id)) as session:
+        project = (await session.execute(select(Project).where(Project.tenant_id == tenant_id, Project.code == code))).scalar_one_or_none()
+        if project is None:
+            print(f"no project with code {code!r} found.")
+            return
+        await session.delete(project)
+        await session.flush()
+        print(f"deleted project {code} ({project.id}) -- cascaded to every project-scoped table")
+
+
 async def seed_ai_demo() -> None:
     """DEV ONLY: synthetic UAE infrastructure data for the AI features -- cost library (~150 items with rate
     history), 20 vendors, 15 past tenders with outcomes. Tagged (AIDEMO-* / AI-DEMO-H*) and removed by
@@ -2207,8 +2267,17 @@ def main() -> None:
         help="DEV ONLY: deletes the E2E-SIM and QA-DEMO projects/vendors this CLI creates -- never touches any other simulate-*'s own fixtures",
     )
 
+    wsa = subparsers.add_parser("withdraw-stale-approvals", help="DEV ONLY: list (default) or withdraw (--apply) pending approval requests of e2e/demo projects")
+    wsa.add_argument("--apply", action="store_true")
+    ddp = subparsers.add_parser("delete-demo-project", help="DEV ONLY: delete one e2e/demo project by code")
+    ddp.add_argument("code")
+
     args = parser.parse_args()
-    if args.command == "seed":
+    if args.command == "withdraw-stale-approvals":
+        asyncio.run(withdraw_stale_approvals(args.apply))
+    elif args.command == "delete-demo-project":
+        asyncio.run(delete_demo_project(args.code))
+    elif args.command == "seed":
         asyncio.run(seed(args.tenant))
     elif args.command == "simulate-quotes":
         asyncio.run(simulate_quotes())

@@ -36,3 +36,10 @@ export function roleLabel(role: string | null | undefined): string {
 export function formatWhen(iso: string): string {
   return new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 }
+
+// Newest first, capped: what a dashboard tile shows of a queue. The one an approver was just told about (or just
+// submitted) is the one they come for; oldest-first buries it behind any backlog of stale requests.
+export function newestApprovals(requests: ApprovalRequestOut[], rows = 5): ApprovalRequestOut[] {
+  return [...requests].sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at)).slice(0, rows)
+}
+

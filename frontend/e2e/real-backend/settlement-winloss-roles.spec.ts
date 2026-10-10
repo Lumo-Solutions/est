@@ -6,7 +6,11 @@ import {
   ensureProjectMember,
   findProjectByCode,
   loginViaKeycloak,
+  useApprovalCleanup,
 } from './helpers'
+
+// Requests this file leaves pending are withdrawn when it is done (see helpers.ts).
+useApprovalCleanup(test)
 
 // Phase 2 UI QA (docs/ui-qa/issues.md UI-P2-018/019): SettlementPage's
 // "Build (new) settlement draft" and "Submit for approval" buttons, and

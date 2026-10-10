@@ -6,7 +6,11 @@ import {
   ensureProjectMember,
   findProjectByCode,
   loginViaKeycloak,
+  useApprovalCleanup,
 } from './helpers'
+
+// Requests this file leaves pending are withdrawn when it is done (see helpers.ts).
+useApprovalCleanup(test)
 
 // Phase 3 gap-fill (docs/ui-qa-brief.md): project location/members had no
 // UI (endpoints existed, GET /projects/{id}/members newly added), and

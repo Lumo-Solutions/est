@@ -9,6 +9,7 @@ import {
   findProjectByCode,
   loginViaKeycloak,
   submitSettlementForApproval,
+  useApprovalCleanup,
 } from './helpers'
 import { DEMO_TOTP_SECRETS } from './totp'
 
@@ -17,8 +18,25 @@ import { DEMO_TOTP_SECRETS } from './totp'
 
 const APPROVALS_TILE = /Approvals waiting for me/
 
+// Every request this file leaves pending (a failed run, the submitter's own request) is withdrawn when the file is done.
+useApprovalCleanup(test)
+
 function tileOf(page: Page) {
   return page.getByRole('heading', { name: APPROVALS_TILE }).locator('..')
+}
+
+// The number in the tile heading, "Approvals waiting for me (N)". The tile lists only the newest few rows, so the specs
+// count with this and find a request on /approvals (the whole queue), never by its row in the tile.
+async function tileCount(page: Page): Promise<number> {
+  await page.goto('/dashboard')
+  const heading = page.getByRole('heading', { name: APPROVALS_TILE })
+  await expect(heading).toContainText(/\(\d+\)/)
+  return Number(/\((\d+)\)/.exec(await heading.innerText())![1])
+}
+
+async function expectTileCount(page: Page, n: number): Promise<void> {
+  await page.goto('/dashboard')
+  await expect(page.getByRole('heading', { name: APPROVALS_TILE })).toContainText(`(${n})`)
 }
 
 async function login(browser: Browser, username: string, password: string): Promise<Page> {
@@ -79,6 +97,9 @@ async function decideWithStepUp(
 test('settlement approval: md1 tile shows it -> click -> settlement page -> approve -> tile empties', async ({
   browser,
 }) => {
+  const md = await login(browser, 'md1', 'Md1Pass!')
+  const before = await tileCount(md)
+
   const bd = await login(browser, 'bd1', 'Bd1Pass!')
   const project = await findProjectByCode(bd, D1_SIM_PROJECT_CODE)
   await driveSettlementTo(bd, browser, project.id, 'draft')
@@ -88,29 +109,28 @@ test('settlement approval: md1 tile shows it -> click -> settlement page -> appr
   await expect(bd.getByText('Awaiting a different approver (SoD)')).toBeVisible()
   await expect(bd.getByRole('button', { name: 'Approve' })).toBeDisabled()
 
-  const md = await login(browser, 'md1', 'Md1Pass!')
-  await md.goto('/dashboard')
-  const row = tileOf(md).getByRole('link', { name: new RegExp(D1_SIM_PROJECT_CODE) })
+  // The tile count goes up by one and links to the whole queue...
+  await expectTileCount(md, before + 1)
+  await expect(tileOf(md).getByRole('link', { name: /View all/ })).toBeVisible()
+
+  // ...where the request is, with everything an approver needs to pick it, without opening it.
+  await md.goto('/approvals')
+  const row = md.getByRole('table', { name: 'Pending approvals' }).getByRole('row', { name: new RegExp(D1_SIM_PROJECT_CODE) })
   await expect(row).toBeVisible()
-  // Everything an approver needs to pick this one, without opening it.
   await expect(row).toContainText(/Bid settlement v\d+/)
   await expect(row).not.toContainText('bid_submission')
   await expect(row).toContainText('margin on sell 0.000%')
-  await expect(row).toContainText(/Submitted by \S+/)
   await expect(row).not.toContainText('unknown user')
-  await expect(row).toContainText('waiting on managing director')
-  await expect(tileOf(md).getByRole('link', { name: 'View all' })).toBeVisible()
+  await expect(row).toContainText(/managing director/i)
 
-  await row.click()
+  await row.getByRole('link', { name: /Review/ }).click()
   await expect(md).toHaveURL(new RegExp(`/projects/${project.id}/settlement$`))
   if ((await attemptApprove(md)) === 'blocked') {
     await completeMfaStepUp(md, DEMO_TOTP_SECRETS.md1)
     expect(await attemptApprove(md)).toBe('approved')
   }
 
-  await md.goto('/dashboard')
-  await expect(tileOf(md).getByRole('heading', { name: APPROVALS_TILE })).toBeVisible()
-  await expect(tileOf(md).getByRole('link', { name: new RegExp(D1_SIM_PROJECT_CODE) })).toHaveCount(0)
+  await expectTileCount(md, before)
 
   // ...and it is on md1's /approvals page under "decided".
   await md.goto('/approvals')
@@ -121,6 +141,9 @@ test('settlement approval: md1 tile shows it -> click -> settlement page -> appr
 test('cost_rate_change: tile -> detail page -> approve; reject needs a reason; submitter has no actions', async ({
   browser,
 }) => {
+  const lead = await login(browser, 'lead1', 'Lead1Pass!')
+  const before = await tileCount(lead)
+
   const estimator = await login(browser, 'estimator1', 'Estimator1Pass!')
   const approve = uniqueAmount()
   const reject = uniqueAmount()
@@ -132,13 +155,16 @@ test('cost_rate_change: tile -> detail page -> approve; reject needs a reason; s
   await expect(estimator.getByRole('link', { name: 'Approvals' })).toHaveCount(0)
   expect((await estimator.request.get('/api/v1/approvals/inbox')).status()).toBe(403)
 
-  const lead = await login(browser, 'lead1', 'Lead1Pass!')
-  await lead.goto('/dashboard')
-  const row = tileOf(lead).getByRole('link', { name: new RegExp(approve.shown.replace('.', '\\.')) })
+  // The tile count goes up by two; the requests themselves are found on /approvals, however long the queue is.
+  await expectTileCount(lead, before + 2)
+  await lead.goto('/approvals')
+  const queue = lead.getByRole('table', { name: 'Pending approvals' })
+  const row = queue.getByRole('row', { name: new RegExp(approve.shown.replace('.', '\\.')) })
   await expect(row).toBeVisible()
   await expect(row).toContainText('Cost rate change')
   await expect(row).not.toContainText('cost_rate_change')
-  await row.click()
+  await expect(queue.getByRole('row', { name: new RegExp(reject.shown.replace('.', '\\.')) })).toBeVisible()
+  await row.getByRole('link', { name: /Review/ }).click()
   await expect(lead).toHaveURL(new RegExp(`/approvals/${approveId}$`))
   await expect(lead.getByRole('heading', { name: 'Cost rate change' })).toBeVisible()
   await decideWithStepUp(
@@ -148,9 +174,7 @@ test('cost_rate_change: tile -> detail page -> approve; reject needs a reason; s
     'lead1',
   )
 
-  await lead.goto('/dashboard')
-  await expect(tileOf(lead).getByRole('heading', { name: APPROVALS_TILE })).toBeVisible()
-  await expect(tileOf(lead).getByRole('link', { name: new RegExp(approve.shown.replace('.', '\\.')) })).toHaveCount(0)
+  await expectTileCount(lead, before + 1)
 
   // Reject requires a reason: the modal's submit stays disabled until typed.
   await lead.goto(`/approvals/${rejectId}`)
@@ -172,6 +196,8 @@ test('cost_rate_change: tile -> detail page -> approve; reject needs a reason; s
     () => lead.getByText('rejected', { exact: true }).first().waitFor(),
     'lead1',
   )
+
+  await expectTileCount(lead, before)
 
   // Both decisions are listed under "decided" on /approvals.
   await lead.goto('/approvals')

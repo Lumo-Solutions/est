@@ -1,4 +1,4 @@
-.PHONY: check-ai-env dev-seed-ai-demo dev-seed-ai-demo-quotes dev-ai-demo-pack ai-eval ai-smoke dwg-fixtures dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
+.PHONY: check-ai-env dev-seed-ai-demo dev-seed-ai-demo-quotes dev-ai-demo-pack ai-eval ai-smoke dwg-fixtures dev-mfa-off dev-mfa-on up down logs migrate revision seed bootstrap-keycloak dev-token dev-simulate-quotes dev-simulate-settlement dev-simulate-takeoff-pdf dev-simulate-typology-pdf dev-simulate-semantic-matching dev-simulate-module-e-schema dev-simulate-e2e dev-clean-demo-data dev-withdraw-stale-approvals dev-delete-demo-project download-embedding-model init-buckets render-s3-identities check-s3-identities test test-unit test-integration test-api test-all lint fmt typecheck build
 
 # The DWG converter sandbox (deploy/dwg-converter, ODA File Converter, INTERNAL
 # USE ONLY) is built from a local .deb that is never committed; enable its
@@ -152,6 +152,17 @@ dev-simulate-module-e-schema:
 # simulate-*'s own fixtures.
 dev-simulate-e2e:
 	$(COMPOSE) exec backend python -m app.cli simulate-e2e
+
+# DEV/TEST ONLY (the CLI refuses any other APP_ENV): lists the pending approval requests of e2e/demo projects (and the
+# project-less e2e cost_rate_change ones), then withdraws them with APPLY=1. A withdrawal is an audited status change
+# (cancelled), never a delete, an approve or a reject. Always run the dry run first.
+dev-withdraw-stale-approvals:
+	$(COMPOSE) exec backend python -m app.cli withdraw-stale-approvals $(if $(APPLY),--apply,)
+
+# DEV/TEST ONLY: deletes one e2e/demo project (cascade) by code: make dev-delete-demo-project CODE=P6-IDX-A
+dev-delete-demo-project:
+	@test -n "$(CODE)" || { echo "usage: make dev-delete-demo-project CODE=<e2e/demo project code>"; exit 2; }
+	$(COMPOSE) exec backend python -m app.cli delete-demo-project $(CODE)
 
 # docs/ui-qa-brief.md Phase 1: manual-QA-only demo data on its own QA-DEMO
 # project -- a rejected settlement, a lost-outcome settlement, a vendor

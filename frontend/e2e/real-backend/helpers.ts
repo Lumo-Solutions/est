@@ -463,3 +463,51 @@ export function useAiClassify(t: typeof import('@playwright/test').test): void {
   t.beforeAll(async ({ browser }) => set(browser, true))
   t.afterAll(async ({ browser }) => set(browser, false))
 }
+
+// Approval requests a spec creates and leaves pending (a failed run, or a submission nobody decides) pile up in the
+// shared dev DB and make later runs depend on what earlier ones left behind. This withdraws, when the file is done
+// (pass or fail), every request that the demo requesters submitted during the file -- only those: what was already
+// pending when the file started is left alone. Withdrawing is the requester's own audited action (POST
+// /approvals/{id}/withdraw: status cancelled, never an approve or reject). Call once at the top level of a spec file.
+const APPROVAL_REQUESTERS: [string, string][] = [
+  ['estimator1', 'Estimator1Pass!'],
+  ['lead1', 'Lead1Pass!'],
+  ['bd1', 'Bd1Pass!'],
+]
+
+export function useApprovalCleanup(t: typeof import('@playwright/test').test, requesters: [string, string][] = APPROVAL_REQUESTERS): void {
+  const pendingAtStart = new Map<string, Set<string>>()
+  const mine = async (page: import('@playwright/test').Page): Promise<string[]> => {
+    const res = await page.request.get('/api/v1/approvals/mine')
+    if (!res.ok()) throw new Error(`could not list my approvals: ${res.status()} ${await res.text()}`)
+    return ((await res.json()) as { id: string }[]).map((r) => r.id)
+  }
+  const asUser = async (browser: import('@playwright/test').Browser, user: string, pass: string, fn: (page: import('@playwright/test').Page) => Promise<void>) => {
+    const context = await browser.newContext({ ignoreHTTPSErrors: true })
+    try {
+      const page = await context.newPage()
+      await loginViaKeycloak(page, user, pass)
+      await fn(page)
+    } finally {
+      await context.close()
+    }
+  }
+  t.beforeAll(async ({ browser }) => {
+    for (const [user, pass] of requesters) await asUser(browser, user, pass, async (page) => void pendingAtStart.set(user, new Set(await mine(page))))
+  })
+  t.afterAll(async ({ browser }) => {
+    for (const [user, pass] of requesters) {
+      await asUser(browser, user, pass, async (page) => {
+        const before = pendingAtStart.get(user) ?? new Set<string>()
+        for (const id of (await mine(page)).filter((x) => !before.has(x))) {
+          const res = await page.request.post(`/api/v1/approvals/${id}/withdraw`, {
+            headers: await csrfHeaders(page),
+            data: { reason: 'e2e cleanup' },
+          })
+          // 409: it was decided in the meantime, which is just as good
+          if (!res.ok() && res.status() !== 409) throw new Error(`could not withdraw ${id}: ${res.status()} ${await res.text()}`)
+        }
+      })
+    }
+  })
+}

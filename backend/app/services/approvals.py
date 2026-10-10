@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.context import RequestContext
-from app.core.enums import AuditAction
+from app.core.enums import ApprovalRequestStatus, ApprovalStepStatus, AuditAction, BidSettlementStatus, Role
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError
 from app.models.settlement import BidSettlement
 from app.models.tenancy import Project, User
@@ -261,6 +261,16 @@ async def list_pending_for_caller(session: AsyncSession, ctx: RequestContext) ->
     return waiting_on_me
 
 
+async def list_pending_requested_by_me(session: AsyncSession, ctx: RequestContext) -> list[ApprovalRequest]:
+    """The caller's own requests that are still pending (newest first): what they can still withdraw."""
+    result = await session.execute(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.status == ApprovalRequestStatus.PENDING.value, ApprovalRequest.requested_by == ctx.user_id)
+        .order_by(ApprovalRequest.requested_at.desc())
+    )
+    return list(result.scalars().all())
+
+
 async def get_request(session: AsyncSession, request_id: UUID) -> tuple[ApprovalRequest, list[ApprovalStep]]:
     result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.id == request_id))
     request = result.scalar_one_or_none()
@@ -326,6 +336,46 @@ async def decide(
         session, ctx, action=AuditAction.APPROVE if approve else AuditAction.REJECT,
         entity_type="approval_request", entity_id=request.id, project_id=request.project_id,
         payload={"step_seq": current_step.seq, "note": note, **mfa_audit_payload(ctx, settings)},
+    )
+    return request
+
+
+async def withdraw_request(
+    session: AsyncSession, ctx: RequestContext, request_id: UUID, *, reason: str | None = None
+) -> ApprovalRequest:
+    """Takes a still-pending request out of every approver's queue without deciding it: status 'cancelled', its open steps
+    'skipped', one audit event. Never approves or rejects, never deletes. The requester may withdraw their own request; a
+    managing director (with a recent step-up, like a decision) may withdraw anyone's; the system context is the dev cleanup
+    tool. A bid_submission request also sends its settlement back to draft, so it is not left 'submitted' with nobody to
+    decide it (the settlement can then be edited and submitted again)."""
+    request, steps = await get_request(session, request_id)
+    if request.status != ApprovalRequestStatus.PENDING.value:
+        raise ConflictError(f"Approval request is already {request.status}")
+    if not ctx.is_system and request.requested_by != ctx.user_id:
+        if Role.MANAGING_DIRECTOR.value not in ctx.roles:
+            raise ForbiddenError("Only the requester or a managing director can withdraw an approval request")
+        if not has_recent_step_up(ctx, get_settings()):
+            raise StepUpRequiredError("Withdrawing someone else's request requires a recent MFA step-up")
+
+    request.status = ApprovalRequestStatus.CANCELLED.value
+    request.completed_at = datetime.now(timezone.utc)
+    for step in steps:
+        if step.status == ApprovalStepStatus.PENDING.value:
+            step.status = ApprovalStepStatus.SKIPPED.value
+    if request.entity_type == "bid_submission":
+        settlement = (
+            await session.execute(select(BidSettlement).where(BidSettlement.id == request.entity_id))
+        ).scalar_one_or_none()
+        if settlement is not None and settlement.status == BidSettlementStatus.SUBMITTED.value:
+            settlement.status = BidSettlementStatus.DRAFT.value
+            settlement.approval_request_id = None
+            settlement.submitted_at = None
+            settlement.submitted_by = None
+    await session.flush()
+    await audit.record(
+        session, ctx, action=AuditAction.UPDATE, entity_type="approval_request", entity_id=request.id,
+        project_id=request.project_id,
+        payload={"event": "withdraw", "status": request.status, "entity_type": request.entity_type, "reason": reason},
     )
     return request
 

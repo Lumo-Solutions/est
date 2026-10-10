@@ -42,8 +42,8 @@ Real-backend Playwright, each spec alone with `--workers=1` (stack: real Keycloa
 |---|---|---|
 | admin-audit-permissions | passed (8) | |
 | ai-first-intake | passed (4) | |
-| ai-walkthrough | passed (2) | annotation poll raced; fixed. Once hung in the full run (unexplained, not reproduced) |
-| approvals-inbox | **failed (1 of 3)** | tile shows the first 5 pending, oldest first; 18 stale pending cost_rate_change requests hide the new one. Environment state, not an app regression; not changed |
+| ai-walkthrough | passed (2) | annotation poll raced; fixed. Hung once in the full run; 6 min test / 30 s action timeout added; then ai-first-intake + ai-walkthrough 5 times in a row: 5 of 5 passed (6 tests each, 3.2-3.3 min), no hang to diagnose |
+| approvals-inbox | passed (3), after the fix below | failed on the first full run: old pending requests (at least 18 cost_rate_change) hid the new one in a tile that showed the oldest 5. Fixed in the app (tile now shows the newest 5 + total) and the spec (counts the tile, finds the request on /approvals) |
 | boq-agent | passed (1), re-run at the end | |
 | costlib-module-e | passed (3) | one 5 s-timeout flake on the first run, passed alone |
 | dwg-conversion | passed (3) | spec rewritten: the Drawings picker no longer exists |
@@ -70,4 +70,13 @@ Real-backend Playwright, each spec alone with `--workers=1` (stack: real Keycloa
 
 One uninterrupted full run, `--workers=1`: **98 passed, 2 failed (ai-walkthrough hang, approvals-inbox), 1 skipped (opt-in scale test), 1 did not run (second ai-walkthrough test, after the hang), 29.3 min.**
 Assertion changes: none loosened. Specs that depended on per-file AI at upload now turn the tenant setting on for their file (`useAiClassify`); dwg-conversion drops the assertions about the removed picker's hint text and the project-list link.
+
+## Follow-up: approvals tile and stale requests (branch fix/approvals-tile)
+
+* **Tile.** "Approvals waiting for me" listed the first 5 of an oldest-first queue, so with a backlog a new request never showed. It now shows the **newest 5**, the total in the heading, "Showing the 5 newest of N" and "View all N" (to `/approvals`, the whole queue, oldest first). Newest-first because the request an approver was just told about, or just submitted, is the one they come for, and oldest-first buries it behind stale ones; the longest-waiting one is still first on `/approvals`. vitest: `HomeDashboardPage.test.tsx` (ordering, cap, no mutation, empty, <=5, >5 with the newest present and the oldest absent).
+* **Withdraw.** New `POST /approvals/{id}/withdraw` (requester, or a managing director with a recent step-up): status `cancelled` (the existing enum value), open steps `skipped`, one audit event, never an approve/reject/delete; a `bid_submission` request also returns its settlement to draft. `GET /approvals/mine` lists the caller's own pending requests. Tests: 4 API (own withdraw leaves every queue and is audited, denied to a non-requester, MD needs a step-up, `/mine`), 1 integration (settlement back to draft and resubmittable), 6 unit (the CLI guards).
+* **Specs.** `useApprovalCleanup` (helpers.ts) snapshots what the demo requesters (estimator1, lead1, bd1) have pending at the start of a file and withdraws what the file added in `afterAll`, pass or fail. Applied to ai-walkthrough, approvals-inbox, boq-agent, modal-replacements, project-members-scenarios, settlement, settlement-winloss-roles. **Not applied to step-up-freshness** (own Keycloak setup, cannot run in the normal config; it approves what it submits). approvals-inbox no longer depends on the first rows of the tile.
+* **Stale requests.** `make dev-withdraw-stale-approvals` (dry run; `APPLY=1` to withdraw) and `make dev-delete-demo-project CODE=...`; both refuse outside `APP_ENV` dev/test, and the delete refuses any code that is not an e2e/demo prefix. Dry run listed 44 pending (23 bid_submission on D1-SIM and AI-DEMO-E2E projects, 21 project-less e2e cost_rate_change); all 44 withdrawn, 0 left. Projects P6-IDX-A-44711 and P6-IDX-B-44711 deleted. Packs 948b4c0f (project 102, 1,588 documents) and 661d42e3 (project 103, 560) unchanged.
+* **Suites, each alone.** unit 763 passed; API 122 passed; vitest 371 passed (47 files); integration: **377 passed** on the third full run (252 s). The first two full runs each had two tests fail with an asyncpg connect timeout to the test Postgres (60 s) on **different** tests (test_tender_intake_flow, test_measure_on_demand, test_semantic_matching); they pass alone (35 passed together), a 600-connection TCP test through host.docker.internal had 0 failures, and the dev stack was idle. Cause not identified; treated as an intermittent infrastructure stall, not proven.
+* approvals-inbox alone, `--workers=1`: 3 passed.
 
